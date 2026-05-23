@@ -22,6 +22,7 @@ pub enum Expression {
     String(String),
     Field(String),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
+    Not(Box<Expression>),
     Call(String, Vec<Expression>),
 }
 
@@ -42,6 +43,7 @@ pub enum Command {
     Where(Expression),
     Sort(Vec<SortExpression>),
     Head(i64),
+    Select(Vec<Expression>),
     Aggregate {
         aggregates: Vec<(Expression, Option<String>)>,
         by: Vec<Expression>,

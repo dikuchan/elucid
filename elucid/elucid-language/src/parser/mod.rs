@@ -81,6 +81,15 @@ mod tests {
         null_literal:
             "dataset test | where value == null",
 
+        boolean_literal:
+            "dataset test | where active == true and deleted == false",
+
+        not_operator:
+            "dataset test | where not active and not deleted == false",
+
+        select_cmd:
+            "dataset test | select name, age, active",
+
         sort_mixed:
             "dataset test | sort by -count, +status, time",
 

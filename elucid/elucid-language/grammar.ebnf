@@ -13,7 +13,7 @@ escape  = "\" , ( "t" | "n" | "\"" | "\" | "u" )  ;
 (* ---- Keywords ---- *)
 (* ident must not match any keyword. Enforced at the lexer level. *)
 
-keyword = "dataset" | "where" | "sort" | "head" | "aggr" | "by" | "and" | "or" | "null" ;
+keyword = "dataset" | "select" | "where" | "sort" | "head" | "aggr" | "by" | "and" | "or" | "not" | "null" | "true" | "false" ;
 
 (* ---- Top-level ---- *)
 
@@ -21,11 +21,14 @@ query = "dataset" , ident , ( "|" , command )* ;
 
 (* ---- Commands ---- *)
 
-command = where_cmd
+command = select_cmd
+        | where_cmd
         | sort_cmd
         | head_cmd
         | aggr_cmd
         ;
+
+select_cmd = "select" , expression , { "," , expression } ;
 
 where_cmd = "where" , expression ;
 
@@ -46,8 +49,9 @@ aggr_item = ident , "=" , expression    (* aliased aggregate *)
           ;
 
 (* ---- Expressions ---- *)
-(* All operators are left-associative.
+(* All operators are left-associative (except not, which is prefix).
    Precedence from highest to lowest binding:
+     not (prefix)
      *  /
      +  -
      ==  !=  >  >=  <  <=
@@ -64,11 +68,16 @@ comparison_expr     = additive_expr , { ( "==" | "!=" | ">" | ">=" | "<" | "<=" 
 
 additive_expr       = multiplicative_expr , { ( "+" | "-" ) , multiplicative_expr } ;
 
-multiplicative_expr = atom , { ( "*" | "/" ) , atom } ;
+multiplicative_expr = unary_expr , { ( "*" | "/" ) , unary_expr } ;
+
+unary_expr          = "not" , unary_expr
+                    | atom
+                    ;
 
 atom                = integer
                     | string
                     | "null"
+                    | "true" | "false"
                     | call
                     | field
                     | "(" , expression , ")"

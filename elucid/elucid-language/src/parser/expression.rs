@@ -1,6 +1,6 @@
 use chumsky::Parser;
 use chumsky::input::ValueInput;
-use chumsky::pratt::{infix, left};
+use chumsky::pratt::{infix, left, prefix};
 use chumsky::prelude::*;
 
 use crate::ast::{BinaryOperator, Expression};
@@ -19,6 +19,11 @@ where
     let null = just(Token::KeywordNull)
         .to(Expression::Null)
         .labelled("null");
+    let boolean = select! {
+        Token::KeywordTrue => Expression::Boolean(true),
+        Token::KeywordFalse => Expression::Boolean(false),
+    }
+    .labelled("boolean");
 
     recursive(|expression| {
         let call = identifier
@@ -40,12 +45,18 @@ where
             number,
             string,
             null,
+            boolean,
             call,
             field,
             expression.delimited_by(just(Token::LeftParenthesis), just(Token::RightParenthesis)),
         ));
 
         atom.pratt((
+            prefix(
+                6,
+                just(Token::KeywordNot),
+                |_, expr, _| Expression::Not(Box::new(expr)),
+            ),
             infix(
                 left(1),
                 just(Token::OperatorOr).to(BinaryOperator::Or),

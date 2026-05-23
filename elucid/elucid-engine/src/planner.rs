@@ -60,6 +60,13 @@ impl<'a> QueryPlanner<'a> {
                 builder.sort(sort_expressions)
             }
             Command::Head(n) => builder.limit(0, Some(n as usize)),
+            Command::Select(expressions) => {
+                let expressions: Vec<Expr> = expressions
+                    .into_iter()
+                    .map(|e| self.map_expression(e))
+                    .collect::<Result<_>>()?;
+                builder.project(expressions)
+            }
             Command::Aggregate { aggregates, by } => {
                 let group_expressions: Vec<Expr> = by
                     .into_iter()
@@ -100,6 +107,7 @@ impl<'a> QueryPlanner<'a> {
                     })),
                 }
             }
+            Expression::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
             Expression::Call(function_name, arguments) => {
                 let mut arguments: Vec<Expr> = arguments
                     .into_iter()

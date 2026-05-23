@@ -21,6 +21,8 @@ pub enum Token<'a> {
     KeywordDataset,
     #[token("where")]
     KeywordWhere,
+    #[token("select")]
+    KeywordSelect,
     #[token("sort")]
     KeywordSort,
     #[token("head")]
@@ -29,8 +31,14 @@ pub enum Token<'a> {
     KeywordAggregate,
     #[token("by")]
     KeywordBy,
+    #[token("not")]
+    KeywordNot,
     #[token("null")]
     KeywordNull,
+    #[token("true")]
+    KeywordTrue,
+    #[token("false")]
+    KeywordFalse,
 
     #[token("|")]
     Pipe,
@@ -86,11 +94,15 @@ impl fmt::Display for Token<'_> {
         match self {
             Self::KeywordDataset => write!(f, "dataset"),
             Self::KeywordWhere => write!(f, "where"),
+            Self::KeywordSelect => write!(f, "select"),
             Self::KeywordSort => write!(f, "sort"),
             Self::KeywordHead => write!(f, "head"),
             Self::KeywordAggregate => write!(f, "aggr"),
             Self::KeywordBy => write!(f, "by"),
+            Self::KeywordNot => write!(f, "not"),
             Self::KeywordNull => write!(f, "null"),
+            Self::KeywordTrue => write!(f, "true"),
+            Self::KeywordFalse => write!(f, "false"),
             Self::Pipe => write!(f, "|"),
             Self::LeftParenthesis => write!(f, "("),
             Self::RightParenthesis => write!(f, ")"),

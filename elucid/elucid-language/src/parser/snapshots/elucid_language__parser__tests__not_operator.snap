@@ -1,0 +1,30 @@
+---
+source: elucid-language/src/parser/mod.rs
+expression: ast
+---
+Query {
+    source: "test",
+    commands: [
+        Where(
+            Binary(
+                And,
+                Not(
+                    Field(
+                        "active",
+                    ),
+                ),
+                Binary(
+                    Equal,
+                    Not(
+                        Field(
+                            "deleted",
+                        ),
+                    ),
+                    Boolean(
+                        false,
+                    ),
+                ),
+            ),
+        ),
+    ],
+}

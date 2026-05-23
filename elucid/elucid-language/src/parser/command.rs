@@ -39,6 +39,21 @@ where
     call.or(field).labelled("field or function call")
 }
 
+fn select_cmd<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+where
+    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
+{
+    just(Token::KeywordSelect)
+        .ignore_then(
+            expression_parser()
+                .separated_by(just(Token::Comma))
+                .collect(),
+        )
+        .map(Command::Select)
+        .labelled("select")
+}
+
 fn where_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
@@ -132,5 +147,5 @@ pub fn command_parser<'tokens, 'source: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    choice((where_cmd(), sort_cmd(), head_cmd(), aggr_cmd())).labelled("command")
+    choice((select_cmd(), where_cmd(), sort_cmd(), head_cmd(), aggr_cmd())).labelled("command")
 }

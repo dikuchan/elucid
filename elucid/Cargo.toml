@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "elucid-cli",
     "elucid-engine",
-    "elucid-ingester",
+    "elucid-ingest",
     "elucid-language",
 ]
 
@@ -28,5 +28,5 @@ tokio = "1.48.0"
 uuid = "1.19.0"
 
 elucid-engine = { path = "elucid-engine" }
-elucid-ingester = { path = "elucid-ingester" }
+elucid-ingester = { path = "elucid-ingest" }
 elucid-language = { path = "elucid-language" }
