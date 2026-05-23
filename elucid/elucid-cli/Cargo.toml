@@ -11,5 +11,4 @@ reedline = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 elucid-engine = { workspace = true }
-elucid-ingester = { workspace = true }
 elucid-language = { workspace = true }
