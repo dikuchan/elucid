@@ -41,7 +41,7 @@ pub struct SortExpression {
 pub enum Command {
     Where(Expression),
     Sort(Vec<SortExpression>),
-    Limit(i64),
+    Head(i64),
     Aggregate {
         aggregates: Vec<(Expression, Option<String>)>,
         by: Vec<Expression>,

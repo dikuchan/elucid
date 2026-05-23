@@ -15,11 +15,13 @@ impl Highlighter for QueryHighlighter {
             }
 
             let style = match token {
-                Token::KeywordSource
+                Token::KeywordDataset
                 | Token::KeywordWhere
                 | Token::KeywordSort
-                | Token::KeywordLimit
-                | Token::KeywordAggregate => Style::new().fg(Color::LightBlue).bold(),
+                | Token::KeywordHead
+                | Token::KeywordAggregate
+                | Token::KeywordBy
+                | Token::KeywordNull => Style::new().fg(Color::LightBlue).bold(),
 
                 Token::OperatorAdd
                 | Token::OperatorSubtract

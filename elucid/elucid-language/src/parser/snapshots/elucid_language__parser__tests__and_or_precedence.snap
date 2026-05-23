@@ -1,0 +1,26 @@
+---
+source: elucid-language/src/parser/mod.rs
+expression: ast
+---
+Query {
+    source: "test",
+    commands: [
+        Where(
+            Binary(
+                Or,
+                Field(
+                    "a",
+                ),
+                Binary(
+                    And,
+                    Field(
+                        "b",
+                    ),
+                    Field(
+                        "c",
+                    ),
+                ),
+            ),
+        ),
+    ],
+}

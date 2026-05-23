@@ -17,18 +17,20 @@ pub fn tokenizer(source: &'_ str) -> impl Iterator<Item = (Token<'_>, Span)> {
 pub enum Token<'a> {
     Error,
 
-    #[token("source")]
-    KeywordSource,
+    #[token("dataset")]
+    KeywordDataset,
     #[token("where")]
     KeywordWhere,
     #[token("sort")]
     KeywordSort,
-    #[token("limit")]
-    KeywordLimit,
+    #[token("head")]
+    KeywordHead,
     #[token("aggr")]
     KeywordAggregate,
     #[token("by")]
     KeywordBy,
+    #[token("null")]
+    KeywordNull,
 
     #[token("|")]
     Pipe,
@@ -82,18 +84,19 @@ pub enum Token<'a> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::KeywordSource => write!(f, "source"),
+            Self::KeywordDataset => write!(f, "dataset"),
             Self::KeywordWhere => write!(f, "where"),
             Self::KeywordSort => write!(f, "sort"),
-            Self::KeywordLimit => write!(f, "limit"),
+            Self::KeywordHead => write!(f, "head"),
             Self::KeywordAggregate => write!(f, "aggr"),
             Self::KeywordBy => write!(f, "by"),
+            Self::KeywordNull => write!(f, "null"),
             Self::Pipe => write!(f, "|"),
             Self::LeftParenthesis => write!(f, "("),
             Self::RightParenthesis => write!(f, ")"),
             Self::OperatorAdd => write!(f, "+"),
             Self::OperatorSubtract => write!(f, "-"),
-            Self::OperatorMultiply => write!(f, "+"),
+            Self::OperatorMultiply => write!(f, "*"),
             Self::OperatorDivide => write!(f, "/"),
             Self::OperatorEqual => write!(f, "=="),
             Self::OperatorNotEqual => write!(f, "!="),

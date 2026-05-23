@@ -1,0 +1,20 @@
+---
+source: elucid-language/src/parser/mod.rs
+expression: ast
+---
+Query {
+    source: "test",
+    commands: [
+        Where(
+            Binary(
+                Equal,
+                Field(
+                    "name",
+                ),
+                String(
+                    "\"O'Conner\"",
+                ),
+            ),
+        ),
+    ],
+}

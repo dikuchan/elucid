@@ -1,0 +1,38 @@
+---
+source: elucid-language/src/parser/mod.rs
+expression: ast
+---
+Query {
+    source: "test",
+    commands: [
+        Aggregate {
+            aggregates: [
+                (
+                    Call(
+                        "sum",
+                        [
+                            Field(
+                                "bytes",
+                            ),
+                        ],
+                    ),
+                    Some(
+                        "total",
+                    ),
+                ),
+                (
+                    Call(
+                        "count",
+                        [],
+                    ),
+                    None,
+                ),
+            ],
+            by: [
+                Field(
+                    "method",
+                ),
+            ],
+        },
+    ],
+}

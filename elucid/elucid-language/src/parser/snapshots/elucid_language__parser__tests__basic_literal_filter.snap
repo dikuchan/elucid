@@ -1,5 +1,5 @@
 ---
-source: elucid-language/src/parser.rs
+source: elucid-language/src/parser/mod.rs
 expression: ast
 ---
 Query {

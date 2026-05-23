@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 ariadne = { workspace = true }
-chumsky = { workspace = true }
+chumsky = { workspace = true, features = ["pratt"] }
 logos = { workspace = true }
 
 [dev-dependencies]

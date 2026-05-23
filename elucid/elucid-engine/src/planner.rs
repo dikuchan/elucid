@@ -59,7 +59,7 @@ impl<'a> QueryPlanner<'a> {
                     .collect::<Result<_>>()?;
                 builder.sort(sort_expressions)
             }
-            Command::Limit(n) => builder.limit(0, Some(n as usize)),
+            Command::Head(n) => builder.limit(0, Some(n as usize)),
             Command::Aggregate { aggregates, by } => {
                 let group_expressions: Vec<Expr> = by
                     .into_iter()

@@ -1,0 +1,80 @@
+(* EQL — EBNF Grammar *)
+
+(* ---- Lexical tokens ---- *)
+
+integer = [ "-" ] , digit+                        ;
+string  = '"' , ( char | escape )* , '"'          ;
+ident   = alpha , ( alpha | digit | "_" )*        ;
+digit   = ? 0..9 ?                                ;
+alpha   = ? a..z | A..Z | _ ?                     ;
+char    = ? any character except '"' and '\' ?    ;
+escape  = "\" , ( "t" | "n" | "\"" | "\" | "u" )  ;
+
+(* ---- Keywords ---- *)
+(* ident must not match any keyword. Enforced at the lexer level. *)
+
+keyword = "dataset" | "where" | "sort" | "head" | "aggr" | "by" | "and" | "or" | "null" ;
+
+(* ---- Top-level ---- *)
+
+query = "dataset" , ident , ( "|" , command )* ;
+
+(* ---- Commands ---- *)
+
+command = where_cmd
+        | sort_cmd
+        | head_cmd
+        | aggr_cmd
+        ;
+
+where_cmd = "where" , expression ;
+
+sort_cmd  = "sort" , [ "by" ] , sort_item , { "," , sort_item } ;
+sort_item = [ "+" | "-" ] , sort_atom ;
+            (* "+" = ascending (default), "-" = descending *)
+sort_atom = call
+           | field
+           | "(" , expression , ")"
+           ;
+
+head_cmd  = "head" , integer ;
+
+aggr_cmd  = "aggr" , aggr_item , { "," , aggr_item } , [ "by" , expression , { "," , expression } ] ;
+aggr_item = ident , "=" , expression    (* aliased aggregate *)
+          | call
+          | field
+          ;
+
+(* ---- Expressions ---- *)
+(* All operators are left-associative.
+   Precedence from highest to lowest binding:
+     *  /
+     +  -
+     ==  !=  >  >=  <  <=
+     and
+     or                                                           *)
+
+expression          = or_expr ;
+
+or_expr             = and_expr , { "or" , and_expr } ;
+
+and_expr            = comparison_expr , { "and" , comparison_expr } ;
+
+comparison_expr     = additive_expr , { ( "==" | "!=" | ">" | ">=" | "<" | "<=" ) , additive_expr } ;
+
+additive_expr       = multiplicative_expr , { ( "+" | "-" ) , multiplicative_expr } ;
+
+multiplicative_expr = atom , { ( "*" | "/" ) , atom } ;
+
+atom                = integer
+                    | string
+                    | "null"
+                    | call
+                    | field
+                    | "(" , expression , ")"
+                    ;
+
+call                = ident , "(" , [ expression , { "," , expression } ] , ")" ;
+
+field               = ident ;
+                    (* a bare identifier not followed by "(" *)
