@@ -87,8 +87,8 @@ mod tests {
         not_operator:
             "dataset test | where not active and not deleted == false",
 
-        select_cmd:
-            "dataset test | select name, age, active",
+        fields_cmd:
+            "dataset test | fields name, age, active",
 
         sort_mixed:
             "dataset test | sort by -count, +status, time",
@@ -99,11 +99,11 @@ mod tests {
         head:
             "dataset test | head 10",
 
-        aggr_aliased:
-            "dataset test | aggr total = sum(bytes), count() by method",
+        stats_aliased:
+            "dataset test | stats total = sum(bytes), count() by method",
 
-        aggr_field:
-            "dataset test | aggr count() by method, status",
+        stats_field:
+            "dataset test | stats count() by method, status",
     }
 
     #[test]
@@ -122,8 +122,8 @@ mod tests {
     }
 
     #[test]
-    fn test_aggr_rejects_literal() {
-        let input = "dataset test | aggr 1 + 2";
+    fn test_stats_rejects_literal() {
+        let input = "dataset test | stats 1 + 2";
         assert!(parse(input).is_err());
     }
 }

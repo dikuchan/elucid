@@ -21,14 +21,14 @@ pub enum Token<'a> {
     KeywordDataset,
     #[token("where")]
     KeywordWhere,
-    #[token("select")]
-    KeywordSelect,
+    #[token("fields")]
+    KeywordFields,
     #[token("sort")]
     KeywordSort,
     #[token("head")]
     KeywordHead,
-    #[token("aggr")]
-    KeywordAggregate,
+    #[token("stats")]
+    KeywordStats,
     #[token("by")]
     KeywordBy,
     #[token("not")]
@@ -93,11 +93,11 @@ impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::KeywordDataset => write!(f, "dataset"),
+            Self::KeywordFields => write!(f, "fields"),
             Self::KeywordWhere => write!(f, "where"),
-            Self::KeywordSelect => write!(f, "select"),
             Self::KeywordSort => write!(f, "sort"),
             Self::KeywordHead => write!(f, "head"),
-            Self::KeywordAggregate => write!(f, "aggr"),
+            Self::KeywordStats => write!(f, "stats"),
             Self::KeywordBy => write!(f, "by"),
             Self::KeywordNot => write!(f, "not"),
             Self::KeywordNull => write!(f, "null"),

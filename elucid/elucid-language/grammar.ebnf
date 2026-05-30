@@ -13,7 +13,7 @@ escape  = "\" , ( "t" | "n" | "\"" | "\" | "u" )  ;
 (* ---- Keywords ---- *)
 (* ident must not match any keyword. Enforced at the lexer level. *)
 
-keyword = "dataset" | "select" | "where" | "sort" | "head" | "aggr" | "by" | "and" | "or" | "not" | "null" | "true" | "false" ;
+keyword = "dataset" | "fields" | "where" | "sort" | "head" | "stats" | "by" | "and" | "or" | "not" | "null" | "true" | "false" ;
 
 (* ---- Top-level ---- *)
 
@@ -21,14 +21,14 @@ query = "dataset" , ident , ( "|" , command )* ;
 
 (* ---- Commands ---- *)
 
-command = select_cmd
+command = fields_cmd
         | where_cmd
         | sort_cmd
         | head_cmd
-        | aggr_cmd
+        | stats_cmd
         ;
 
-select_cmd = "select" , expression , { "," , expression } ;
+fields_cmd = "fields" , expression , { "," , expression } ;
 
 where_cmd = "where" , expression ;
 
@@ -42,11 +42,11 @@ sort_atom = call
 
 head_cmd  = "head" , integer ;
 
-aggr_cmd  = "aggr" , aggr_item , { "," , aggr_item } , [ "by" , expression , { "," , expression } ] ;
-aggr_item = ident , "=" , expression    (* aliased aggregate *)
-          | call
-          | field
-          ;
+stats_cmd  = "stats" , stats_item , { "," , stats_item } , [ "by" , expression , { "," , expression } ] ;
+stats_item = ident , "=" , expression    (* aliased aggregate *)
+           | call
+           | field
+           ;
 
 (* ---- Expressions ---- *)
 (* All operators are left-associative (except not, which is prefix).

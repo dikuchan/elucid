@@ -60,14 +60,14 @@ impl<'a> QueryPlanner<'a> {
                 builder.sort(sort_expressions)
             }
             Command::Head(n) => builder.limit(0, Some(n as usize)),
-            Command::Select(expressions) => {
+            Command::Fields(expressions) => {
                 let expressions: Vec<Expr> = expressions
                     .into_iter()
                     .map(|e| self.map_expression(e))
                     .collect::<Result<_>>()?;
                 builder.project(expressions)
             }
-            Command::Aggregate { aggregates, by } => {
+            Command::Stats { aggregates, by } => {
                 let group_expressions: Vec<Expr> = by
                     .into_iter()
                     .map(|expression| self.map_expression(expression))

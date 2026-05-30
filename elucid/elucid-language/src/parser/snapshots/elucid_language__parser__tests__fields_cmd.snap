@@ -5,7 +5,7 @@ expression: ast
 Query {
     source: "test",
     commands: [
-        Select(
+        Fields(
             [
                 Field(
                     "name",

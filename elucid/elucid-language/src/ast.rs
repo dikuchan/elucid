@@ -43,8 +43,8 @@ pub enum Command {
     Where(Expression),
     Sort(Vec<SortExpression>),
     Head(i64),
-    Select(Vec<Expression>),
-    Aggregate {
+    Fields(Vec<Expression>),
+    Stats {
         aggregates: Vec<(Expression, Option<String>)>,
         by: Vec<Expression>,
     },

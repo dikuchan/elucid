@@ -1,4 +1,4 @@
-use elucid_language::lexer::{Token, tokenizer};
+use elucid_language::lexer::{tokenizer, Token};
 use nu_ansi_term::{Color, Style};
 use reedline::{Highlighter, StyledText};
 
@@ -16,11 +16,11 @@ impl Highlighter for QueryHighlighter {
 
             let style = match token {
                 Token::KeywordDataset
-                | Token::KeywordSelect
+                | Token::KeywordFields
                 | Token::KeywordWhere
                 | Token::KeywordSort
                 | Token::KeywordHead
-                | Token::KeywordAggregate
+                | Token::KeywordStats
                 | Token::KeywordBy
                 | Token::KeywordNot
                 | Token::KeywordNull

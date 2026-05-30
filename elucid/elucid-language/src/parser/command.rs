@@ -39,19 +39,19 @@ where
     call.or(field).labelled("field or function call")
 }
 
-fn select_cmd<'tokens, 'source: 'tokens, I>()
+fn fields_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    just(Token::KeywordSelect)
+    just(Token::KeywordFields)
         .ignore_then(
             expression_parser()
                 .separated_by(just(Token::Comma))
                 .collect(),
         )
-        .map(Command::Select)
-        .labelled("select")
+        .map(Command::Fields)
+        .labelled("fields")
 }
 
 fn where_cmd<'tokens, 'source: 'tokens, I>()
@@ -112,7 +112,7 @@ where
         .labelled("head")
 }
 
-fn aggr_cmd<'tokens, 'source: 'tokens, I>()
+fn stats_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
@@ -124,7 +124,7 @@ where
 
     let unaliased = call_or_field().map(|expression| (expression, None));
 
-    let aggregation_item = choice((aliased, unaliased)).labelled("aggregate item");
+    let stats_item = choice((aliased, unaliased)).labelled("stats item");
 
     let by_clause = just(Token::KeywordBy)
         .ignore_then(
@@ -135,11 +135,11 @@ where
         .or_not()
         .map(|option| option.unwrap_or_default());
 
-    just(Token::KeywordAggregate)
-        .ignore_then(aggregation_item.separated_by(just(Token::Comma)).collect())
+    just(Token::KeywordStats)
+        .ignore_then(stats_item.separated_by(just(Token::Comma)).collect())
         .then(by_clause)
-        .map(|(aggregates, by)| Command::Aggregate { aggregates, by })
-        .labelled("aggr")
+        .map(|(aggregates, by)| Command::Stats { aggregates, by })
+        .labelled("stats")
 }
 
 pub fn command_parser<'tokens, 'source: 'tokens, I>()
@@ -147,5 +147,5 @@ pub fn command_parser<'tokens, 'source: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    choice((select_cmd(), where_cmd(), sort_cmd(), head_cmd(), aggr_cmd())).labelled("command")
+    choice((fields_cmd(), where_cmd(), sort_cmd(), head_cmd(), stats_cmd())).labelled("command")
 }
