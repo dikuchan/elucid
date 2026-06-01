@@ -4,10 +4,10 @@
 //! for example, "at most one aggregate" — that cannot be expressed during
 //! per-command conversion.
 
-use crate::ir::{Pipeline, PipelineStage};
+use crate::ir;
 use super::error::SemanticError;
 
-/// Validates structural rules on a fully-assembled [`Pipeline`].
+/// Validates structural rules on a fully-assembled [`ir::Pipeline`].
 ///
 /// # Errors
 ///
@@ -17,14 +17,14 @@ use super::error::SemanticError;
 ///   appears in the pipeline.
 /// - [`SemanticError::AggregateAfterAggregate`] if any stage other than `Sort`
 ///   or `Limit` appears after an `Aggregate` stage.
-pub(crate) fn validate_pipeline(pipeline: &Pipeline) -> Result<(), Vec<SemanticError>> {
+pub(crate) fn validate_pipeline(pipeline: &ir::Pipeline) -> Result<(), Vec<SemanticError>> {
     let mut errors: Vec<SemanticError> = Vec::new();
     let stages = pipeline.stages();
 
     // Rule 1: at most one Aggregate stage.
     let aggregate_count = stages
         .iter()
-        .filter(|s| matches!(s, PipelineStage::Aggregate { .. }))
+        .filter(|s| matches!(s, ir::PipelineStage::Aggregate { .. }))
         .count();
 
     if aggregate_count > 1 {
@@ -40,7 +40,7 @@ pub(crate) fn validate_pipeline(pipeline: &Pipeline) -> Result<(), Vec<SemanticE
             if seen_aggregate {
                 let allowed = matches!(
                     stage,
-                    PipelineStage::Sort(_) | PipelineStage::Limit(_)
+                    ir::PipelineStage::Sort(_) | ir::PipelineStage::Limit(_)
                 );
                 if !allowed {
                     errors.push(SemanticError::AggregateAfterAggregate);
@@ -49,7 +49,7 @@ pub(crate) fn validate_pipeline(pipeline: &Pipeline) -> Result<(), Vec<SemanticE
                     break;
                 }
             }
-            if matches!(stage, PipelineStage::Aggregate { .. }) {
+            if matches!(stage, ir::PipelineStage::Aggregate { .. }) {
                 seen_aggregate = true;
             }
         }
@@ -65,39 +65,37 @@ pub(crate) fn validate_pipeline(pipeline: &Pipeline) -> Result<(), Vec<SemanticE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{
-        AggregateExpr, Expr, FieldRef, SortOrder, SortSpec, SourceSpec, TimeRange,
-    };
+    use crate::ir;
 
     /// Helper: build a pipeline from the given stages.
-    fn make_pipeline(stages: Vec<PipelineStage>) -> Pipeline {
-        Pipeline::new(SourceSpec::new("test".to_owned()), TimeRange::default(), stages)
+    fn make_pipeline(stages: Vec<ir::PipelineStage>) -> ir::Pipeline {
+        ir::Pipeline::new(ir::SourceSpec::new("test".to_owned()), ir::TimeRange::default(), stages)
     }
 
     /// Helper: a minimal Aggregate stage with `count()`, no group-by.
-    fn aggregate_stage() -> PipelineStage {
-        PipelineStage::Aggregate {
-            measures: vec![AggregateExpr::new("count".to_owned(), None, None)],
+    fn aggregate_stage() -> ir::PipelineStage {
+        ir::PipelineStage::Aggregate {
+            measures: vec![ir::AggregateExpr::new("count".to_owned(), None, None)],
             group_by: vec![],
         }
     }
 
     /// Helper: a sort-by-count-descending stage.
-    fn sort_stage() -> PipelineStage {
-        PipelineStage::Sort(vec![SortSpec::new(
-            Expr::Field(FieldRef::new("count".to_owned())),
-            SortOrder::Descending,
+    fn sort_stage() -> ir::PipelineStage {
+        ir::PipelineStage::Sort(vec![ir::SortSpec::new(
+            ir::Expr::Field(ir::FieldRef::new("count".to_owned())),
+            ir::SortOrder::Descending,
         )])
     }
 
     /// Helper: a limit stage.
-    fn limit_stage(n: usize) -> PipelineStage {
-        PipelineStage::Limit(n)
+    fn limit_stage(n: usize) -> ir::PipelineStage {
+        ir::PipelineStage::Limit(n)
     }
 
     /// Helper: a filter stage (`where x > 5`).
-    fn filter_stage() -> PipelineStage {
-        PipelineStage::Filter(Expr::Field(FieldRef::new("x".to_owned())))
+    fn filter_stage() -> ir::PipelineStage {
+        ir::PipelineStage::Filter(ir::Expr::Field(ir::FieldRef::new("x".to_owned())))
     }
 
     // ── Rule 1: at most one Aggregate ────────────────────────────────────

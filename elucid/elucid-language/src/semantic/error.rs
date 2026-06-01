@@ -4,7 +4,7 @@ use crate::parser::ParserError;
 
 /// Errors produced during semantic validation of a parsed query.
 ///
-/// These are distinct from [`ParserError`](crate::ParserError), which
+/// These are distinct from [`ParserError`](crate::parser::ParserError), which
 /// represents syntax-level failures. `SemanticError` covers structural
 /// and logical problems detected after a successful parse — for example,
 /// an empty pipeline or an aggregate command in an invalid position.

@@ -1,11 +1,11 @@
 use crate::ast::Query;
-use crate::ir::{Pipeline, PipelineStage, SourceSpec, TimeRange};
+use crate::ir;
 use super::error::SemanticError;
 
 use super::command::convert_command;
 use super::validate::validate_pipeline;
 
-/// Converts a parsed [`Query`] AST into a [`Pipeline`].
+/// Converts a parsed [`Query`] AST into an [`ir::Pipeline`].
 ///
 /// This is the top-level entry point for semantic analysis. It extracts the
 /// dataset name, validates the source, and converts each command into a
@@ -16,18 +16,18 @@ use super::validate::validate_pipeline;
 /// Returns a `Vec<SemanticError>` if:
 /// - The dataset name is empty or whitespace-only.
 /// - Any command fails structural validation (see [`convert_command`]).
-pub(crate) fn convert_query(query: &Query) -> Result<Pipeline, Vec<SemanticError>> {
+pub(crate) fn convert_query(query: &Query) -> Result<ir::Pipeline, Vec<SemanticError>> {
     if query.source().trim().is_empty() {
         return Err(vec![SemanticError::ConversionError(
             "dataset name must not be empty".to_owned(),
         )]);
     }
 
-    let source = SourceSpec::new(query.source().to_owned());
-    let time_range = TimeRange::default();
+    let source = ir::SourceSpec::new(query.source().to_owned());
+    let time_range = ir::TimeRange::default();
 
     let mut errors: Vec<SemanticError> = Vec::new();
-    let mut stages: Vec<PipelineStage> = Vec::with_capacity(query.commands().len());
+    let mut stages: Vec<ir::PipelineStage> = Vec::with_capacity(query.commands().len());
     for cmd in query.commands().iter().cloned() {
         match convert_command(cmd) {
             Ok(stage) => stages.push(stage),
@@ -38,7 +38,7 @@ pub(crate) fn convert_query(query: &Query) -> Result<Pipeline, Vec<SemanticError
         return Err(errors);
     }
 
-    let pipeline = Pipeline::new(source, time_range, stages);
+    let pipeline = ir::Pipeline::new(source, time_range, stages);
     validate_pipeline(&pipeline)?;
 
     Ok(pipeline)
@@ -48,13 +48,13 @@ pub(crate) fn convert_query(query: &Query) -> Result<Pipeline, Vec<SemanticError
 mod tests {
     use super::*;
     use crate::ast::Command;
-    use crate::ir::{BinaryOp, Expr, FieldRef, Literal, SortOrder};
+    use crate::ir;
     use crate::parser;
 
-    /// Test helper: parse a query string and convert it to a [`Pipeline`].
+    /// Test helper: parse a query string and convert it to an [`ir::Pipeline`].
     ///
     /// Panics if parsing fails (expected in tests only).
-    fn parse_and_convert(input: &str) -> Result<Pipeline, Vec<SemanticError>> {
+    fn parse_and_convert(input: &str) -> Result<ir::Pipeline, Vec<SemanticError>> {
         let query = parser::parse(input).unwrap_or_else(|e| {
             e.eprint(input).unwrap();
             panic!("parse failed for input: '{input}'");
@@ -80,10 +80,10 @@ mod tests {
         assert_eq!(pipeline.stages().len(), 1);
         assert_eq!(
             &pipeline.stages()[0],
-            &PipelineStage::Filter(Expr::Binary(
-                BinaryOp::Equal,
-                Box::new(Expr::Field(FieldRef::new("status".to_owned()))),
-                Box::new(Expr::Literal(Literal::Number(200.0))),
+            &ir::PipelineStage::Filter(ir::Expr::Binary(
+                ir::BinaryOp::Equal,
+                Box::new(ir::Expr::Field(ir::FieldRef::new("status".to_owned()))),
+                Box::new(ir::Expr::Literal(ir::Literal::Number(200.0))),
             ))
         );
     }
@@ -94,24 +94,24 @@ mod tests {
             parse_and_convert("dataset test | sort by -count, +status, time").expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
-        let PipelineStage::Sort(specs) = &pipeline.stages()[0] else {
+        let ir::PipelineStage::Sort(specs) = &pipeline.stages()[0] else {
             panic!("expected Sort stage");
         };
         assert_eq!(specs.len(), 3);
 
         // -count → descending
-        assert_eq!(specs[0].order(), SortOrder::Descending);
+        assert_eq!(specs[0].order(), ir::SortOrder::Descending);
         // +status → ascending
-        assert_eq!(specs[1].order(), SortOrder::Ascending);
+        assert_eq!(specs[1].order(), ir::SortOrder::Ascending);
         // time (no prefix) → ascending
-        assert_eq!(specs[2].order(), SortOrder::Ascending);
+        assert_eq!(specs[2].order(), ir::SortOrder::Ascending);
     }
 
     #[test]
     fn single_limit_stage() {
         let pipeline = parse_and_convert("dataset test | head 10").expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
-        assert_eq!(&pipeline.stages()[0], &PipelineStage::Limit(10));
+        assert_eq!(&pipeline.stages()[0], &ir::PipelineStage::Limit(10));
     }
 
     #[test]
@@ -120,7 +120,7 @@ mod tests {
             parse_and_convert("dataset test | fields name, age, active").expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
-        let PipelineStage::Project(fields) = &pipeline.stages()[0] else {
+        let ir::PipelineStage::Project(fields) = &pipeline.stages()[0] else {
             panic!("expected Project stage");
         };
         assert_eq!(fields.len(), 3);
@@ -137,7 +137,7 @@ mod tests {
         .expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
-        let PipelineStage::Aggregate { measures, group_by } = &pipeline.stages()[0] else {
+        let ir::PipelineStage::Aggregate { measures, group_by } = &pipeline.stages()[0] else {
             panic!("expected Aggregate stage");
         };
         assert_eq!(measures.len(), 2);
@@ -161,17 +161,17 @@ mod tests {
         assert_eq!(pipeline.stages().len(), 3);
 
         // Stage 0: Filter
-        assert!(matches!(&pipeline.stages()[0], PipelineStage::Filter(_)));
+        assert!(matches!(&pipeline.stages()[0], ir::PipelineStage::Filter(_)));
 
         // Stage 1: Sort
-        let PipelineStage::Sort(specs) = &pipeline.stages()[1] else {
+        let ir::PipelineStage::Sort(specs) = &pipeline.stages()[1] else {
             panic!("expected Sort stage at index 1");
         };
         assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].order(), SortOrder::Descending);
+        assert_eq!(specs[0].order(), ir::SortOrder::Descending);
 
         // Stage 2: Limit
-        assert_eq!(&pipeline.stages()[2], &PipelineStage::Limit(5));
+        assert_eq!(&pipeline.stages()[2], &ir::PipelineStage::Limit(5));
     }
 
     // ── error cases ──────────────────────────────────────────────────────
@@ -264,9 +264,9 @@ mod tests {
         assert!(result.is_ok());
         let pipeline = result.expect("should convert");
         assert_eq!(pipeline.stages().len(), 3);
-        assert!(matches!(&pipeline.stages()[0], PipelineStage::Aggregate { .. }));
-        assert!(matches!(&pipeline.stages()[1], PipelineStage::Sort(_)));
-        assert!(matches!(&pipeline.stages()[2], PipelineStage::Limit(_)));
+        assert!(matches!(&pipeline.stages()[0], ir::PipelineStage::Aggregate { .. }));
+        assert!(matches!(&pipeline.stages()[1], ir::PipelineStage::Sort(_)));
+        assert!(matches!(&pipeline.stages()[2], ir::PipelineStage::Limit(_)));
     }
 
     // ── public API integration tests (via `analyze`) ─────────────────────

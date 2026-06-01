@@ -1,10 +1,10 @@
 use super::error::SemanticError;
 use crate::ast;
-use crate::ir::{AggregateExpr, FieldRef, PipelineStage, SortOrder, SortSpec};
+use crate::ir;
 
 use super::expression::convert_expression;
 
-/// Converts an [`ast::Command`] from the AST into a [`PipelineStage`].
+/// Converts an [`ast::Command`] from the AST into an [`ir::PipelineStage`].
 ///
 /// Performs structural validation (e.g. non-empty field lists, positive limits)
 /// and delegates expression conversion to [`convert_expression`].
@@ -12,21 +12,21 @@ use super::expression::convert_expression;
 /// # Errors
 ///
 /// Returns a [`SemanticError`] when the command fails structural validation.
-pub(crate) fn convert_command(cmd: ast::Command) -> Result<PipelineStage, SemanticError> {
+pub(crate) fn convert_command(cmd: ast::Command) -> Result<ir::PipelineStage, SemanticError> {
     match cmd {
-        ast::Command::Where(expr) => Ok(PipelineStage::Filter(convert_expression(expr))),
+        ast::Command::Where(expr) => Ok(ir::PipelineStage::Filter(convert_expression(expr))),
         ast::Command::Sort(specs) => {
             if specs.is_empty() {
                 return Err(SemanticError::EmptySortSpec);
             }
             let ir_specs = specs.into_iter().map(convert_sort_expr).collect();
-            Ok(PipelineStage::Sort(ir_specs))
+            Ok(ir::PipelineStage::Sort(ir_specs))
         }
         ast::Command::Head(n) => {
             if n <= 0 {
                 return Err(SemanticError::InvalidLimitValue { value: n });
             }
-            Ok(PipelineStage::Limit(n as usize))
+            Ok(ir::PipelineStage::Limit(n as usize))
         }
         ast::Command::Fields(exprs) => {
             if exprs.is_empty() {
@@ -36,7 +36,7 @@ pub(crate) fn convert_command(cmd: ast::Command) -> Result<PipelineStage, Semant
                 .into_iter()
                 .map(convert_field_expr)
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(PipelineStage::Project(fields))
+            Ok(ir::PipelineStage::Project(fields))
         }
         ast::Command::Stats { aggregates, by } => {
             if aggregates.is_empty() {
@@ -50,28 +50,28 @@ pub(crate) fn convert_command(cmd: ast::Command) -> Result<PipelineStage, Semant
                 .into_iter()
                 .map(convert_field_expr)
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(PipelineStage::Aggregate { measures, group_by })
+            Ok(ir::PipelineStage::Aggregate { measures, group_by })
         }
     }
 }
 
-/// Converts an [`ast::SortExpression`] from the AST into a [`SortSpec`].
-fn convert_sort_expr(spec: ast::SortExpression) -> SortSpec {
+/// Converts an [`ast::SortExpression`] from the AST into an [`ir::SortSpec`].
+fn convert_sort_expr(spec: ast::SortExpression) -> ir::SortSpec {
     let (expression, order) = spec.into_parts();
     let order = match order {
-        ast::SortOrder::Ascending => SortOrder::Ascending,
-        ast::SortOrder::Descending => SortOrder::Descending,
+        ast::SortOrder::Ascending => ir::SortOrder::Ascending,
+        ast::SortOrder::Descending => ir::SortOrder::Descending,
     };
-    SortSpec::new(convert_expression(expression), order)
+    ir::SortSpec::new(convert_expression(expression), order)
 }
 
 /// Extracts a field reference from a field-like [`ast::Expr`].
 ///
 /// Only [`ast::Expr::Field`] is accepted; any other variant produces a
 /// [`SemanticError::ConversionError`].
-fn convert_field_expr(expr: ast::Expr) -> Result<FieldRef, SemanticError> {
+fn convert_field_expr(expr: ast::Expr) -> Result<ir::FieldRef, SemanticError> {
     match expr {
-        ast::Expr::Field(name) => Ok(FieldRef::new(name)),
+        ast::Expr::Field(name) => Ok(ir::FieldRef::new(name)),
         other => Err(SemanticError::ConversionError(format!(
             "expected field name, got {}",
             describe_expression_kind(&other)
@@ -79,14 +79,14 @@ fn convert_field_expr(expr: ast::Expr) -> Result<FieldRef, SemanticError> {
     }
 }
 
-/// Converts an aggregate expression pair into an [`AggregateExpr`].
+/// Converts an aggregate expression pair into an [`ir::AggregateExpr`].
 ///
 /// The `expr` must be [`ast::Expr::Call`]; otherwise a
 /// [`SemanticError::ConversionError`] is returned.
 fn convert_aggregate_expr(
     expr: ast::Expr,
     alias: Option<String>,
-) -> Result<AggregateExpr, SemanticError> {
+) -> Result<ir::AggregateExpr, SemanticError> {
     match expr {
         ast::Expr::Call(name, args) => {
             if args.len() > 1 {
@@ -96,7 +96,7 @@ fn convert_aggregate_expr(
                 )));
             }
             let argument = args.into_iter().next().map(convert_expression);
-            Ok(AggregateExpr::new(name, argument, alias))
+            Ok(ir::AggregateExpr::new(name, argument, alias))
         }
         other => Err(SemanticError::ConversionError(format!(
             "expected aggregate function call, got {}",
@@ -123,7 +123,7 @@ fn describe_expression_kind(expr: &ast::Expr) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{BinaryOp, Expr, FieldRef, Literal};
+    use crate::ir;
 
     // ── where command ──────────────────────────────────────────────────
 
@@ -138,10 +138,10 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Filter(Expr::Binary(
-                BinaryOp::Equal,
-                Box::new(Expr::Field(FieldRef::new("status".to_owned()))),
-                Box::new(Expr::Literal(Literal::Number(200.0))),
+            ir::PipelineStage::Filter(ir::Expr::Binary(
+                ir::BinaryOp::Equal,
+                Box::new(ir::Expr::Field(ir::FieldRef::new("status".to_owned()))),
+                Box::new(ir::Expr::Literal(ir::Literal::Number(200.0))),
             ))
         );
     }
@@ -153,7 +153,7 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Filter(Expr::Field(FieldRef::new("active".to_owned())))
+            ir::PipelineStage::Filter(ir::Expr::Field(ir::FieldRef::new("active".to_owned())))
         );
     }
 
@@ -166,7 +166,7 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Filter(Expr::Not(Box::new(Expr::Field(FieldRef::new(
+            ir::PipelineStage::Filter(ir::Expr::Not(Box::new(ir::Expr::Field(ir::FieldRef::new(
                 "error".to_owned()
             )))))
         );
@@ -184,9 +184,9 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Sort(vec![SortSpec::new(
-                Expr::Field(FieldRef::new("time".to_owned())),
-                SortOrder::Ascending,
+            ir::PipelineStage::Sort(vec![ir::SortSpec::new(
+                ir::Expr::Field(ir::FieldRef::new("time".to_owned())),
+                ir::SortOrder::Ascending,
             )])
         );
     }
@@ -201,9 +201,9 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Sort(vec![SortSpec::new(
-                Expr::Field(FieldRef::new("count".to_owned())),
-                SortOrder::Descending,
+            ir::PipelineStage::Sort(vec![ir::SortSpec::new(
+                ir::Expr::Field(ir::FieldRef::new("count".to_owned())),
+                ir::SortOrder::Descending,
             )])
         );
     }
@@ -224,14 +224,14 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Sort(vec![
-                SortSpec::new(
-                    Expr::Field(FieldRef::new("count".to_owned())),
-                    SortOrder::Descending,
+            ir::PipelineStage::Sort(vec![
+                ir::SortSpec::new(
+                    ir::Expr::Field(ir::FieldRef::new("count".to_owned())),
+                    ir::SortOrder::Descending,
                 ),
-                SortSpec::new(
-                    Expr::Field(FieldRef::new("status".to_owned())),
-                    SortOrder::Ascending,
+                ir::SortSpec::new(
+                    ir::Expr::Field(ir::FieldRef::new("status".to_owned())),
+                    ir::SortOrder::Ascending,
                 ),
             ])
         );
@@ -250,14 +250,14 @@ mod tests {
     fn head_positive() {
         let cmd = ast::Command::Head(10);
         let result = convert_command(cmd).expect("should convert");
-        assert_eq!(result, PipelineStage::Limit(10));
+        assert_eq!(result, ir::PipelineStage::Limit(10));
     }
 
     #[test]
     fn head_one() {
         let cmd = ast::Command::Head(1);
         let result = convert_command(cmd).expect("should convert");
-        assert_eq!(result, PipelineStage::Limit(1));
+        assert_eq!(result, ir::PipelineStage::Limit(1));
     }
 
     #[test]
@@ -289,7 +289,7 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Project(vec![FieldRef::new("name".to_owned())])
+            ir::PipelineStage::Project(vec![ir::FieldRef::new("name".to_owned())])
         );
     }
 
@@ -303,9 +303,9 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Project(vec![
-                FieldRef::new("name".to_owned()),
-                FieldRef::new("age".to_owned()),
+            ir::PipelineStage::Project(vec![
+                ir::FieldRef::new("name".to_owned()),
+                ir::FieldRef::new("age".to_owned()),
             ])
         );
     }
@@ -348,8 +348,8 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Aggregate {
-                measures: vec![AggregateExpr::new("count".to_owned(), None, None,)],
+            ir::PipelineStage::Aggregate {
+                measures: vec![ir::AggregateExpr::new("count".to_owned(), None, None,)],
                 group_by: vec![],
             }
         );
@@ -368,13 +368,13 @@ mod tests {
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Aggregate {
-                measures: vec![AggregateExpr::new(
+            ir::PipelineStage::Aggregate {
+                measures: vec![ir::AggregateExpr::new(
                     "sum".to_owned(),
-                    Some(Expr::Field(FieldRef::new("bytes".to_owned()))),
+                    Some(ir::Expr::Field(ir::FieldRef::new("bytes".to_owned()))),
                     Some("total".to_owned()),
                 )],
-                group_by: vec![FieldRef::new("method".to_owned())],
+                group_by: vec![ir::FieldRef::new("method".to_owned())],
             }
         );
     }
@@ -394,7 +394,7 @@ mod tests {
         };
         let result = convert_command(cmd).expect("should convert");
 
-        let PipelineStage::Aggregate { measures, group_by } = result else {
+        let ir::PipelineStage::Aggregate { measures, group_by } = result else {
             panic!("expected Aggregate stage");
         };
         assert_eq!(measures.len(), 2);
@@ -443,7 +443,7 @@ mod tests {
             ast::SortOrder::Ascending,
         );
         let result = convert_sort_expr(spec);
-        assert_eq!(result.order(), SortOrder::Ascending);
+        assert_eq!(result.order(), ir::SortOrder::Ascending);
     }
 
     #[test]
@@ -453,7 +453,7 @@ mod tests {
             ast::SortOrder::Descending,
         );
         let result = convert_sort_expr(spec);
-        assert_eq!(result.order(), SortOrder::Descending);
+        assert_eq!(result.order(), ir::SortOrder::Descending);
     }
 
     // ── helper: convert_field_expr ─────────────────────────────────────
@@ -462,7 +462,7 @@ mod tests {
     fn convert_field_expr_valid() {
         let expr = ast::Expr::Field("status".to_owned());
         let result = convert_field_expr(expr).expect("should convert");
-        assert_eq!(result, FieldRef::new("status".to_owned()));
+        assert_eq!(result, ir::FieldRef::new("status".to_owned()));
     }
 
     #[test]
