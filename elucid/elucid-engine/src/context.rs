@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext, *};
-use elucid_language::parser;
 
 use crate::planner::QueryPlanner;
 
@@ -22,25 +21,17 @@ impl Context {
     }
 
     pub async fn execute(&self, source: &str) -> Result<DataFrame> {
-        let query = parser::parse(source).map_err(|error| {
-            match error.eprint(source) {
-                Ok(()) => {}
-                Err(error) => return DataFusionError::IoError(error),
-            };
-            DataFusionError::Plan(format!("Parse error: {:?}", error))
-        })?;
+        let pipeline = elucid_language::analyze(source)
+            .map_err(|e| DataFusionError::Plan(format!("Query analysis error: {e}")))?;
 
-        if !self.context.table_exist(query.source())? {
-            self.register_table(query.source()).await?;
+        if !self.context.table_exist(pipeline.source().dataset())? {
+            self.register_table(pipeline.source().dataset()).await?;
         }
 
         let planner = QueryPlanner::new(&self.context);
-        let plan = planner.create_logical_plan(query).await?;
+        let plan = planner.create_logical_plan(pipeline).await?;
 
-        self.context
-            .execute_logical_plan(plan)
-            .await
-            .map_err(|error| error.into())
+        self.context.execute_logical_plan(plan).await
     }
 
     async fn register_table(&self, table_name: &str) -> Result<()> {

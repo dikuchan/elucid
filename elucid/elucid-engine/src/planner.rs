@@ -7,7 +7,9 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{AggregateFunction, ScalarFunction};
 use datafusion::logical_expr::{BinaryExpr, LogicalPlan, LogicalPlanBuilder, Operator, SortExpr};
 use datafusion::prelude::*;
-use elucid_language::ast;
+use elucid_language::ir;
+
+const COUNT_FN: &str = "count";
 
 pub struct QueryPlanner<'a> {
     context: &'a SessionContext,
@@ -18,133 +20,159 @@ impl<'a> QueryPlanner<'a> {
         Self { context: ctx }
     }
 
-    pub async fn create_logical_plan(&self, query: ast::Query) -> Result<LogicalPlan> {
-        let (source, commands) = query.into_parts();
+    pub async fn create_logical_plan(&self, pipeline: ir::Pipeline) -> Result<LogicalPlan> {
+        let (source, _time_range, stages) = pipeline.into_parts();
+        // TODO: apply time_range as a filter predicate for Parquet partition pruning.
+        let table_name = source.into_dataset();
+
         let table_provider = self
             .context
-            .table_provider(&source)
+            .table_provider(&table_name)
             .await
             .map_err(|error| {
-                DataFusionError::Plan(format!("Table '{}' not found: {}", source, error))
+                DataFusionError::Plan(format!("Table '{}' not found: {}", table_name, error))
             })?;
         let table_source = DefaultTableSource::new(table_provider);
 
-        let mut builder = LogicalPlanBuilder::scan(&source, Arc::new(table_source), None)?;
-        for command in commands {
-            builder = self.apply_command(builder, command)?;
+        let mut builder = LogicalPlanBuilder::scan(&table_name, Arc::new(table_source), None)?;
+        for stage in stages {
+            builder = self.apply_stage(builder, stage)?;
         }
         builder.build()
     }
 
-    fn apply_command(
+    fn apply_stage(
         &self,
         builder: LogicalPlanBuilder,
-        command: ast::Command,
+        stage: ir::PipelineStage,
     ) -> Result<LogicalPlanBuilder> {
-        match command {
-            ast::Command::Where(expression) => {
-                let expression = self.map_expression(expression)?;
-                builder.filter(expression)
+        match stage {
+            ir::PipelineStage::Filter(expr) => {
+                let expr = self.map_expression(expr)?;
+                builder.filter(expr)
             }
-            ast::Command::Sort(sort_expressions) => {
-                let sort_expressions: Vec<SortExpr> = sort_expressions
+            ir::PipelineStage::Sort(specs) => {
+                let sort_exprs: Vec<SortExpr> = specs
                     .into_iter()
-                    .map(|sort_expression| {
-                        let (expression, order) = sort_expression.into_parts();
-                        let expression = self.map_expression(expression)?;
-                        let ascending = match order {
-                            ast::SortOrder::Ascending => true,
-                            ast::SortOrder::Descending => false,
-                            _ => true,
-                        };
-                        Ok(expression.sort(ascending, false))
+                    .map(|spec| {
+                        let (expr, order) = spec.into_parts();
+                        let expr = self.map_expression(expr)?;
+                        let ascending = matches!(order, ir::SortOrder::Ascending);
+                        Ok(expr.sort(ascending, false))
                     })
                     .collect::<Result<_>>()?;
-                builder.sort(sort_expressions)
+                builder.sort(sort_exprs)
             }
-            ast::Command::Head(n) => builder.limit(0, Some(n as usize)),
-            ast::Command::Fields(expressions) => {
-                let expressions: Vec<Expr> = expressions
-                    .into_iter()
-                    .map(|e| self.map_expression(e))
-                    .collect::<Result<_>>()?;
-                builder.project(expressions)
+            ir::PipelineStage::Limit(n) => builder.limit(0, Some(n)),
+            ir::PipelineStage::Project(field_refs) => {
+                let exprs: Vec<Expr> = field_refs.into_iter().map(|fr| col(fr.as_str())).collect();
+                builder.project(exprs)
             }
-            ast::Command::Stats { aggregates, by } => {
-                let group_expressions: Vec<Expr> = by
-                    .into_iter()
-                    .map(|expression| self.map_expression(expression))
-                    .collect::<Result<_>>()?;
+            ir::PipelineStage::Aggregate { measures, group_by } => {
+                let group_exprs: Vec<Expr> =
+                    group_by.into_iter().map(|fr| col(fr.as_str())).collect();
 
-                let mut aggregate_expressions = Vec::new();
-                for (expression, alias_option) in aggregates {
-                    let mut expression = self.map_expression(expression)?;
-                    if let Some(alias) = alias_option {
-                        expression = expression.alias(alias);
+                let mut agg_exprs = Vec::new();
+                for measure in measures {
+                    let (function_name, argument, alias) = measure.into_parts();
+                    let arg_expr = match argument {
+                        Some(expr) => self.map_expression(expr)?,
+                        None => lit(1i64),
+                    };
+
+                    let agg_func = self.context.udaf(&function_name).map_err(|_| {
+                        DataFusionError::Plan(format!(
+                            "Aggregate function '{}' not found",
+                            function_name
+                        ))
+                    })?;
+
+                    let mut expr = Expr::AggregateFunction(AggregateFunction::new_udf(
+                        agg_func,
+                        vec![arg_expr],
+                        false,
+                        None,
+                        Vec::new(),
+                        None,
+                    ));
+
+                    if let Some(alias) = alias {
+                        expr = expr.alias(alias);
                     }
-                    aggregate_expressions.push(expression);
+                    agg_exprs.push(expr);
                 }
 
-                builder.aggregate(group_expressions, aggregate_expressions)
+                builder.aggregate(group_exprs, agg_exprs)
             }
+            ir::PipelineStage::Search => Err(DataFusionError::Plan(
+                "unsupported stage: Search".to_owned(),
+            )),
             _ => Err(DataFusionError::Plan(format!(
-                "unsupported command: {:?}",
-                command
+                "unsupported pipeline stage: {:?}",
+                stage
             ))),
         }
     }
 
-    fn map_expression(&self, expression: ast::Expression) -> Result<Expr> {
+    fn map_expression(&self, expression: ir::Expression) -> Result<Expr> {
         match expression {
-            ast::Expression::Null => Ok(lit(Null)),
-            ast::Expression::Boolean(v) => Ok(lit(v)),
-            ast::Expression::Number(v) => Ok(lit(v)),
-            ast::Expression::String(v) => Ok(lit(v)),
-            ast::Expression::Field(v) => Ok(col(v)),
-            ast::Expression::Binary(operator, left, right) => {
-                let left = Box::new(self.map_expression(*left)?);
-                let right = Box::new(self.map_expression(*right)?);
-                match operator {
-                    ast::BinaryOperator::And => Ok(left.and(*right)),
-                    ast::BinaryOperator::Or => Ok(left.or(*right)),
+            ir::Expression::Literal(value) => match value {
+                ir::Literal::Null => Ok(lit(Null)),
+                ir::Literal::Boolean(v) => Ok(lit(v)),
+                ir::Literal::Number(v) => Ok(lit(v)),
+                ir::Literal::String(v) => Ok(lit(v)),
+                _ => Err(DataFusionError::Plan(format!(
+                    "unsupported literal: {:?}",
+                    value
+                ))),
+            },
+            ir::Expression::Field(field_ref) => Ok(col(field_ref.as_str())),
+            ir::Expression::Binary(op, left, right) => {
+                let left = self.map_expression(*left)?;
+                let right = self.map_expression(*right)?;
+                match op {
+                    ir::BinaryOperator::And => Ok(left.and(right)),
+                    ir::BinaryOperator::Or => Ok(left.or(right)),
                     _ => Ok(Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: self.map_operator(operator)?,
-                        right,
+                        left: Box::new(left),
+                        op: self.map_operator(op)?,
+                        right: Box::new(right),
                     })),
                 }
             }
-            ast::Expression::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
-            ast::Expression::Call(function_name, arguments) => {
-                let mut arguments: Vec<Expr> = arguments
+            ir::Expression::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
+            ir::Expression::Call(name, args) => {
+                let mut arg_exprs: Vec<Expr> = args
                     .into_iter()
-                    .map(|argument| self.map_expression(argument))
+                    .map(|arg| self.map_expression(arg))
                     .collect::<Result<Vec<_>>>()?;
 
-                // Hack: count(1) is equivalent to count(*).
-                if function_name == "count" && arguments.is_empty() {
-                    arguments.push(lit(1i64));
+                // count() with no args is equivalent to count(*).
+                if name == COUNT_FN && arg_exprs.is_empty() {
+                    arg_exprs.push(lit(1i64));
                 }
 
-                if let Ok(aggregation_function) = self.context.udaf(&function_name) {
+                if let Ok(agg_func) = self.context.udaf(&name) {
                     return Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                        aggregation_function,
-                        arguments,
-                        false,      // Distinct.
-                        None,       // Filter.
-                        Vec::new(), // Order by.
+                        agg_func,
+                        arg_exprs,
+                        false,
+                        None,
+                        Vec::new(),
                         None,
                     )));
                 }
 
-                if let Some(function) = self.context.udf(&function_name).ok() {
+                if let Ok(scalar_func) = self.context.udf(&name) {
                     return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
-                        function, arguments,
+                        scalar_func,
+                        arg_exprs,
                     )));
                 }
+
                 Err(DataFusionError::Plan(format!(
-                    "Function '{}' not found. It is not a registered UDF or built-in function",
-                    function_name,
+                    "Function '{}' not found",
+                    name
                 )))
             }
             _ => Err(DataFusionError::Plan(format!(
@@ -154,24 +182,24 @@ impl<'a> QueryPlanner<'a> {
         }
     }
 
-    fn map_operator(&self, operator: ast::BinaryOperator) -> Result<Operator> {
+    fn map_operator(&self, operator: ir::BinaryOperator) -> Result<Operator> {
         match operator {
-            ast::BinaryOperator::Add => Ok(Operator::Plus),
-            ast::BinaryOperator::Subtract => Ok(Operator::Minus),
-            ast::BinaryOperator::Multiply => Ok(Operator::Multiply),
-            ast::BinaryOperator::Divide => Ok(Operator::Divide),
-            ast::BinaryOperator::Equal => Ok(Operator::Eq),
-            ast::BinaryOperator::NotEqual => Ok(Operator::NotEq),
-            ast::BinaryOperator::GreaterThan => Ok(Operator::Gt),
-            ast::BinaryOperator::GreaterThanOrEqual => Ok(Operator::GtEq),
-            ast::BinaryOperator::LessThan => Ok(Operator::Lt),
-            ast::BinaryOperator::LessThanOrEqual => Ok(Operator::LtEq),
-            ast::BinaryOperator::And => {
-                unreachable!("Logical 'and' should be handled in expression builder")
-            }
-            ast::BinaryOperator::Or => {
-                unreachable!("Logical 'or' should be handled in expression builder")
-            }
+            ir::BinaryOperator::Add => Ok(Operator::Plus),
+            ir::BinaryOperator::Subtract => Ok(Operator::Minus),
+            ir::BinaryOperator::Multiply => Ok(Operator::Multiply),
+            ir::BinaryOperator::Divide => Ok(Operator::Divide),
+            ir::BinaryOperator::Equal => Ok(Operator::Eq),
+            ir::BinaryOperator::NotEqual => Ok(Operator::NotEq),
+            ir::BinaryOperator::GreaterThan => Ok(Operator::Gt),
+            ir::BinaryOperator::GreaterThanOrEqual => Ok(Operator::GtEq),
+            ir::BinaryOperator::LessThan => Ok(Operator::Lt),
+            ir::BinaryOperator::LessThanOrEqual => Ok(Operator::LtEq),
+            ir::BinaryOperator::And => Err(DataFusionError::Plan(
+                "logical 'and' should be handled in expression mapper".to_owned(),
+            )),
+            ir::BinaryOperator::Or => Err(DataFusionError::Plan(
+                "logical 'or' should be handled in expression mapper".to_owned(),
+            )),
             _ => Err(DataFusionError::Plan(format!(
                 "unsupported operator: {:?}",
                 operator
