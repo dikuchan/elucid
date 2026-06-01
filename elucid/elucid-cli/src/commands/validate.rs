@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{stdin, Read};
+use std::io::{Read, stdin};
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};

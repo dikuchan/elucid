@@ -13,9 +13,10 @@ where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
     let identifier = select! { Token::Identifier(i) => i.to_string() }.labelled("identifier");
-    let number = select! { Token::Integer(n) => ast::Expression::Number(n as f64) }.labelled("number");
-    let string =
-        select! { Token::StringLiteral(s) => ast::Expression::String(s.to_owned()) }.labelled("string");
+    let number =
+        select! { Token::Integer(n) => ast::Expression::Number(n as f64) }.labelled("number");
+    let string = select! { Token::StringLiteral(s) => ast::Expression::String(s.to_owned()) }
+        .labelled("string");
     let null = just(Token::KeywordNull)
         .to(ast::Expression::Null)
         .labelled("null");
@@ -58,12 +59,16 @@ where
             infix(
                 left(1),
                 just(Token::OperatorOr).to(ast::BinaryOperator::Or),
-                |l, _, r, _| ast::Expression::Binary(ast::BinaryOperator::Or, Box::new(l), Box::new(r)),
+                |l, _, r, _| {
+                    ast::Expression::Binary(ast::BinaryOperator::Or, Box::new(l), Box::new(r))
+                },
             ),
             infix(
                 left(2),
                 just(Token::OperatorAnd).to(ast::BinaryOperator::And),
-                |l, _, r, _| ast::Expression::Binary(ast::BinaryOperator::And, Box::new(l), Box::new(r)),
+                |l, _, r, _| {
+                    ast::Expression::Binary(ast::BinaryOperator::And, Box::new(l), Box::new(r))
+                },
             ),
             infix(
                 left(3),
