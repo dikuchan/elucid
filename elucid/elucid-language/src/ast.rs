@@ -1,37 +1,37 @@
 /// Binary operator in an expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum BinaryOp {
-    /// Addition (`+`).
+pub enum BinaryOperator {
+    /// Addition.
     Add,
-    /// Subtraction (`-`).
+    /// Subtraction.
     Subtract,
-    /// Multiplication (`*`).
+    /// Multiplication.
     Multiply,
-    /// Division (`/`).
+    /// Division.
     Divide,
-    /// Equality (`==`).
+    /// Equality.
     Equal,
-    /// Inequality (`!=`).
+    /// Inequality.
     NotEqual,
-    /// Greater than (`>`).
+    /// Greater than.
     GreaterThan,
-    /// Greater than or equal (`>=`).
+    /// Greater than or equal.
     GreaterThanOrEqual,
-    /// Less than (`<`).
+    /// Less than.
     LessThan,
-    /// Less than or equal (`<=`).
+    /// Less than or equal.
     LessThanOrEqual,
-    /// Logical AND (`and`).
+    /// Logical AND.
     And,
-    /// Logical OR (`or`).
+    /// Logical OR.
     Or,
 }
 
 /// Expression node in a parsed query.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Expr {
+pub enum Expression {
     /// The null literal.
     Null,
     /// A boolean literal (`true` / `false`).
@@ -42,21 +42,21 @@ pub enum Expr {
     String(String),
     /// A field reference.
     Field(String),
-    /// A binary operation (`lhs op rhs`).
-    Binary(BinaryOp, Box<Expr>, Box<Expr>),
-    /// Logical negation (`not expr`).
-    Not(Box<Expr>),
-    /// A function call (e.g., `count()`, `sum(bytes)`).
-    Call(String, Vec<Expr>),
+    /// A binary operation.
+    Binary(BinaryOperator, Box<Expression>, Box<Expression>),
+    /// Logical negation.
+    Not(Box<Expression>),
+    /// A function call.
+    Call(String, Vec<Expression>),
 }
 
 /// Sort direction for sort expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SortOrder {
-    /// Ascending order (smallest first).
+    /// Ascending order.
     Ascending,
-    /// Descending order (largest first).
+    /// Descending order.
     Descending,
 }
 
@@ -64,18 +64,18 @@ pub enum SortOrder {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SortExpression {
-    expression: Expr,
+    expression: Expression,
     order: SortOrder,
 }
 
 impl SortExpression {
     /// Creates a new sort expression.
-    pub fn new(expression: Expr, order: SortOrder) -> Self {
+    pub fn new(expression: Expression, order: SortOrder) -> Self {
         Self { expression, order }
     }
 
     /// Returns the expression to sort by.
-    pub fn expression(&self) -> &Expr {
+    pub fn expression(&self) -> &Expression {
         &self.expression
     }
 
@@ -85,7 +85,7 @@ impl SortExpression {
     }
 
     /// Consumes the sort expression and returns its components.
-    pub fn into_parts(self) -> (Expr, SortOrder) {
+    pub fn into_parts(self) -> (Expression, SortOrder) {
         (self.expression, self.order)
     }
 }
@@ -94,20 +94,20 @@ impl SortExpression {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Command {
-    /// `where <expr>` — filter rows by a predicate.
-    Where(Expr),
-    /// `sort by <specs>` — sort by one or more expressions.
+    /// `where <expr>`. Filter rows by a predicate.
+    Where(Expression),
+    /// `sort by <specs>`. Sort by one or more expressions.
     Sort(Vec<SortExpression>),
-    /// `head <n>` — limit output rows.
+    /// `head <n>`. Limit output rows.
     Head(i64),
-    /// `fields <expr>, ...` — project specific fields.
-    Fields(Vec<Expr>),
-    /// `stats <aggregates> [by <fields>]` — aggregate with optional group-by.
+    /// `fields <expr>, ...`. Project specific fields.
+    Fields(Vec<Expression>),
+    /// `stats <aggregates> [by <fields>]`. Aggregate with optional group-by.
     Stats {
         /// Aggregate expressions paired with optional aliases.
-        aggregates: Vec<(Expr, Option<String>)>,
+        aggregates: Vec<(Expression, Option<String>)>,
         /// Group-by field expressions.
-        by: Vec<Expr>,
+        by: Vec<Expression>,
     },
 }
 

@@ -6,17 +6,14 @@ pub mod ir;
 pub mod lexer;
 pub mod parser;
 
-// Error types for the public `analyze()` entry point.
-// `semantic` is private — these re-exports let consumers name the error
-// types without depending on the module's internal structure.
 pub use semantic::{AnalyzeError, ParseError, SemanticError};
 
 /// Analyzes a query string, producing a validated [`ir::Pipeline`].
 ///
 /// This is the primary entry point for query compilation. It chains:
-/// 1. Lexing and parsing → AST
-/// 2. Semantic analysis → IR pipeline
-/// 3. Validation → structural rule checks
+/// 1. Lexing and parsing → AST.
+/// 2. Semantic analysis → IR pipeline.
+/// 3. Validation → structural rule checks.
 ///
 /// # Errors
 ///

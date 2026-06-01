@@ -1,8 +1,7 @@
 //! Intermediate representation (IR) types for query pipelines.
 //!
 //! The IR is the output of semantic analysis on the parsed AST. It represents
-//! a validated, normalized query pipeline that `elucid-engine` can consume
-//! for execution.
+//! a validated, normalized query pipeline.
 
 use std::fmt;
 
@@ -23,7 +22,7 @@ pub enum Literal {
 /// Binary operator for IR expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum BinaryOp {
+pub enum BinaryOperator {
     Add,
     Subtract,
     Multiply,
@@ -39,9 +38,6 @@ pub enum BinaryOp {
 }
 
 /// A reference to a field in the IR.
-///
-/// Newtype wrapper around a field name string. Leaves room for nested
-/// field paths (e.g., `host.name`) in the future.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct FieldRef {
@@ -86,37 +82,17 @@ impl fmt::Display for FieldRef {
 /// An expression in the IR.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Expr {
+pub enum Expression {
     /// A literal value.
     Literal(Literal),
     /// A reference to a field.
     Field(FieldRef),
     /// A binary operation on two sub-expressions.
-    Binary(BinaryOp, Box<Expr>, Box<Expr>),
+    Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     /// Logical negation.
-    Not(Box<Expr>),
-    /// A function call (e.g., `count()`, `sum(bytes)`).
-    Call(String, Vec<Expr>),
-}
-
-/// Sort direction for [`SortSpec`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub enum SortOrder {
-    /// Ascending order (smallest first).
-    #[default]
-    Ascending,
-    /// Descending order (largest first).
-    Descending,
-}
-
-impl fmt::Display for SortOrder {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Ascending => write!(f, "asc"),
-            Self::Descending => write!(f, "desc"),
-        }
-    }
+    Not(Box<Expression>),
+    /// A function call.
+    Call(String, Vec<Expression>),
 }
 
 /// Specifies the data source for a query pipeline.
@@ -158,9 +134,6 @@ impl fmt::Display for SourceSpec {
 }
 
 /// A time range constraint for the query.
-///
-/// Uses string placeholders for time expressions — parsing is not yet
-/// implemented.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct TimeRange {
@@ -189,18 +162,18 @@ impl TimeRange {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SortSpec {
-    expr: Expr,
+    expr: Expression,
     order: SortOrder,
 }
 
 impl SortSpec {
     /// Creates a new sort specification.
-    pub fn new(expr: Expr, order: SortOrder) -> Self {
+    pub fn new(expr: Expression, order: SortOrder) -> Self {
         Self { expr, order }
     }
 
     /// Returns the expression to sort by.
-    pub fn expr(&self) -> &Expr {
+    pub fn expr(&self) -> &Expression {
         &self.expr
     }
 
@@ -210,23 +183,43 @@ impl SortSpec {
     }
 
     /// Consumes the sort spec and returns its components.
-    pub fn into_parts(self) -> (Expr, SortOrder) {
+    pub fn into_parts(self) -> (Expression, SortOrder) {
         (self.expr, self.order)
     }
 }
 
-/// An aggregate expression (e.g., `sum(bytes)`, `count()`).
+/// Sort direction for sort expressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum SortOrder {
+    /// Ascending order.
+    #[default]
+    Ascending,
+    /// Descending order.
+    Descending,
+}
+
+impl fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ascending => write!(f, "asc"),
+            Self::Descending => write!(f, "desc"),
+        }
+    }
+}
+
+/// An aggregate expression (e.g., `count()`).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct AggregateExpr {
     function: String,
-    argument: Option<Expr>,
+    argument: Option<Expression>,
     alias: Option<String>,
 }
 
 impl AggregateExpr {
     /// Creates a new aggregate expression.
-    pub fn new(function: String, argument: Option<Expr>, alias: Option<String>) -> Self {
+    pub fn new(function: String, argument: Option<Expression>, alias: Option<String>) -> Self {
         Self {
             function,
             argument,
@@ -234,13 +227,13 @@ impl AggregateExpr {
         }
     }
 
-    /// Returns the aggregate function name (e.g., `"sum"`, `"count"`).
+    /// Returns the aggregate function name.
     pub fn function(&self) -> &str {
         &self.function
     }
 
     /// Returns the aggregate argument expression, if any.
-    pub fn argument(&self) -> Option<&Expr> {
+    pub fn argument(&self) -> Option<&Expression> {
         self.argument.as_ref()
     }
 
@@ -250,7 +243,7 @@ impl AggregateExpr {
     }
 
     /// Consumes the aggregate expression and returns its components.
-    pub fn into_parts(self) -> (String, Option<Expr>, Option<String>) {
+    pub fn into_parts(self) -> (String, Option<Expression>, Option<String>) {
         (self.function, self.argument, self.alias)
     }
 }
@@ -260,7 +253,7 @@ impl AggregateExpr {
 #[non_exhaustive]
 pub enum PipelineStage {
     /// Filter rows by a predicate expression.
-    Filter(Expr),
+    Filter(Expression),
     /// Project specific fields.
     Project(Vec<FieldRef>),
     /// Aggregate with measures and optional group-by fields.
@@ -389,25 +382,25 @@ mod tests {
 
     #[test]
     fn expr_literal() {
-        let expr = Expr::Literal(Literal::Number(1.0));
-        assert_eq!(expr, Expr::Literal(Literal::Number(1.0)));
+        let expr = Expression::Literal(Literal::Number(1.0));
+        assert_eq!(expr, Expression::Literal(Literal::Number(1.0)));
     }
 
     #[test]
     fn expr_field() {
-        let expr = Expr::Field(FieldRef::new("count".to_owned()));
-        assert_eq!(expr, Expr::Field(FieldRef::new("count".to_owned())));
+        let expr = Expression::Field(FieldRef::new("count".to_owned()));
+        assert_eq!(expr, Expression::Field(FieldRef::new("count".to_owned())));
     }
 
     #[test]
     fn expr_binary() {
-        let expr = Expr::Binary(
-            BinaryOp::Add,
-            Box::new(Expr::Field(FieldRef::new("a".to_owned()))),
-            Box::new(Expr::Literal(Literal::Number(1.0))),
+        let expr = Expression::Binary(
+            BinaryOperator::Add,
+            Box::new(Expression::Field(FieldRef::new("a".to_owned()))),
+            Box::new(Expression::Literal(Literal::Number(1.0))),
         );
-        if let Expr::Binary(op, _, _) = &expr {
-            assert_eq!(*op, BinaryOp::Add);
+        if let Expression::Binary(op, _, _) = &expr {
+            assert_eq!(*op, BinaryOperator::Add);
         } else {
             panic!("expected Binary variant");
         }
@@ -415,9 +408,9 @@ mod tests {
 
     #[test]
     fn expr_not() {
-        let expr = Expr::Not(Box::new(Expr::Literal(Literal::Boolean(true))));
-        if let Expr::Not(inner) = &expr {
-            assert_eq!(**inner, Expr::Literal(Literal::Boolean(true)));
+        let expr = Expression::Not(Box::new(Expression::Literal(Literal::Boolean(true))));
+        if let Expression::Not(inner) = &expr {
+            assert_eq!(**inner, Expression::Literal(Literal::Boolean(true)));
         } else {
             panic!("expected Not variant");
         }
@@ -425,11 +418,11 @@ mod tests {
 
     #[test]
     fn expr_call() {
-        let expr = Expr::Call(
+        let expr = Expression::Call(
             "count".to_owned(),
-            vec![Expr::Field(FieldRef::new("bytes".to_owned()))],
+            vec![Expression::Field(FieldRef::new("bytes".to_owned()))],
         );
-        if let Expr::Call(name, args) = &expr {
+        if let Expression::Call(name, args) = &expr {
             assert_eq!(name, "count");
             assert_eq!(args.len(), 1);
         } else {
@@ -483,17 +476,17 @@ mod tests {
     #[test]
     fn sort_spec_ascending() {
         let spec = SortSpec::new(
-            Expr::Field(FieldRef::new("time".to_owned())),
+            Expression::Field(FieldRef::new("time".to_owned())),
             SortOrder::Ascending,
         );
         assert_eq!(spec.order(), SortOrder::Ascending);
-        assert!(matches!(spec.expr(), Expr::Field(_)));
+        assert!(matches!(spec.expr(), Expression::Field(_)));
     }
 
     #[test]
     fn sort_spec_descending() {
         let spec = SortSpec::new(
-            Expr::Field(FieldRef::new("count".to_owned())),
+            Expression::Field(FieldRef::new("count".to_owned())),
             SortOrder::Descending,
         );
         assert_eq!(spec.order(), SortOrder::Descending);
@@ -501,7 +494,7 @@ mod tests {
 
     #[test]
     fn sort_spec_into_parts() {
-        let expr = Expr::Field(FieldRef::new("time".to_owned()));
+        let expr = Expression::Field(FieldRef::new("time".to_owned()));
         let spec = SortSpec::new(expr.clone(), SortOrder::Descending);
         let (e, order) = spec.into_parts();
         assert_eq!(e, expr);
@@ -512,7 +505,7 @@ mod tests {
     fn aggregate_expr_with_alias() {
         let agg = AggregateExpr::new(
             "sum".to_owned(),
-            Some(Expr::Field(FieldRef::new("bytes".to_owned()))),
+            Some(Expression::Field(FieldRef::new("bytes".to_owned()))),
             Some("total_bytes".to_owned()),
         );
         assert_eq!(agg.function(), "sum");
@@ -532,7 +525,7 @@ mod tests {
     fn aggregate_expr_into_parts() {
         let agg = AggregateExpr::new(
             "avg".to_owned(),
-            Some(Expr::Field(FieldRef::new("latency".to_owned()))),
+            Some(Expression::Field(FieldRef::new("latency".to_owned()))),
             Some("avg_latency".to_owned()),
         );
         let (func, arg, alias) = agg.into_parts();
@@ -543,7 +536,7 @@ mod tests {
 
     #[test]
     fn pipeline_stage_filter() {
-        let stage = PipelineStage::Filter(Expr::Literal(Literal::Boolean(true)));
+        let stage = PipelineStage::Filter(Expression::Literal(Literal::Boolean(true)));
         assert!(matches!(stage, PipelineStage::Filter(_)));
     }
 
@@ -568,7 +561,7 @@ mod tests {
     #[test]
     fn pipeline_stage_sort() {
         let stage = PipelineStage::Sort(vec![SortSpec::new(
-            Expr::Field(FieldRef::new("time".to_owned())),
+            Expression::Field(FieldRef::new("time".to_owned())),
             SortOrder::Descending,
         )]);
         assert!(matches!(stage, PipelineStage::Sort(_)));
@@ -592,13 +585,13 @@ mod tests {
             SourceSpec::new("access_logs".to_owned()),
             TimeRange::new(Some("-24h".to_owned()), None),
             vec![
-                PipelineStage::Filter(Expr::Binary(
-                    BinaryOp::Equal,
-                    Box::new(Expr::Field(FieldRef::new("status".to_owned()))),
-                    Box::new(Expr::Literal(Literal::Number(200.0))),
+                PipelineStage::Filter(Expression::Binary(
+                    BinaryOperator::Equal,
+                    Box::new(Expression::Field(FieldRef::new("status".to_owned()))),
+                    Box::new(Expression::Literal(Literal::Number(200.0))),
                 )),
                 PipelineStage::Sort(vec![SortSpec::new(
-                    Expr::Field(FieldRef::new("time".to_owned())),
+                    Expression::Field(FieldRef::new("time".to_owned())),
                     SortOrder::Descending,
                 )]),
                 PipelineStage::Limit(100),
@@ -624,30 +617,6 @@ mod tests {
     }
 
     #[test]
-    fn binary_op_all_variants() {
-        let ops = [
-            BinaryOp::Add,
-            BinaryOp::Subtract,
-            BinaryOp::Multiply,
-            BinaryOp::Divide,
-            BinaryOp::Equal,
-            BinaryOp::NotEqual,
-            BinaryOp::GreaterThan,
-            BinaryOp::GreaterThanOrEqual,
-            BinaryOp::LessThan,
-            BinaryOp::LessThanOrEqual,
-            BinaryOp::And,
-            BinaryOp::Or,
-        ];
-        // Ensure all 12 variants are distinct
-        for i in 0..ops.len() {
-            for j in (i + 1)..ops.len() {
-                assert_ne!(ops[i], ops[j], "variants {i} and {j} should differ");
-            }
-        }
-    }
-
-    #[test]
     fn pipeline_empty_stages_is_valid() {
         let pipeline = Pipeline::new(
             SourceSpec::new("logs".to_owned()),
@@ -660,8 +629,8 @@ mod tests {
 
     #[test]
     fn expr_call_zero_arguments() {
-        let expr = Expr::Call("count".to_owned(), vec![]);
-        if let Expr::Call(name, args) = &expr {
+        let expr = Expression::Call("count".to_owned(), vec![]);
+        if let Expression::Call(name, args) = &expr {
             assert_eq!(name, "count");
             assert!(args.is_empty());
         } else {

@@ -6,8 +6,7 @@ use crate::parser::ParserError;
 ///
 /// These are distinct from [`ParserError`](crate::parser::ParserError), which
 /// represents syntax-level failures. `SemanticError` covers structural
-/// and logical problems detected after a successful parse — for example,
-/// an empty pipeline or an aggregate command in an invalid position.
+/// and logical problems detected after a successful parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SemanticError {
@@ -250,8 +249,6 @@ mod tests {
         );
         assert_ne!(SemanticError::EmptyPipeline, SemanticError::EmptyFieldList);
     }
-
-    // ── AnalyzeError tests ──────────────────────────────────────────────
 
     #[test]
     fn analyze_error_display_semantic_single() {

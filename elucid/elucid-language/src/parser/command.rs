@@ -17,7 +17,7 @@ where
 }
 
 fn call_or_field<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Expr, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
+-> impl Parser<'tokens, I, ast::Expression, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
@@ -32,9 +32,9 @@ where
                 .collect(),
         )
         .then_ignore(just(Token::RightParenthesis))
-        .map(|(name, arguments)| ast::Expr::Call(name, arguments));
+        .map(|(name, arguments)| ast::Expression::Call(name, arguments));
 
-    let field = identifier.map(ast::Expr::Field);
+    let field = identifier.map(ast::Expression::Field);
 
     call.or(field).labelled("field or function call")
 }
@@ -78,20 +78,11 @@ where
     let sort_item = choice((
         just(Token::OperatorSubtract)
             .ignore_then(sort_atom.clone())
-            .map(|expression| ast::SortExpression::new(
-                expression,
-                ast::SortOrder::Descending,
-            )),
+            .map(|expression| ast::SortExpression::new(expression, ast::SortOrder::Descending)),
         just(Token::OperatorAdd)
             .ignore_then(sort_atom.clone())
-            .map(|expression| ast::SortExpression::new(
-                expression,
-                ast::SortOrder::Ascending,
-            )),
-        sort_atom.map(|expression| ast::SortExpression::new(
-            expression,
-            ast::SortOrder::Ascending,
-        )),
+            .map(|expression| ast::SortExpression::new(expression, ast::SortOrder::Ascending)),
+        sort_atom.map(|expression| ast::SortExpression::new(expression, ast::SortOrder::Ascending)),
     ));
 
     just(Token::KeywordSort)

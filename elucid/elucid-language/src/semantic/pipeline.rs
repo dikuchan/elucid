@@ -1,6 +1,6 @@
+use super::error::SemanticError;
 use crate::ast::Query;
 use crate::ir;
-use super::error::SemanticError;
 
 use super::command::convert_command;
 use super::validate::validate_pipeline;
@@ -53,7 +53,7 @@ mod tests {
 
     /// Test helper: parse a query string and convert it to an [`ir::Pipeline`].
     ///
-    /// Panics if parsing fails (expected in tests only).
+    /// Panics if parsing fails.
     fn parse_and_convert(input: &str) -> Result<ir::Pipeline, Vec<SemanticError>> {
         let query = parser::parse(input).unwrap_or_else(|e| {
             e.eprint(input).unwrap();
@@ -62,8 +62,6 @@ mod tests {
         convert_query(&query)
     }
 
-    // ── source-only pipeline ─────────────────────────────────────────────
-
     #[test]
     fn source_only_no_stages() {
         let pipeline = parse_and_convert("dataset test").expect("should convert");
@@ -71,27 +69,28 @@ mod tests {
         assert!(pipeline.stages().is_empty());
     }
 
-    // ── single-stage pipelines ───────────────────────────────────────────
-
     #[test]
     fn single_filter_stage() {
-        let pipeline = parse_and_convert("dataset test | where status == 200").expect("should convert");
+        let pipeline =
+            parse_and_convert("dataset test | where status == 200").expect("should convert");
         assert_eq!(pipeline.source().dataset(), "test");
         assert_eq!(pipeline.stages().len(), 1);
         assert_eq!(
             &pipeline.stages()[0],
-            &ir::PipelineStage::Filter(ir::Expr::Binary(
-                ir::BinaryOp::Equal,
-                Box::new(ir::Expr::Field(ir::FieldRef::new("status".to_owned()))),
-                Box::new(ir::Expr::Literal(ir::Literal::Number(200.0))),
+            &ir::PipelineStage::Filter(ir::Expression::Binary(
+                ir::BinaryOperator::Equal,
+                Box::new(ir::Expression::Field(ir::FieldRef::new(
+                    "status".to_owned()
+                ))),
+                Box::new(ir::Expression::Literal(ir::Literal::Number(200.0))),
             ))
         );
     }
 
     #[test]
     fn single_sort_stage() {
-        let pipeline =
-            parse_and_convert("dataset test | sort by -count, +status, time").expect("should convert");
+        let pipeline = parse_and_convert("dataset test | sort by -count, +status, time")
+            .expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
         let ir::PipelineStage::Sort(specs) = &pipeline.stages()[0] else {
@@ -131,10 +130,9 @@ mod tests {
 
     #[test]
     fn single_aggregate_stage() {
-        let pipeline = parse_and_convert(
-            "dataset test | stats total = sum(bytes), count() by method",
-        )
-        .expect("should convert");
+        let pipeline =
+            parse_and_convert("dataset test | stats total = sum(bytes), count() by method")
+                .expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
         let ir::PipelineStage::Aggregate { measures, group_by } = &pipeline.stages()[0] else {
@@ -148,20 +146,20 @@ mod tests {
         assert_eq!(group_by[0].as_str(), "method");
     }
 
-    // ── multi-stage pipeline ─────────────────────────────────────────────
-
     #[test]
     fn multi_stage_pipeline() {
-        let pipeline = parse_and_convert(
-            "dataset test | where status == 200 | sort by -count | head 5",
-        )
-        .expect("should convert");
+        let pipeline =
+            parse_and_convert("dataset test | where status == 200 | sort by -count | head 5")
+                .expect("should convert");
 
         assert_eq!(pipeline.source().dataset(), "test");
         assert_eq!(pipeline.stages().len(), 3);
 
         // Stage 0: Filter
-        assert!(matches!(&pipeline.stages()[0], ir::PipelineStage::Filter(_)));
+        assert!(matches!(
+            &pipeline.stages()[0],
+            ir::PipelineStage::Filter(_)
+        ));
 
         // Stage 1: Sort
         let ir::PipelineStage::Sort(specs) = &pipeline.stages()[1] else {
@@ -174,12 +172,12 @@ mod tests {
         assert_eq!(&pipeline.stages()[2], &ir::PipelineStage::Limit(5));
     }
 
-    // ── error cases ──────────────────────────────────────────────────────
+    // Error cases.
 
     #[test]
     fn empty_source_returns_error() {
         // Construct a Query with an empty source directly, since the parser
-        // would reject it. This tests convert_query in isolation.
+        // would reject it.
         let query = Query::new(String::new(), vec![]);
         let result = convert_query(&query);
         assert!(result.is_err());
@@ -206,37 +204,38 @@ mod tests {
 
     #[test]
     fn multiple_invalid_commands_collect_all_errors() {
-        let query = Query::new("test".to_owned(), vec![
-            Command::Head(0),       // InvalidLimitValue
-            Command::Fields(vec![]), // EmptyFieldList
-        ]);
+        let query = Query::new(
+            "test".to_owned(),
+            vec![
+                Command::Head(0),        // InvalidLimitValue
+                Command::Fields(vec![]), // EmptyFieldList
+            ],
+        );
         let result = convert_query(&query);
         assert!(result.is_err());
         let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 2, "should collect both errors, got {errors:?}");
+        assert_eq!(
+            errors.len(),
+            2,
+            "should collect both errors, got {errors:?}"
+        );
     }
-
-    // ── snapshot tests ───────────────────────────────────────────────────
 
     #[test]
     fn snapshot_multi_stage_pipeline() {
-        let pipeline = parse_and_convert(
-            "dataset test | where status == 200 | sort by -count | head 5",
-        )
-        .expect("should convert");
+        let pipeline =
+            parse_and_convert("dataset test | where status == 200 | sort by -count | head 5")
+                .expect("should convert");
         insta::assert_debug_snapshot!("multi_stage_pipeline", pipeline);
     }
 
     #[test]
     fn snapshot_aggregate_pipeline() {
-        let pipeline = parse_and_convert(
-            "dataset test | stats total = sum(bytes), count() by method",
-        )
-        .expect("should convert");
+        let pipeline =
+            parse_and_convert("dataset test | stats total = sum(bytes), count() by method")
+                .expect("should convert");
         insta::assert_debug_snapshot!("aggregate_pipeline", pipeline);
     }
-
-    // ── validation integration tests ────────────────────────────────────
 
     #[test]
     fn validation_rejects_two_stats_commands() {
@@ -258,37 +257,34 @@ mod tests {
 
     #[test]
     fn validation_allows_sort_limit_after_stats() {
-        let result = parse_and_convert(
-            "dataset logs | stats count() by host | sort -count | head 10",
-        );
+        let result =
+            parse_and_convert("dataset logs | stats count() by host | sort -count | head 10");
         assert!(result.is_ok());
         let pipeline = result.expect("should convert");
         assert_eq!(pipeline.stages().len(), 3);
-        assert!(matches!(&pipeline.stages()[0], ir::PipelineStage::Aggregate { .. }));
+        assert!(matches!(
+            &pipeline.stages()[0],
+            ir::PipelineStage::Aggregate { .. }
+        ));
         assert!(matches!(&pipeline.stages()[1], ir::PipelineStage::Sort(_)));
         assert!(matches!(&pipeline.stages()[2], ir::PipelineStage::Limit(_)));
     }
 
-    // ── public API integration tests (via `analyze`) ─────────────────────
+    // Public API integration tests.
 
     use crate::analyze;
     use crate::semantic::error::AnalyzeError;
 
-    // ── valid query snapshots ────────────────────────────────────────────
-
     #[test]
     fn analyze_snapshot_filter() {
-        let pipeline =
-            analyze("dataset test | where status == 200").expect("should analyze");
+        let pipeline = analyze("dataset test | where status == 200").expect("should analyze");
         insta::assert_debug_snapshot!("analyze_filter", pipeline);
     }
 
     #[test]
     fn analyze_snapshot_stats_sort_head() {
-        let pipeline = analyze(
-            "dataset test | stats count() by method | sort by -count | head 10",
-        )
-        .expect("should analyze");
+        let pipeline = analyze("dataset test | stats count() by method | sort by -count | head 10")
+            .expect("should analyze");
         insta::assert_debug_snapshot!("analyze_stats_sort_head", pipeline);
     }
 
@@ -312,8 +308,6 @@ mod tests {
         insta::assert_debug_snapshot!("analyze_source_only", pipeline);
     }
 
-    // ── error cases ─────────────────────────────────────────────────────
-
     #[test]
     fn analyze_error_multiple_aggregates() {
         let result = analyze("dataset logs | stats count() | stats sum(count)");
@@ -326,7 +320,6 @@ mod tests {
             }
             other => panic!("expected AnalyzeError::Semantic, got {other:?}"),
         }
-        // Also snapshot the error display
         insta::assert_snapshot!("analyze_error_multiple_aggregates", err.to_string());
     }
 

@@ -1,11 +1,10 @@
 //! Pipeline-level validation rules that run after stage assembly.
 //!
-//! These checks enforce structural constraints on the pipeline as a whole —
-//! for example, "at most one aggregate" — that cannot be expressed during
-//! per-command conversion.
+//! These checks enforce structural constraints on the pipeline as a whole,
+//! that cannot be expressed during per-command conversion.
 
-use crate::ir;
 use super::error::SemanticError;
+use crate::ir;
 
 /// Validates structural rules on a fully-assembled [`ir::Pipeline`].
 ///
@@ -32,8 +31,6 @@ pub(crate) fn validate_pipeline(pipeline: &ir::Pipeline) -> Result<(), Vec<Seman
     }
 
     // Rule 2: after the first Aggregate, only Sort and Limit are allowed.
-    // Only check this when there is exactly one Aggregate — if there are
-    // multiple, Rule 1 already covers it.
     if aggregate_count == 1 {
         let mut seen_aggregate = false;
         for stage in stages {
@@ -44,8 +41,8 @@ pub(crate) fn validate_pipeline(pipeline: &ir::Pipeline) -> Result<(), Vec<Seman
                 );
                 if !allowed {
                     errors.push(SemanticError::AggregateAfterAggregate);
-                    // Only report once — break to avoid duplicate errors for
-                    // the same root cause.
+                    // Only report once.
+                    // Break to avoid duplicate errors for the same root cause.
                     break;
                 }
             }
@@ -69,7 +66,11 @@ mod tests {
 
     /// Helper: build a pipeline from the given stages.
     fn make_pipeline(stages: Vec<ir::PipelineStage>) -> ir::Pipeline {
-        ir::Pipeline::new(ir::SourceSpec::new("test".to_owned()), ir::TimeRange::default(), stages)
+        ir::Pipeline::new(
+            ir::SourceSpec::new("test".to_owned()),
+            ir::TimeRange::default(),
+            stages,
+        )
     }
 
     /// Helper: a minimal Aggregate stage with `count()`, no group-by.
@@ -83,7 +84,7 @@ mod tests {
     /// Helper: a sort-by-count-descending stage.
     fn sort_stage() -> ir::PipelineStage {
         ir::PipelineStage::Sort(vec![ir::SortSpec::new(
-            ir::Expr::Field(ir::FieldRef::new("count".to_owned())),
+            ir::Expression::Field(ir::FieldRef::new("count".to_owned())),
             ir::SortOrder::Descending,
         )])
     }
@@ -95,10 +96,10 @@ mod tests {
 
     /// Helper: a filter stage (`where x > 5`).
     fn filter_stage() -> ir::PipelineStage {
-        ir::PipelineStage::Filter(ir::Expr::Field(ir::FieldRef::new("x".to_owned())))
+        ir::PipelineStage::Filter(ir::Expression::Field(ir::FieldRef::new("x".to_owned())))
     }
 
-    // ── Rule 1: at most one Aggregate ────────────────────────────────────
+    // Rule 1: at most one Aggregate.
 
     #[test]
     fn two_aggregates_produces_multiple_aggregates_error() {
@@ -120,7 +121,7 @@ mod tests {
         assert!(validate_pipeline(&pipeline).is_ok());
     }
 
-    // ── Rule 2: no non-sort/limit after aggregate ────────────────────────
+    // Rule 2: no non-sort/limit after aggregate.
 
     #[test]
     fn filter_after_aggregate_produces_error() {
@@ -152,7 +153,7 @@ mod tests {
         assert_eq!(errors[0], SemanticError::AggregateAfterAggregate);
     }
 
-    // ── Combined rules ───────────────────────────────────────────────────
+    // Combined rules.
 
     #[test]
     fn two_aggregates_reports_only_multiple_aggregates() {
@@ -164,7 +165,7 @@ mod tests {
         assert_eq!(errors[0], SemanticError::MultipleAggregates);
     }
 
-    // ── Edge cases ───────────────────────────────────────────────────────
+    // Edge cases.
 
     #[test]
     fn empty_stages_is_valid() {

@@ -94,19 +94,19 @@ impl<'a> QueryPlanner<'a> {
         }
     }
 
-    fn map_expression(&self, expression: ast::Expr) -> Result<Expr> {
+    fn map_expression(&self, expression: ast::Expression) -> Result<Expr> {
         match expression {
-            ast::Expr::Null => Ok(lit(Null)),
-            ast::Expr::Boolean(v) => Ok(lit(v)),
-            ast::Expr::Number(v) => Ok(lit(v)),
-            ast::Expr::String(v) => Ok(lit(v)),
-            ast::Expr::Field(v) => Ok(col(v)),
-            ast::Expr::Binary(operator, left, right) => {
+            ast::Expression::Null => Ok(lit(Null)),
+            ast::Expression::Boolean(v) => Ok(lit(v)),
+            ast::Expression::Number(v) => Ok(lit(v)),
+            ast::Expression::String(v) => Ok(lit(v)),
+            ast::Expression::Field(v) => Ok(col(v)),
+            ast::Expression::Binary(operator, left, right) => {
                 let left = Box::new(self.map_expression(*left)?);
                 let right = Box::new(self.map_expression(*right)?);
                 match operator {
-                    ast::BinaryOp::And => Ok(left.and(*right)),
-                    ast::BinaryOp::Or => Ok(left.or(*right)),
+                    ast::BinaryOperator::And => Ok(left.and(*right)),
+                    ast::BinaryOperator::Or => Ok(left.or(*right)),
                     _ => Ok(Expr::BinaryExpr(BinaryExpr {
                         left,
                         op: self.map_operator(operator)?,
@@ -114,8 +114,8 @@ impl<'a> QueryPlanner<'a> {
                     })),
                 }
             }
-            ast::Expr::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
-            ast::Expr::Call(function_name, arguments) => {
+            ast::Expression::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
+            ast::Expression::Call(function_name, arguments) => {
                 let mut arguments: Vec<Expr> = arguments
                     .into_iter()
                     .map(|argument| self.map_expression(argument))
@@ -154,22 +154,22 @@ impl<'a> QueryPlanner<'a> {
         }
     }
 
-    fn map_operator(&self, operator: ast::BinaryOp) -> Result<Operator> {
+    fn map_operator(&self, operator: ast::BinaryOperator) -> Result<Operator> {
         match operator {
-            ast::BinaryOp::Add => Ok(Operator::Plus),
-            ast::BinaryOp::Subtract => Ok(Operator::Minus),
-            ast::BinaryOp::Multiply => Ok(Operator::Multiply),
-            ast::BinaryOp::Divide => Ok(Operator::Divide),
-            ast::BinaryOp::Equal => Ok(Operator::Eq),
-            ast::BinaryOp::NotEqual => Ok(Operator::NotEq),
-            ast::BinaryOp::GreaterThan => Ok(Operator::Gt),
-            ast::BinaryOp::GreaterThanOrEqual => Ok(Operator::GtEq),
-            ast::BinaryOp::LessThan => Ok(Operator::Lt),
-            ast::BinaryOp::LessThanOrEqual => Ok(Operator::LtEq),
-            ast::BinaryOp::And => {
+            ast::BinaryOperator::Add => Ok(Operator::Plus),
+            ast::BinaryOperator::Subtract => Ok(Operator::Minus),
+            ast::BinaryOperator::Multiply => Ok(Operator::Multiply),
+            ast::BinaryOperator::Divide => Ok(Operator::Divide),
+            ast::BinaryOperator::Equal => Ok(Operator::Eq),
+            ast::BinaryOperator::NotEqual => Ok(Operator::NotEq),
+            ast::BinaryOperator::GreaterThan => Ok(Operator::Gt),
+            ast::BinaryOperator::GreaterThanOrEqual => Ok(Operator::GtEq),
+            ast::BinaryOperator::LessThan => Ok(Operator::Lt),
+            ast::BinaryOperator::LessThanOrEqual => Ok(Operator::LtEq),
+            ast::BinaryOperator::And => {
                 unreachable!("Logical 'and' should be handled in expression builder")
             }
-            ast::BinaryOp::Or => {
+            ast::BinaryOperator::Or => {
                 unreachable!("Logical 'or' should be handled in expression builder")
             }
             _ => Err(DataFusionError::Plan(format!(
