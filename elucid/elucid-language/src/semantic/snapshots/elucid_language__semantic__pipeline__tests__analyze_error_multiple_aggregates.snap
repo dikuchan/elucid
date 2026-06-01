@@ -1,0 +1,5 @@
+---
+source: elucid-language/src/semantic/pipeline.rs
+expression: err.to_string()
+---
+pipeline must not contain more than one 'stats' command

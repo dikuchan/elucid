@@ -1,0 +1,45 @@
+---
+source: elucid-language/src/semantic/pipeline.rs
+expression: pipeline
+---
+Pipeline {
+    source: SourceSpec {
+        dataset: "test",
+    },
+    time_range: TimeRange {
+        earliest: None,
+        latest: None,
+    },
+    stages: [
+        Filter(
+            Binary(
+                Equal,
+                Field(
+                    IrFieldRef {
+                        name: "status",
+                    },
+                ),
+                Literal(
+                    Number(
+                        200.0,
+                    ),
+                ),
+            ),
+        ),
+        Sort(
+            [
+                SortSpec {
+                    expr: Field(
+                        IrFieldRef {
+                            name: "count",
+                        },
+                    ),
+                    descending: true,
+                },
+            ],
+        ),
+        Limit(
+            5,
+        ),
+    ],
+}

@@ -1,4 +1,5 @@
 mod command;
+mod error;
 mod expression;
 mod query;
 
@@ -8,8 +9,9 @@ use chumsky::prelude::*;
 
 use crate::Query;
 use crate::lexer::{Token, tokenizer};
-use crate::parser_error::ParserError;
 use crate::span::Span;
+
+pub use error::ParserError;
 
 pub fn parse(source: &'_ str) -> Result<Query, ParserError<'_>> {
     let input = new_input(source);

@@ -1,0 +1,31 @@
+---
+source: elucid-language/src/semantic/command.rs
+expression: result
+---
+Aggregate {
+    measures: [
+        AggregateExpr {
+            function: "sum",
+            argument: Some(
+                Field(
+                    IrFieldRef {
+                        name: "bytes",
+                    },
+                ),
+            ),
+            alias: Some(
+                "total_bytes",
+            ),
+        },
+        AggregateExpr {
+            function: "count",
+            argument: None,
+            alias: None,
+        },
+    ],
+    group_by: [
+        IrFieldRef {
+            name: "method",
+        },
+    ],
+}

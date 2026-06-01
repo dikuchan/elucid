@@ -1,0 +1,19 @@
+---
+source: elucid-language/src/semantic/expression.rs
+expression: result
+---
+Not(
+    Binary(
+        And,
+        Field(
+            IrFieldRef {
+                name: "a",
+            },
+        ),
+        Field(
+            IrFieldRef {
+                name: "b",
+            },
+        ),
+    ),
+)

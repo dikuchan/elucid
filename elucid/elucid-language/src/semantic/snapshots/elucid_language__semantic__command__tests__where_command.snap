@@ -1,0 +1,19 @@
+---
+source: elucid-language/src/semantic/command.rs
+expression: result
+---
+Filter(
+    Binary(
+        NotEqual,
+        Field(
+            IrFieldRef {
+                name: "status",
+            },
+        ),
+        Literal(
+            Number(
+                404.0,
+            ),
+        ),
+    ),
+)
