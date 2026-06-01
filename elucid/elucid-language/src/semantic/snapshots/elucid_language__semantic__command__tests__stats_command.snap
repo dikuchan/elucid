@@ -8,7 +8,7 @@ Aggregate {
             function: "sum",
             argument: Some(
                 Field(
-                    IrFieldRef {
+                    FieldRef {
                         name: "bytes",
                     },
                 ),
@@ -24,7 +24,7 @@ Aggregate {
         },
     ],
     group_by: [
-        IrFieldRef {
+        FieldRef {
             name: "method",
         },
     ],

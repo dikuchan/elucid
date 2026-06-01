@@ -1,48 +1,47 @@
-use crate::ast::{BinaryOperator, Expression};
-use crate::ir::{IrBinaryOp, IrExpr, IrFieldRef, IrLiteral};
+use crate::ast;
+use crate::ir::{BinaryOp, Expr, FieldRef, Literal};
 
-/// Converts an [`Expression`] from the AST into an [`IrExpr`].
+/// Converts an [`ast::Expr`] from the AST into an [`Expr`].
 ///
 /// This is a pure recursive transformation with no validation. Every AST
 /// expression variant maps directly to an IR expression variant, so the
 /// conversion is infallible.
-pub(crate) fn convert_expression(expr: Expression) -> IrExpr {
+pub(crate) fn convert_expression(expr: ast::Expr) -> Expr {
     match expr {
-        Expression::Null => IrExpr::Literal(IrLiteral::Null),
-        Expression::Boolean(b) => IrExpr::Literal(IrLiteral::Boolean(b)),
-        Expression::Number(n) => IrExpr::Literal(IrLiteral::Number(n)),
-        Expression::String(s) => IrExpr::Literal(IrLiteral::String(s)),
-        Expression::Field(name) => IrExpr::Field(IrFieldRef::new(name)),
-        Expression::Binary(op, lhs, rhs) => IrExpr::Binary(
+        ast::Expr::Null => Expr::Literal(Literal::Null),
+        ast::Expr::Boolean(b) => Expr::Literal(Literal::Boolean(b)),
+        ast::Expr::Number(n) => Expr::Literal(Literal::Number(n)),
+        ast::Expr::String(s) => Expr::Literal(Literal::String(s)),
+        ast::Expr::Field(name) => Expr::Field(FieldRef::new(name)),
+        ast::Expr::Binary(op, lhs, rhs) => Expr::Binary(
             convert_binary_op(op),
             Box::new(convert_expression(*lhs)),
             Box::new(convert_expression(*rhs)),
         ),
-        Expression::Not(inner) => IrExpr::Not(Box::new(convert_expression(*inner))),
-        Expression::Call(name, args) => IrExpr::Call(
-            name,
-            args.into_iter().map(convert_expression).collect(),
-        ),
+        ast::Expr::Not(inner) => Expr::Not(Box::new(convert_expression(*inner))),
+        ast::Expr::Call(name, args) => {
+            Expr::Call(name, args.into_iter().map(convert_expression).collect())
+        }
     }
 }
 
-/// Converts an [`BinaryOperator`] from the AST into an [`IrBinaryOp`].
+/// Converts an [`ast::BinaryOp`] from the AST into a [`BinaryOp`].
 ///
 /// This is a 1:1 mapping — every AST operator has a corresponding IR operator.
-fn convert_binary_op(op: BinaryOperator) -> IrBinaryOp {
+fn convert_binary_op(op: ast::BinaryOp) -> BinaryOp {
     match op {
-        BinaryOperator::Add => IrBinaryOp::Add,
-        BinaryOperator::Subtract => IrBinaryOp::Subtract,
-        BinaryOperator::Multiply => IrBinaryOp::Multiply,
-        BinaryOperator::Divide => IrBinaryOp::Divide,
-        BinaryOperator::Equal => IrBinaryOp::Equal,
-        BinaryOperator::NotEqual => IrBinaryOp::NotEqual,
-        BinaryOperator::GreaterThan => IrBinaryOp::GreaterThan,
-        BinaryOperator::GreaterThanOrEqual => IrBinaryOp::GreaterThanOrEqual,
-        BinaryOperator::LessThan => IrBinaryOp::LessThan,
-        BinaryOperator::LessThanOrEqual => IrBinaryOp::LessThanOrEqual,
-        BinaryOperator::And => IrBinaryOp::And,
-        BinaryOperator::Or => IrBinaryOp::Or,
+        ast::BinaryOp::Add => BinaryOp::Add,
+        ast::BinaryOp::Subtract => BinaryOp::Subtract,
+        ast::BinaryOp::Multiply => BinaryOp::Multiply,
+        ast::BinaryOp::Divide => BinaryOp::Divide,
+        ast::BinaryOp::Equal => BinaryOp::Equal,
+        ast::BinaryOp::NotEqual => BinaryOp::NotEqual,
+        ast::BinaryOp::GreaterThan => BinaryOp::GreaterThan,
+        ast::BinaryOp::GreaterThanOrEqual => BinaryOp::GreaterThanOrEqual,
+        ast::BinaryOp::LessThan => BinaryOp::LessThan,
+        ast::BinaryOp::LessThanOrEqual => BinaryOp::LessThanOrEqual,
+        ast::BinaryOp::And => BinaryOp::And,
+        ast::BinaryOp::Or => BinaryOp::Or,
     }
 }
 
@@ -54,79 +53,70 @@ mod tests {
 
     #[test]
     fn convert_null() {
-        let result = convert_expression(Expression::Null);
-        assert_eq!(result, IrExpr::Literal(IrLiteral::Null));
+        let result = convert_expression(ast::Expr::Null);
+        assert_eq!(result, Expr::Literal(Literal::Null));
     }
 
     #[test]
     fn convert_boolean_true() {
-        let result = convert_expression(Expression::Boolean(true));
-        assert_eq!(result, IrExpr::Literal(IrLiteral::Boolean(true)));
+        let result = convert_expression(ast::Expr::Boolean(true));
+        assert_eq!(result, Expr::Literal(Literal::Boolean(true)));
     }
 
     #[test]
     fn convert_boolean_false() {
-        let result = convert_expression(Expression::Boolean(false));
-        assert_eq!(result, IrExpr::Literal(IrLiteral::Boolean(false)));
+        let result = convert_expression(ast::Expr::Boolean(false));
+        assert_eq!(result, Expr::Literal(Literal::Boolean(false)));
     }
 
     #[test]
     fn convert_number() {
-        let result = convert_expression(Expression::Number(42.5));
-        assert_eq!(result, IrExpr::Literal(IrLiteral::Number(42.5)));
+        let result = convert_expression(ast::Expr::Number(42.5));
+        assert_eq!(result, Expr::Literal(Literal::Number(42.5)));
     }
 
     #[test]
     fn convert_number_zero() {
-        let result = convert_expression(Expression::Number(0.0));
-        assert_eq!(result, IrExpr::Literal(IrLiteral::Number(0.0)));
+        let result = convert_expression(ast::Expr::Number(0.0));
+        assert_eq!(result, Expr::Literal(Literal::Number(0.0)));
     }
 
     #[test]
     fn convert_string() {
-        let result = convert_expression(Expression::String("hello".to_owned()));
-        assert_eq!(
-            result,
-            IrExpr::Literal(IrLiteral::String("hello".to_owned()))
-        );
+        let result = convert_expression(ast::Expr::String("hello".to_owned()));
+        assert_eq!(result, Expr::Literal(Literal::String("hello".to_owned())));
     }
 
     #[test]
     fn convert_string_empty() {
-        let result = convert_expression(Expression::String(String::new()));
-        assert_eq!(
-            result,
-            IrExpr::Literal(IrLiteral::String(String::new()))
-        );
+        let result = convert_expression(ast::Expr::String(String::new()));
+        assert_eq!(result, Expr::Literal(Literal::String(String::new())));
     }
 
     // --- Field reference conversion ---
 
     #[test]
     fn convert_field() {
-        let result = convert_expression(Expression::Field("status".to_owned()));
-        assert_eq!(
-            result,
-            IrExpr::Field(IrFieldRef::new("status".to_owned()))
-        );
+        let result = convert_expression(ast::Expr::Field("status".to_owned()));
+        assert_eq!(result, Expr::Field(FieldRef::new("status".to_owned())));
     }
 
     // --- Binary expression conversion ---
 
     #[test]
     fn convert_binary_add() {
-        let expr = Expression::Binary(
-            BinaryOperator::Add,
-            Box::new(Expression::Field("a".to_owned())),
-            Box::new(Expression::Number(1.0)),
+        let expr = ast::Expr::Binary(
+            ast::BinaryOp::Add,
+            Box::new(ast::Expr::Field("a".to_owned())),
+            Box::new(ast::Expr::Number(1.0)),
         );
         let result = convert_expression(expr);
         assert_eq!(
             result,
-            IrExpr::Binary(
-                IrBinaryOp::Add,
-                Box::new(IrExpr::Field(IrFieldRef::new("a".to_owned()))),
-                Box::new(IrExpr::Literal(IrLiteral::Number(1.0))),
+            Expr::Binary(
+                BinaryOp::Add,
+                Box::new(Expr::Field(FieldRef::new("a".to_owned()))),
+                Box::new(Expr::Literal(Literal::Number(1.0))),
             )
         );
     }
@@ -134,28 +124,31 @@ mod tests {
     #[test]
     fn convert_binary_all_operators() {
         let operators = [
-            (BinaryOperator::Add, IrBinaryOp::Add),
-            (BinaryOperator::Subtract, IrBinaryOp::Subtract),
-            (BinaryOperator::Multiply, IrBinaryOp::Multiply),
-            (BinaryOperator::Divide, IrBinaryOp::Divide),
-            (BinaryOperator::Equal, IrBinaryOp::Equal),
-            (BinaryOperator::NotEqual, IrBinaryOp::NotEqual),
-            (BinaryOperator::GreaterThan, IrBinaryOp::GreaterThan),
-            (BinaryOperator::GreaterThanOrEqual, IrBinaryOp::GreaterThanOrEqual),
-            (BinaryOperator::LessThan, IrBinaryOp::LessThan),
-            (BinaryOperator::LessThanOrEqual, IrBinaryOp::LessThanOrEqual),
-            (BinaryOperator::And, IrBinaryOp::And),
-            (BinaryOperator::Or, IrBinaryOp::Or),
+            (ast::BinaryOp::Add, BinaryOp::Add),
+            (ast::BinaryOp::Subtract, BinaryOp::Subtract),
+            (ast::BinaryOp::Multiply, BinaryOp::Multiply),
+            (ast::BinaryOp::Divide, BinaryOp::Divide),
+            (ast::BinaryOp::Equal, BinaryOp::Equal),
+            (ast::BinaryOp::NotEqual, BinaryOp::NotEqual),
+            (ast::BinaryOp::GreaterThan, BinaryOp::GreaterThan),
+            (
+                ast::BinaryOp::GreaterThanOrEqual,
+                BinaryOp::GreaterThanOrEqual,
+            ),
+            (ast::BinaryOp::LessThan, BinaryOp::LessThan),
+            (ast::BinaryOp::LessThanOrEqual, BinaryOp::LessThanOrEqual),
+            (ast::BinaryOp::And, BinaryOp::And),
+            (ast::BinaryOp::Or, BinaryOp::Or),
         ];
 
         for (ast_op, expected_ir_op) in operators {
-            let expr = Expression::Binary(
+            let expr = ast::Expr::Binary(
                 ast_op,
-                Box::new(Expression::Number(1.0)),
-                Box::new(Expression::Number(2.0)),
+                Box::new(ast::Expr::Number(1.0)),
+                Box::new(ast::Expr::Number(2.0)),
             );
             let result = convert_expression(expr);
-            if let IrExpr::Binary(ir_op, _, _) = result {
+            if let Expr::Binary(ir_op, _, _) = result {
                 assert_eq!(ir_op, expected_ir_op);
             } else {
                 panic!("expected Binary variant for operator {expected_ir_op:?}");
@@ -167,11 +160,11 @@ mod tests {
 
     #[test]
     fn convert_not() {
-        let expr = Expression::Not(Box::new(Expression::Boolean(true)));
+        let expr = ast::Expr::Not(Box::new(ast::Expr::Boolean(true)));
         let result = convert_expression(expr);
         assert_eq!(
             result,
-            IrExpr::Not(Box::new(IrExpr::Literal(IrLiteral::Boolean(true))))
+            Expr::Not(Box::new(Expr::Literal(Literal::Boolean(true))))
         );
     }
 
@@ -179,26 +172,20 @@ mod tests {
 
     #[test]
     fn convert_call_no_args() {
-        let expr = Expression::Call("count".to_owned(), vec![]);
+        let expr = ast::Expr::Call("count".to_owned(), vec![]);
         let result = convert_expression(expr);
-        assert_eq!(
-            result,
-            IrExpr::Call("count".to_owned(), vec![])
-        );
+        assert_eq!(result, Expr::Call("count".to_owned(), vec![]));
     }
 
     #[test]
     fn convert_call_with_args() {
-        let expr = Expression::Call(
-            "sum".to_owned(),
-            vec![Expression::Field("bytes".to_owned())],
-        );
+        let expr = ast::Expr::Call("sum".to_owned(), vec![ast::Expr::Field("bytes".to_owned())]);
         let result = convert_expression(expr);
         assert_eq!(
             result,
-            IrExpr::Call(
+            Expr::Call(
                 "sum".to_owned(),
-                vec![IrExpr::Field(IrFieldRef::new("bytes".to_owned()))],
+                vec![Expr::Field(FieldRef::new("bytes".to_owned()))],
             )
         );
     }
@@ -207,16 +194,16 @@ mod tests {
 
     /// Constructs the AST for: `a + b > 10`
     /// i.e. `(a + b) > 10`
-    fn make_binary_tree_expr() -> Expression {
+    fn make_binary_tree_expr() -> ast::Expr {
         // (a + b) > 10
-        Expression::Binary(
-            BinaryOperator::GreaterThan,
-            Box::new(Expression::Binary(
-                BinaryOperator::Add,
-                Box::new(Expression::Field("a".to_owned())),
-                Box::new(Expression::Field("b".to_owned())),
+        ast::Expr::Binary(
+            ast::BinaryOp::GreaterThan,
+            Box::new(ast::Expr::Binary(
+                ast::BinaryOp::Add,
+                Box::new(ast::Expr::Field("a".to_owned())),
+                Box::new(ast::Expr::Field("b".to_owned())),
             )),
-            Box::new(Expression::Number(10.0)),
+            Box::new(ast::Expr::Number(10.0)),
         )
     }
 
@@ -228,11 +215,11 @@ mod tests {
     }
 
     /// Constructs the AST for: `not (a and b)`
-    fn make_nested_not_expr() -> Expression {
-        Expression::Not(Box::new(Expression::Binary(
-            BinaryOperator::And,
-            Box::new(Expression::Field("a".to_owned())),
-            Box::new(Expression::Field("b".to_owned())),
+    fn make_nested_not_expr() -> ast::Expr {
+        ast::Expr::Not(Box::new(ast::Expr::Binary(
+            ast::BinaryOp::And,
+            Box::new(ast::Expr::Field("a".to_owned())),
+            Box::new(ast::Expr::Field("b".to_owned())),
         )))
     }
 
@@ -244,8 +231,8 @@ mod tests {
     }
 
     /// Constructs the AST for: `count()` (zero-arg call)
-    fn make_call_count_expr() -> Expression {
-        Expression::Call("count".to_owned(), vec![])
+    fn make_call_count_expr() -> ast::Expr {
+        ast::Expr::Call("count".to_owned(), vec![])
     }
 
     #[test]
@@ -256,11 +243,8 @@ mod tests {
     }
 
     /// Constructs the AST for: `sum(bytes)` (call with arg)
-    fn make_call_sum_expr() -> Expression {
-        Expression::Call(
-            "sum".to_owned(),
-            vec![Expression::Field("bytes".to_owned())],
-        )
+    fn make_call_sum_expr() -> ast::Expr {
+        ast::Expr::Call("sum".to_owned(), vec![ast::Expr::Field("bytes".to_owned())])
     }
 
     #[test]
@@ -275,43 +259,43 @@ mod tests {
     /// Constructs: `not ((a > 1) and (b < 10))`
     #[test]
     fn convert_deeply_nested_expression() {
-        let expr = Expression::Not(Box::new(Expression::Binary(
-            BinaryOperator::And,
-            Box::new(Expression::Binary(
-                BinaryOperator::GreaterThan,
-                Box::new(Expression::Field("a".to_owned())),
-                Box::new(Expression::Number(1.0)),
+        let expr = ast::Expr::Not(Box::new(ast::Expr::Binary(
+            ast::BinaryOp::And,
+            Box::new(ast::Expr::Binary(
+                ast::BinaryOp::GreaterThan,
+                Box::new(ast::Expr::Field("a".to_owned())),
+                Box::new(ast::Expr::Number(1.0)),
             )),
-            Box::new(Expression::Binary(
-                BinaryOperator::LessThan,
-                Box::new(Expression::Field("b".to_owned())),
-                Box::new(Expression::Number(10.0)),
+            Box::new(ast::Expr::Binary(
+                ast::BinaryOp::LessThan,
+                Box::new(ast::Expr::Field("b".to_owned())),
+                Box::new(ast::Expr::Number(10.0)),
             )),
         )));
 
         let result = convert_expression(expr);
 
         // Verify the top-level is Not
-        let IrExpr::Not(inner) = result else {
+        let Expr::Not(inner) = result else {
             panic!("expected Not variant");
         };
 
         // Verify inner is And with two Binary children
-        let IrExpr::Binary(op, left, right) = *inner else {
+        let Expr::Binary(op, left, right) = *inner else {
             panic!("expected Binary variant inside Not");
         };
-        assert_eq!(op, IrBinaryOp::And);
+        assert_eq!(op, BinaryOp::And);
 
         // Left: a > 1
-        if let IrExpr::Binary(l_op, _, _) = *left {
-            assert_eq!(l_op, IrBinaryOp::GreaterThan);
+        if let Expr::Binary(l_op, _, _) = *left {
+            assert_eq!(l_op, BinaryOp::GreaterThan);
         } else {
             panic!("expected Binary (GreaterThan) on left");
         }
 
         // Right: b < 10
-        if let IrExpr::Binary(r_op, _, _) = *right {
-            assert_eq!(r_op, IrBinaryOp::LessThan);
+        if let Expr::Binary(r_op, _, _) = *right {
+            assert_eq!(r_op, BinaryOp::LessThan);
         } else {
             panic!("expected Binary (LessThan) on right");
         }

@@ -17,18 +17,18 @@ use super::validate::validate_pipeline;
 /// - The dataset name is empty or whitespace-only.
 /// - Any command fails structural validation (see [`convert_command`]).
 pub(crate) fn convert_query(query: &Query) -> Result<Pipeline, Vec<SemanticError>> {
-    if query.source.trim().is_empty() {
+    if query.source().trim().is_empty() {
         return Err(vec![SemanticError::ConversionError(
             "dataset name must not be empty".to_owned(),
         )]);
     }
 
-    let source = SourceSpec::new(query.source.clone());
+    let source = SourceSpec::new(query.source().to_owned());
     let time_range = TimeRange::default();
 
     let mut errors: Vec<SemanticError> = Vec::new();
-    let mut stages: Vec<PipelineStage> = Vec::with_capacity(query.commands.len());
-    for cmd in query.commands.iter().cloned() {
+    let mut stages: Vec<PipelineStage> = Vec::with_capacity(query.commands().len());
+    for cmd in query.commands().iter().cloned() {
         match convert_command(cmd) {
             Ok(stage) => stages.push(stage),
             Err(e) => errors.push(e),
@@ -48,7 +48,7 @@ pub(crate) fn convert_query(query: &Query) -> Result<Pipeline, Vec<SemanticError
 mod tests {
     use super::*;
     use crate::ast::Command;
-    use crate::ir::{IrBinaryOp, IrExpr, IrFieldRef, IrLiteral};
+    use crate::ir::{BinaryOp, Expr, FieldRef, Literal, SortOrder};
     use crate::parser;
 
     /// Test helper: parse a query string and convert it to a [`Pipeline`].
@@ -80,10 +80,10 @@ mod tests {
         assert_eq!(pipeline.stages().len(), 1);
         assert_eq!(
             &pipeline.stages()[0],
-            &PipelineStage::Filter(IrExpr::Binary(
-                IrBinaryOp::Equal,
-                Box::new(IrExpr::Field(IrFieldRef::new("status".to_owned()))),
-                Box::new(IrExpr::Literal(IrLiteral::Number(200.0))),
+            &PipelineStage::Filter(Expr::Binary(
+                BinaryOp::Equal,
+                Box::new(Expr::Field(FieldRef::new("status".to_owned()))),
+                Box::new(Expr::Literal(Literal::Number(200.0))),
             ))
         );
     }
@@ -100,11 +100,11 @@ mod tests {
         assert_eq!(specs.len(), 3);
 
         // -count → descending
-        assert!(specs[0].is_descending());
+        assert_eq!(specs[0].order(), SortOrder::Descending);
         // +status → ascending
-        assert!(!specs[1].is_descending());
+        assert_eq!(specs[1].order(), SortOrder::Ascending);
         // time (no prefix) → ascending
-        assert!(!specs[2].is_descending());
+        assert_eq!(specs[2].order(), SortOrder::Ascending);
     }
 
     #[test]
@@ -168,7 +168,7 @@ mod tests {
             panic!("expected Sort stage at index 1");
         };
         assert_eq!(specs.len(), 1);
-        assert!(specs[0].is_descending());
+        assert_eq!(specs[0].order(), SortOrder::Descending);
 
         // Stage 2: Limit
         assert_eq!(&pipeline.stages()[2], &PipelineStage::Limit(5));
@@ -180,10 +180,7 @@ mod tests {
     fn empty_source_returns_error() {
         // Construct a Query with an empty source directly, since the parser
         // would reject it. This tests convert_query in isolation.
-        let query = Query {
-            source: String::new(),
-            commands: vec![],
-        };
+        let query = Query::new(String::new(), vec![]);
         let result = convert_query(&query);
         assert!(result.is_err());
         let errors = result.unwrap_err();
@@ -196,10 +193,7 @@ mod tests {
 
     #[test]
     fn whitespace_only_source_returns_error() {
-        let query = Query {
-            source: "   ".to_owned(),
-            commands: vec![],
-        };
+        let query = Query::new("   ".to_owned(), vec![]);
         let result = convert_query(&query);
         assert!(result.is_err());
         let errors = result.unwrap_err();
@@ -212,13 +206,10 @@ mod tests {
 
     #[test]
     fn multiple_invalid_commands_collect_all_errors() {
-        let query = Query {
-            source: "test".to_owned(),
-            commands: vec![
-                Command::Head(0),       // InvalidLimitValue
-                Command::Fields(vec![]), // EmptyFieldList
-            ],
-        };
+        let query = Query::new("test".to_owned(), vec![
+            Command::Head(0),       // InvalidLimitValue
+            Command::Fields(vec![]), // EmptyFieldList
+        ]);
         let result = convert_query(&query);
         assert!(result.is_err());
         let errors = result.unwrap_err();

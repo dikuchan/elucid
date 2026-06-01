@@ -4,10 +4,12 @@
 //! a validated, normalized query pipeline that `elucid-engine` can consume
 //! for execution.
 
+use std::fmt;
+
 /// A literal value in the IR.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum IrLiteral {
+pub enum Literal {
     /// The null value.
     Null,
     /// A boolean value.
@@ -21,7 +23,7 @@ pub enum IrLiteral {
 /// Binary operator for IR expressions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum IrBinaryOp {
+pub enum BinaryOp {
     Add,
     Subtract,
     Multiply,
@@ -42,11 +44,11 @@ pub enum IrBinaryOp {
 /// field paths (e.g., `host.name`) in the future.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub struct IrFieldRef {
+pub struct FieldRef {
     name: String,
 }
 
-impl IrFieldRef {
+impl FieldRef {
     /// Creates a new field reference from a name.
     pub fn new(name: String) -> Self {
         Self { name }
@@ -63,20 +65,20 @@ impl IrFieldRef {
     }
 }
 
-impl From<String> for IrFieldRef {
+impl From<String> for FieldRef {
     fn from(name: String) -> Self {
         Self::new(name)
     }
 }
 
-impl From<&str> for IrFieldRef {
+impl From<&str> for FieldRef {
     fn from(name: &str) -> Self {
         Self::new(name.to_owned())
     }
 }
 
-impl std::fmt::Display for IrFieldRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FieldRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name)
     }
 }
@@ -84,17 +86,37 @@ impl std::fmt::Display for IrFieldRef {
 /// An expression in the IR.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum IrExpr {
+pub enum Expr {
     /// A literal value.
-    Literal(IrLiteral),
+    Literal(Literal),
     /// A reference to a field.
-    Field(IrFieldRef),
+    Field(FieldRef),
     /// A binary operation on two sub-expressions.
-    Binary(IrBinaryOp, Box<IrExpr>, Box<IrExpr>),
+    Binary(BinaryOp, Box<Expr>, Box<Expr>),
     /// Logical negation.
-    Not(Box<IrExpr>),
+    Not(Box<Expr>),
     /// A function call (e.g., `count()`, `sum(bytes)`).
-    Call(String, Vec<IrExpr>),
+    Call(String, Vec<Expr>),
+}
+
+/// Sort direction for [`SortSpec`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum SortOrder {
+    /// Ascending order (smallest first).
+    #[default]
+    Ascending,
+    /// Descending order (largest first).
+    Descending,
+}
+
+impl fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ascending => write!(f, "asc"),
+            Self::Descending => write!(f, "desc"),
+        }
+    }
 }
 
 /// Specifies the data source for a query pipeline.
@@ -129,8 +151,8 @@ impl From<&str> for SourceSpec {
     }
 }
 
-impl std::fmt::Display for SourceSpec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for SourceSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.dataset)
     }
 }
@@ -167,29 +189,29 @@ impl TimeRange {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SortSpec {
-    expr: IrExpr,
-    descending: bool,
+    expr: Expr,
+    order: SortOrder,
 }
 
 impl SortSpec {
     /// Creates a new sort specification.
-    pub fn new(expr: IrExpr, descending: bool) -> Self {
-        Self { expr, descending }
+    pub fn new(expr: Expr, order: SortOrder) -> Self {
+        Self { expr, order }
     }
 
     /// Returns the expression to sort by.
-    pub fn expr(&self) -> &IrExpr {
+    pub fn expr(&self) -> &Expr {
         &self.expr
     }
 
-    /// Returns `true` if the sort order is descending.
-    pub fn is_descending(&self) -> bool {
-        self.descending
+    /// Returns the sort order.
+    pub fn order(&self) -> SortOrder {
+        self.order
     }
 
     /// Consumes the sort spec and returns its components.
-    pub fn into_parts(self) -> (IrExpr, bool) {
-        (self.expr, self.descending)
+    pub fn into_parts(self) -> (Expr, SortOrder) {
+        (self.expr, self.order)
     }
 }
 
@@ -198,13 +220,13 @@ impl SortSpec {
 #[non_exhaustive]
 pub struct AggregateExpr {
     function: String,
-    argument: Option<IrExpr>,
+    argument: Option<Expr>,
     alias: Option<String>,
 }
 
 impl AggregateExpr {
     /// Creates a new aggregate expression.
-    pub fn new(function: String, argument: Option<IrExpr>, alias: Option<String>) -> Self {
+    pub fn new(function: String, argument: Option<Expr>, alias: Option<String>) -> Self {
         Self {
             function,
             argument,
@@ -218,7 +240,7 @@ impl AggregateExpr {
     }
 
     /// Returns the aggregate argument expression, if any.
-    pub fn argument(&self) -> Option<&IrExpr> {
+    pub fn argument(&self) -> Option<&Expr> {
         self.argument.as_ref()
     }
 
@@ -228,7 +250,7 @@ impl AggregateExpr {
     }
 
     /// Consumes the aggregate expression and returns its components.
-    pub fn into_parts(self) -> (String, Option<IrExpr>, Option<String>) {
+    pub fn into_parts(self) -> (String, Option<Expr>, Option<String>) {
         (self.function, self.argument, self.alias)
     }
 }
@@ -238,13 +260,13 @@ impl AggregateExpr {
 #[non_exhaustive]
 pub enum PipelineStage {
     /// Filter rows by a predicate expression.
-    Filter(IrExpr),
+    Filter(Expr),
     /// Project specific fields.
-    Project(Vec<IrFieldRef>),
+    Project(Vec<FieldRef>),
     /// Aggregate with measures and optional group-by fields.
     Aggregate {
         measures: Vec<AggregateExpr>,
-        group_by: Vec<IrFieldRef>,
+        group_by: Vec<FieldRef>,
     },
     /// Sort by one or more specifications.
     Sort(Vec<SortSpec>),
@@ -302,115 +324,112 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ir_literal_null() {
-        let lit = IrLiteral::Null;
-        assert_eq!(lit, IrLiteral::Null);
+    fn literal_null() {
+        let lit = Literal::Null;
+        assert_eq!(lit, Literal::Null);
     }
 
     #[test]
-    fn ir_literal_boolean() {
-        assert_eq!(IrLiteral::Boolean(true), IrLiteral::Boolean(true));
-        assert_ne!(IrLiteral::Boolean(true), IrLiteral::Boolean(false));
+    fn literal_boolean() {
+        assert_eq!(Literal::Boolean(true), Literal::Boolean(true));
+        assert_ne!(Literal::Boolean(true), Literal::Boolean(false));
     }
 
     #[test]
-    fn ir_literal_number() {
-        assert_eq!(IrLiteral::Number(42.0), IrLiteral::Number(42.0));
+    fn literal_number() {
+        assert_eq!(Literal::Number(42.0), Literal::Number(42.0));
     }
 
     #[test]
-    fn ir_literal_string() {
+    fn literal_string() {
         assert_eq!(
-            IrLiteral::String("hello".to_owned()),
-            IrLiteral::String("hello".to_owned())
+            Literal::String("hello".to_owned()),
+            Literal::String("hello".to_owned())
         );
     }
 
     #[test]
-    fn ir_field_ref_new() {
-        let field = IrFieldRef::new("status".to_owned());
+    fn field_ref_new() {
+        let field = FieldRef::new("status".to_owned());
         assert_eq!(field.as_str(), "status");
     }
 
     #[test]
-    fn ir_field_ref_from_string() {
-        let field: IrFieldRef = "host".to_owned().into();
+    fn field_ref_from_string() {
+        let field: FieldRef = "host".to_owned().into();
         assert_eq!(field.as_str(), "host");
     }
 
     #[test]
-    fn ir_field_ref_from_str() {
-        let field: IrFieldRef = "method".into();
+    fn field_ref_from_str() {
+        let field: FieldRef = "method".into();
         assert_eq!(field.as_str(), "method");
     }
 
     #[test]
-    fn ir_field_ref_into_inner() {
-        let field = IrFieldRef::new("path".to_owned());
+    fn field_ref_into_inner() {
+        let field = FieldRef::new("path".to_owned());
         assert_eq!(field.into_inner(), "path");
     }
 
     #[test]
-    fn ir_field_ref_display() {
-        let field = IrFieldRef::new("status".to_owned());
+    fn field_ref_display() {
+        let field = FieldRef::new("status".to_owned());
         assert_eq!(format!("{field}"), "status");
     }
 
     #[test]
-    fn ir_field_ref_equality() {
-        let a = IrFieldRef::new("host".to_owned());
-        let b = IrFieldRef::new("host".to_owned());
-        let c = IrFieldRef::new("port".to_owned());
+    fn field_ref_equality() {
+        let a = FieldRef::new("host".to_owned());
+        let b = FieldRef::new("host".to_owned());
+        let c = FieldRef::new("port".to_owned());
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
 
     #[test]
-    fn ir_expr_literal() {
-        let expr = IrExpr::Literal(IrLiteral::Number(1.0));
-        assert_eq!(expr, IrExpr::Literal(IrLiteral::Number(1.0)));
+    fn expr_literal() {
+        let expr = Expr::Literal(Literal::Number(1.0));
+        assert_eq!(expr, Expr::Literal(Literal::Number(1.0)));
     }
 
     #[test]
-    fn ir_expr_field() {
-        let expr = IrExpr::Field(IrFieldRef::new("count".to_owned()));
-        assert_eq!(
-            expr,
-            IrExpr::Field(IrFieldRef::new("count".to_owned()))
-        );
+    fn expr_field() {
+        let expr = Expr::Field(FieldRef::new("count".to_owned()));
+        assert_eq!(expr, Expr::Field(FieldRef::new("count".to_owned())));
     }
 
     #[test]
-    fn ir_expr_binary() {
-        let expr = IrExpr::Binary(
-            IrBinaryOp::Add,
-            Box::new(IrExpr::Field(IrFieldRef::new("a".to_owned()))),
-            Box::new(IrExpr::Literal(IrLiteral::Number(1.0))),
+    fn expr_binary() {
+        let expr = Expr::Binary(
+            BinaryOp::Add,
+            Box::new(Expr::Field(FieldRef::new("a".to_owned()))),
+            Box::new(Expr::Literal(Literal::Number(1.0))),
         );
-        if let IrExpr::Binary(op, _, _) = &expr {
-            assert_eq!(*op, IrBinaryOp::Add);
+        if let Expr::Binary(op, _, _) = &expr {
+            assert_eq!(*op, BinaryOp::Add);
         } else {
             panic!("expected Binary variant");
         }
     }
 
     #[test]
-    fn ir_expr_not() {
-        let expr = IrExpr::Not(Box::new(IrExpr::Literal(IrLiteral::Boolean(true))));
-        if let IrExpr::Not(inner) = &expr {
-            assert_eq!(**inner, IrExpr::Literal(IrLiteral::Boolean(true)));
+    fn expr_not() {
+        let expr = Expr::Not(Box::new(Expr::Literal(Literal::Boolean(true))));
+        if let Expr::Not(inner) = &expr {
+            assert_eq!(**inner, Expr::Literal(Literal::Boolean(true)));
         } else {
             panic!("expected Not variant");
         }
     }
 
     #[test]
-    fn ir_expr_call() {
-        let expr = IrExpr::Call(
+    fn expr_call() {
+        let expr = Expr::Call(
             "count".to_owned(),
-            vec![IrExpr::Field(IrFieldRef::new("bytes".to_owned()))],
+            vec![Expr::Field(FieldRef::new("bytes".to_owned()))],
         );
-        if let IrExpr::Call(name, args) = &expr {
+        if let Expr::Call(name, args) = &expr {
             assert_eq!(name, "count");
             assert_eq!(args.len(), 1);
         } else {
@@ -445,47 +464,55 @@ mod tests {
 
     #[test]
     fn time_range_with_bounds() {
-        let range = TimeRange::new(
-            Some("-1h".to_owned()),
-            Some("now".to_owned()),
-        );
+        let range = TimeRange::new(Some("-1h".to_owned()), Some("now".to_owned()));
         assert_eq!(range.earliest(), Some("-1h"));
         assert_eq!(range.latest(), Some("now"));
     }
 
     #[test]
+    fn sort_order_default() {
+        assert_eq!(SortOrder::default(), SortOrder::Ascending);
+    }
+
+    #[test]
+    fn sort_order_display() {
+        assert_eq!(format!("{}", SortOrder::Ascending), "asc");
+        assert_eq!(format!("{}", SortOrder::Descending), "desc");
+    }
+
+    #[test]
     fn sort_spec_ascending() {
         let spec = SortSpec::new(
-            IrExpr::Field(IrFieldRef::new("time".to_owned())),
-            false,
+            Expr::Field(FieldRef::new("time".to_owned())),
+            SortOrder::Ascending,
         );
-        assert!(!spec.is_descending());
-        assert!(matches!(spec.expr(), IrExpr::Field(_)));
+        assert_eq!(spec.order(), SortOrder::Ascending);
+        assert!(matches!(spec.expr(), Expr::Field(_)));
     }
 
     #[test]
     fn sort_spec_descending() {
         let spec = SortSpec::new(
-            IrExpr::Field(IrFieldRef::new("count".to_owned())),
-            true,
+            Expr::Field(FieldRef::new("count".to_owned())),
+            SortOrder::Descending,
         );
-        assert!(spec.is_descending());
+        assert_eq!(spec.order(), SortOrder::Descending);
     }
 
     #[test]
     fn sort_spec_into_parts() {
-        let expr = IrExpr::Field(IrFieldRef::new("time".to_owned()));
-        let spec = SortSpec::new(expr.clone(), true);
-        let (e, desc) = spec.into_parts();
+        let expr = Expr::Field(FieldRef::new("time".to_owned()));
+        let spec = SortSpec::new(expr.clone(), SortOrder::Descending);
+        let (e, order) = spec.into_parts();
         assert_eq!(e, expr);
-        assert!(desc);
+        assert_eq!(order, SortOrder::Descending);
     }
 
     #[test]
     fn aggregate_expr_with_alias() {
         let agg = AggregateExpr::new(
             "sum".to_owned(),
-            Some(IrExpr::Field(IrFieldRef::new("bytes".to_owned()))),
+            Some(Expr::Field(FieldRef::new("bytes".to_owned()))),
             Some("total_bytes".to_owned()),
         );
         assert_eq!(agg.function(), "sum");
@@ -495,11 +522,7 @@ mod tests {
 
     #[test]
     fn aggregate_expr_without_alias() {
-        let agg = AggregateExpr::new(
-            "count".to_owned(),
-            None,
-            None,
-        );
+        let agg = AggregateExpr::new("count".to_owned(), None, None);
         assert_eq!(agg.function(), "count");
         assert!(agg.argument().is_none());
         assert!(agg.alias().is_none());
@@ -509,7 +532,7 @@ mod tests {
     fn aggregate_expr_into_parts() {
         let agg = AggregateExpr::new(
             "avg".to_owned(),
-            Some(IrExpr::Field(IrFieldRef::new("latency".to_owned()))),
+            Some(Expr::Field(FieldRef::new("latency".to_owned()))),
             Some("avg_latency".to_owned()),
         );
         let (func, arg, alias) = agg.into_parts();
@@ -520,15 +543,15 @@ mod tests {
 
     #[test]
     fn pipeline_stage_filter() {
-        let stage = PipelineStage::Filter(IrExpr::Literal(IrLiteral::Boolean(true)));
+        let stage = PipelineStage::Filter(Expr::Literal(Literal::Boolean(true)));
         assert!(matches!(stage, PipelineStage::Filter(_)));
     }
 
     #[test]
     fn pipeline_stage_project() {
         let stage = PipelineStage::Project(vec![
-            IrFieldRef::new("host".to_owned()),
-            IrFieldRef::new("status".to_owned()),
+            FieldRef::new("host".to_owned()),
+            FieldRef::new("status".to_owned()),
         ]);
         assert!(matches!(stage, PipelineStage::Project(_)));
     }
@@ -537,7 +560,7 @@ mod tests {
     fn pipeline_stage_aggregate() {
         let stage = PipelineStage::Aggregate {
             measures: vec![AggregateExpr::new("count".to_owned(), None, None)],
-            group_by: vec![IrFieldRef::new("method".to_owned())],
+            group_by: vec![FieldRef::new("method".to_owned())],
         };
         assert!(matches!(stage, PipelineStage::Aggregate { .. }));
     }
@@ -545,8 +568,8 @@ mod tests {
     #[test]
     fn pipeline_stage_sort() {
         let stage = PipelineStage::Sort(vec![SortSpec::new(
-            IrExpr::Field(IrFieldRef::new("time".to_owned())),
-            true,
+            Expr::Field(FieldRef::new("time".to_owned())),
+            SortOrder::Descending,
         )]);
         assert!(matches!(stage, PipelineStage::Sort(_)));
     }
@@ -569,14 +592,14 @@ mod tests {
             SourceSpec::new("access_logs".to_owned()),
             TimeRange::new(Some("-24h".to_owned()), None),
             vec![
-                PipelineStage::Filter(IrExpr::Binary(
-                    IrBinaryOp::Equal,
-                    Box::new(IrExpr::Field(IrFieldRef::new("status".to_owned()))),
-                    Box::new(IrExpr::Literal(IrLiteral::Number(200.0))),
+                PipelineStage::Filter(Expr::Binary(
+                    BinaryOp::Equal,
+                    Box::new(Expr::Field(FieldRef::new("status".to_owned()))),
+                    Box::new(Expr::Literal(Literal::Number(200.0))),
                 )),
                 PipelineStage::Sort(vec![SortSpec::new(
-                    IrExpr::Field(IrFieldRef::new("time".to_owned())),
-                    true,
+                    Expr::Field(FieldRef::new("time".to_owned())),
+                    SortOrder::Descending,
                 )]),
                 PipelineStage::Limit(100),
             ],
@@ -601,20 +624,20 @@ mod tests {
     }
 
     #[test]
-    fn ir_binary_op_all_variants() {
+    fn binary_op_all_variants() {
         let ops = [
-            IrBinaryOp::Add,
-            IrBinaryOp::Subtract,
-            IrBinaryOp::Multiply,
-            IrBinaryOp::Divide,
-            IrBinaryOp::Equal,
-            IrBinaryOp::NotEqual,
-            IrBinaryOp::GreaterThan,
-            IrBinaryOp::GreaterThanOrEqual,
-            IrBinaryOp::LessThan,
-            IrBinaryOp::LessThanOrEqual,
-            IrBinaryOp::And,
-            IrBinaryOp::Or,
+            BinaryOp::Add,
+            BinaryOp::Subtract,
+            BinaryOp::Multiply,
+            BinaryOp::Divide,
+            BinaryOp::Equal,
+            BinaryOp::NotEqual,
+            BinaryOp::GreaterThan,
+            BinaryOp::GreaterThanOrEqual,
+            BinaryOp::LessThan,
+            BinaryOp::LessThanOrEqual,
+            BinaryOp::And,
+            BinaryOp::Or,
         ];
         // Ensure all 12 variants are distinct
         for i in 0..ops.len() {
@@ -636,9 +659,9 @@ mod tests {
     }
 
     #[test]
-    fn ir_expr_call_zero_arguments() {
-        let expr = IrExpr::Call("count".to_owned(), vec![]);
-        if let IrExpr::Call(name, args) = &expr {
+    fn expr_call_zero_arguments() {
+        let expr = Expr::Call("count".to_owned(), vec![]);
+        if let Expr::Call(name, args) = &expr {
             assert_eq!(name, "count");
             assert!(args.is_empty());
         } else {

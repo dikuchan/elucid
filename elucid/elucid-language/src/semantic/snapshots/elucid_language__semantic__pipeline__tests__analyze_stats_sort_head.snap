@@ -20,7 +20,7 @@ Pipeline {
                 },
             ],
             group_by: [
-                IrFieldRef {
+                FieldRef {
                     name: "method",
                 },
             ],
@@ -29,11 +29,11 @@ Pipeline {
             [
                 SortSpec {
                     expr: Field(
-                        IrFieldRef {
+                        FieldRef {
                             name: "count",
                         },
                     ),
-                    descending: true,
+                    order: Descending,
                 },
             ],
         ),

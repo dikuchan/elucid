@@ -7,12 +7,12 @@ Binary(
     Binary(
         Add,
         Field(
-            IrFieldRef {
+            FieldRef {
                 name: "a",
             },
         ),
         Field(
-            IrFieldRef {
+            FieldRef {
                 name: "b",
             },
         ),

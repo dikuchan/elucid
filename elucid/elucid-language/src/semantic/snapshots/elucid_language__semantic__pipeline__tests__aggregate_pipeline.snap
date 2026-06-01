@@ -17,7 +17,7 @@ Pipeline {
                     function: "sum",
                     argument: Some(
                         Field(
-                            IrFieldRef {
+                            FieldRef {
                                 name: "bytes",
                             },
                         ),
@@ -33,7 +33,7 @@ Pipeline {
                 },
             ],
             group_by: [
-                IrFieldRef {
+                FieldRef {
                     name: "method",
                 },
             ],

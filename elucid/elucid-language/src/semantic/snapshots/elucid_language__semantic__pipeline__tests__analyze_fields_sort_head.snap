@@ -13,10 +13,10 @@ Pipeline {
     stages: [
         Project(
             [
-                IrFieldRef {
+                FieldRef {
                     name: "name",
                 },
-                IrFieldRef {
+                FieldRef {
                     name: "age",
                 },
             ],
@@ -25,11 +25,11 @@ Pipeline {
             [
                 SortSpec {
                     expr: Field(
-                        IrFieldRef {
+                        FieldRef {
                             name: "name",
                         },
                     ),
-                    descending: false,
+                    order: Ascending,
                 },
             ],
         ),

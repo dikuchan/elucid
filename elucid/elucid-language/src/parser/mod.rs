@@ -7,7 +7,7 @@ use chumsky::Parser;
 use chumsky::input::{Stream, ValueInput};
 use chumsky::prelude::*;
 
-use crate::Query;
+use crate::ast::Query;
 use crate::lexer::{Token, tokenizer};
 use crate::span::Span;
 

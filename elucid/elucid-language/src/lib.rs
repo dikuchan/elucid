@@ -1,4 +1,4 @@
-mod ast;
+pub mod ast;
 mod semantic;
 mod span;
 
@@ -6,8 +6,10 @@ pub mod ir;
 pub mod lexer;
 pub mod parser;
 
-pub use ast::*;
-pub use ir::*;
+pub use ir::{
+    AggregateExpr, BinaryOp, Expr, FieldRef, Literal, Pipeline, PipelineStage, SortOrder, SortSpec,
+    SourceSpec, TimeRange,
+};
 pub use parser::ParserError;
 pub use semantic::{AnalyzeError, ParseError, SemanticError};
 

@@ -6,12 +6,12 @@ Not(
     Binary(
         And,
         Field(
-            IrFieldRef {
+            FieldRef {
                 name: "a",
             },
         ),
         Field(
-            IrFieldRef {
+            FieldRef {
                 name: "b",
             },
         ),

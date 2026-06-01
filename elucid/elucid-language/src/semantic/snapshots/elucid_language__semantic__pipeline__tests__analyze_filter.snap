@@ -15,7 +15,7 @@ Pipeline {
             Binary(
                 Equal,
                 Field(
-                    IrFieldRef {
+                    FieldRef {
                         name: "status",
                     },
                 ),

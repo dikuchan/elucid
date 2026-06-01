@@ -18,6 +18,6 @@ where
     just(Token::KeywordDataset)
         .ignore_then(select! { Token::Identifier(i) => i.to_owned() }.labelled("dataset name"))
         .then(just(Token::Pipe).ignore_then(command).repeated().collect())
-        .map(|(source, commands)| Query { source, commands })
+        .map(|(source, commands)| Query::new(source, commands))
         .labelled("query")
 }

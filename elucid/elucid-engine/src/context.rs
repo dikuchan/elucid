@@ -30,8 +30,8 @@ impl Context {
             DataFusionError::Plan(format!("Parse error: {:?}", error))
         })?;
 
-        if !self.context.table_exist(&query.source)? {
-            self.register_table(&query.source).await?;
+        if !self.context.table_exist(query.source())? {
+            self.register_table(query.source()).await?;
         }
 
         let planner = QueryPlanner::new(&self.context);

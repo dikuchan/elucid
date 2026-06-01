@@ -1,10 +1,10 @@
-use crate::ast::{Command, Expression, SortExpression, SortOrder};
-use crate::ir::{AggregateExpr, IrFieldRef, PipelineStage, SortSpec};
 use super::error::SemanticError;
+use crate::ast;
+use crate::ir::{AggregateExpr, FieldRef, PipelineStage, SortOrder, SortSpec};
 
 use super::expression::convert_expression;
 
-/// Converts an [`Command`] from the AST into a [`PipelineStage`].
+/// Converts an [`ast::Command`] from the AST into a [`PipelineStage`].
 ///
 /// Performs structural validation (e.g. non-empty field lists, positive limits)
 /// and delegates expression conversion to [`convert_expression`].
@@ -12,23 +12,23 @@ use super::expression::convert_expression;
 /// # Errors
 ///
 /// Returns a [`SemanticError`] when the command fails structural validation.
-pub(crate) fn convert_command(cmd: Command) -> Result<PipelineStage, SemanticError> {
+pub(crate) fn convert_command(cmd: ast::Command) -> Result<PipelineStage, SemanticError> {
     match cmd {
-        Command::Where(expr) => Ok(PipelineStage::Filter(convert_expression(expr))),
-        Command::Sort(specs) => {
+        ast::Command::Where(expr) => Ok(PipelineStage::Filter(convert_expression(expr))),
+        ast::Command::Sort(specs) => {
             if specs.is_empty() {
                 return Err(SemanticError::EmptySortSpec);
             }
             let ir_specs = specs.into_iter().map(convert_sort_expr).collect();
             Ok(PipelineStage::Sort(ir_specs))
         }
-        Command::Head(n) => {
+        ast::Command::Head(n) => {
             if n <= 0 {
                 return Err(SemanticError::InvalidLimitValue { value: n });
             }
             Ok(PipelineStage::Limit(n as usize))
         }
-        Command::Fields(exprs) => {
+        ast::Command::Fields(exprs) => {
             if exprs.is_empty() {
                 return Err(SemanticError::EmptyFieldList);
             }
@@ -38,7 +38,7 @@ pub(crate) fn convert_command(cmd: Command) -> Result<PipelineStage, SemanticErr
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(PipelineStage::Project(fields))
         }
-        Command::Stats { aggregates, by } => {
+        ast::Command::Stats { aggregates, by } => {
             if aggregates.is_empty() {
                 return Err(SemanticError::EmptyAggregateMeasures);
             }
@@ -55,19 +55,23 @@ pub(crate) fn convert_command(cmd: Command) -> Result<PipelineStage, SemanticErr
     }
 }
 
-/// Converts a [`SortExpression`] from the AST into a [`SortSpec`].
-fn convert_sort_expr(spec: SortExpression) -> SortSpec {
-    let descending = matches!(spec.order, SortOrder::Descending);
-    SortSpec::new(convert_expression(spec.expression), descending)
+/// Converts an [`ast::SortExpression`] from the AST into a [`SortSpec`].
+fn convert_sort_expr(spec: ast::SortExpression) -> SortSpec {
+    let (expression, order) = spec.into_parts();
+    let order = match order {
+        ast::SortOrder::Ascending => SortOrder::Ascending,
+        ast::SortOrder::Descending => SortOrder::Descending,
+    };
+    SortSpec::new(convert_expression(expression), order)
 }
 
-/// Extracts a field reference from a field-like [`Expression`].
+/// Extracts a field reference from a field-like [`ast::Expr`].
 ///
-/// Only [`Expression::Field`] is accepted; any other variant produces a
+/// Only [`ast::Expr::Field`] is accepted; any other variant produces a
 /// [`SemanticError::ConversionError`].
-fn convert_field_expr(expr: Expression) -> Result<IrFieldRef, SemanticError> {
+fn convert_field_expr(expr: ast::Expr) -> Result<FieldRef, SemanticError> {
     match expr {
-        Expression::Field(name) => Ok(IrFieldRef::new(name)),
+        ast::Expr::Field(name) => Ok(FieldRef::new(name)),
         other => Err(SemanticError::ConversionError(format!(
             "expected field name, got {}",
             describe_expression_kind(&other)
@@ -77,14 +81,14 @@ fn convert_field_expr(expr: Expression) -> Result<IrFieldRef, SemanticError> {
 
 /// Converts an aggregate expression pair into an [`AggregateExpr`].
 ///
-/// The `expr` must be [`Expression::Call`]; otherwise a
+/// The `expr` must be [`ast::Expr::Call`]; otherwise a
 /// [`SemanticError::ConversionError`] is returned.
 fn convert_aggregate_expr(
-    expr: Expression,
+    expr: ast::Expr,
     alias: Option<String>,
 ) -> Result<AggregateExpr, SemanticError> {
     match expr {
-        Expression::Call(name, args) => {
+        ast::Expr::Call(name, args) => {
             if args.len() > 1 {
                 return Err(SemanticError::ConversionError(format!(
                     "aggregate function '{name}' expects at most one argument, got {}",
@@ -101,44 +105,43 @@ fn convert_aggregate_expr(
     }
 }
 
-/// Returns a human-readable label for an [`Expression`] variant, used in
+/// Returns a human-readable label for an [`ast::Expr`] variant, used in
 /// error messages.
-fn describe_expression_kind(expr: &Expression) -> &'static str {
+fn describe_expression_kind(expr: &ast::Expr) -> &'static str {
     match expr {
-        Expression::Null => "null literal",
-        Expression::Boolean(_) => "boolean literal",
-        Expression::Number(_) => "number literal",
-        Expression::String(_) => "string literal",
-        Expression::Field(_) => "field reference",
-        Expression::Binary(_, _, _) => "binary expression",
-        Expression::Not(_) => "negation expression",
-        Expression::Call(_, _) => "function call",
+        ast::Expr::Null => "null literal",
+        ast::Expr::Boolean(_) => "boolean literal",
+        ast::Expr::Number(_) => "number literal",
+        ast::Expr::String(_) => "string literal",
+        ast::Expr::Field(_) => "field reference",
+        ast::Expr::Binary(_, _, _) => "binary expression",
+        ast::Expr::Not(_) => "negation expression",
+        ast::Expr::Call(_, _) => "function call",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinaryOperator, SortOrder};
-    use crate::ir::{IrBinaryOp, IrExpr, IrFieldRef, IrLiteral};
+    use crate::ir::{BinaryOp, Expr, FieldRef, Literal};
 
     // ── where command ──────────────────────────────────────────────────
 
     #[test]
     fn where_simple_comparison() {
         // where status == 200
-        let cmd = Command::Where(Expression::Binary(
-            BinaryOperator::Equal,
-            Box::new(Expression::Field("status".to_owned())),
-            Box::new(Expression::Number(200.0)),
+        let cmd = ast::Command::Where(ast::Expr::Binary(
+            ast::BinaryOp::Equal,
+            Box::new(ast::Expr::Field("status".to_owned())),
+            Box::new(ast::Expr::Number(200.0)),
         ));
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Filter(IrExpr::Binary(
-                IrBinaryOp::Equal,
-                Box::new(IrExpr::Field(IrFieldRef::new("status".to_owned()))),
-                Box::new(IrExpr::Literal(IrLiteral::Number(200.0))),
+            PipelineStage::Filter(Expr::Binary(
+                BinaryOp::Equal,
+                Box::new(Expr::Field(FieldRef::new("status".to_owned()))),
+                Box::new(Expr::Literal(Literal::Number(200.0))),
             ))
         );
     }
@@ -146,26 +149,26 @@ mod tests {
     #[test]
     fn where_field_only() {
         // where active
-        let cmd = Command::Where(Expression::Field("active".to_owned()));
+        let cmd = ast::Command::Where(ast::Expr::Field("active".to_owned()));
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Filter(IrExpr::Field(IrFieldRef::new("active".to_owned())))
+            PipelineStage::Filter(Expr::Field(FieldRef::new("active".to_owned())))
         );
     }
 
     #[test]
     fn where_negation() {
         // where not error
-        let cmd = Command::Where(Expression::Not(Box::new(Expression::Field(
+        let cmd = ast::Command::Where(ast::Expr::Not(Box::new(ast::Expr::Field(
             "error".to_owned(),
         ))));
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Filter(IrExpr::Not(Box::new(IrExpr::Field(
-                IrFieldRef::new("error".to_owned())
-            ))))
+            PipelineStage::Filter(Expr::Not(Box::new(Expr::Field(FieldRef::new(
+                "error".to_owned()
+            )))))
         );
     }
 
@@ -174,16 +177,16 @@ mod tests {
     #[test]
     fn sort_ascending() {
         // sort by +time
-        let cmd = Command::Sort(vec![SortExpression {
-            expression: Expression::Field("time".to_owned()),
-            order: SortOrder::Ascending,
-        }]);
+        let cmd = ast::Command::Sort(vec![ast::SortExpression::new(
+            ast::Expr::Field("time".to_owned()),
+            ast::SortOrder::Ascending,
+        )]);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
             PipelineStage::Sort(vec![SortSpec::new(
-                IrExpr::Field(IrFieldRef::new("time".to_owned())),
-                false,
+                Expr::Field(FieldRef::new("time".to_owned())),
+                SortOrder::Ascending,
             )])
         );
     }
@@ -191,16 +194,16 @@ mod tests {
     #[test]
     fn sort_descending() {
         // sort by -count
-        let cmd = Command::Sort(vec![SortExpression {
-            expression: Expression::Field("count".to_owned()),
-            order: SortOrder::Descending,
-        }]);
+        let cmd = ast::Command::Sort(vec![ast::SortExpression::new(
+            ast::Expr::Field("count".to_owned()),
+            ast::SortOrder::Descending,
+        )]);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
             PipelineStage::Sort(vec![SortSpec::new(
-                IrExpr::Field(IrFieldRef::new("count".to_owned())),
-                true,
+                Expr::Field(FieldRef::new("count".to_owned())),
+                SortOrder::Descending,
             )])
         );
     }
@@ -208,27 +211,27 @@ mod tests {
     #[test]
     fn sort_multiple_specs() {
         // sort by -count, +status
-        let cmd = Command::Sort(vec![
-            SortExpression {
-                expression: Expression::Field("count".to_owned()),
-                order: SortOrder::Descending,
-            },
-            SortExpression {
-                expression: Expression::Field("status".to_owned()),
-                order: SortOrder::Ascending,
-            },
+        let cmd = ast::Command::Sort(vec![
+            ast::SortExpression::new(
+                ast::Expr::Field("count".to_owned()),
+                ast::SortOrder::Descending,
+            ),
+            ast::SortExpression::new(
+                ast::Expr::Field("status".to_owned()),
+                ast::SortOrder::Ascending,
+            ),
         ]);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
             PipelineStage::Sort(vec![
                 SortSpec::new(
-                    IrExpr::Field(IrFieldRef::new("count".to_owned())),
-                    true,
+                    Expr::Field(FieldRef::new("count".to_owned())),
+                    SortOrder::Descending,
                 ),
                 SortSpec::new(
-                    IrExpr::Field(IrFieldRef::new("status".to_owned())),
-                    false,
+                    Expr::Field(FieldRef::new("status".to_owned())),
+                    SortOrder::Ascending,
                 ),
             ])
         );
@@ -236,7 +239,7 @@ mod tests {
 
     #[test]
     fn sort_empty_specs_error() {
-        let cmd = Command::Sort(vec![]);
+        let cmd = ast::Command::Sort(vec![]);
         let err = convert_command(cmd).expect_err("should fail");
         assert_eq!(err, SemanticError::EmptySortSpec);
     }
@@ -245,35 +248,35 @@ mod tests {
 
     #[test]
     fn head_positive() {
-        let cmd = Command::Head(10);
+        let cmd = ast::Command::Head(10);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(result, PipelineStage::Limit(10));
     }
 
     #[test]
     fn head_one() {
-        let cmd = Command::Head(1);
+        let cmd = ast::Command::Head(1);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(result, PipelineStage::Limit(1));
     }
 
     #[test]
     fn head_zero_error() {
-        let cmd = Command::Head(0);
+        let cmd = ast::Command::Head(0);
         let err = convert_command(cmd).expect_err("should fail");
         assert_eq!(err, SemanticError::InvalidLimitValue { value: 0 });
     }
 
     #[test]
     fn head_negative_error() {
-        let cmd = Command::Head(-1);
+        let cmd = ast::Command::Head(-1);
         let err = convert_command(cmd).expect_err("should fail");
         assert_eq!(err, SemanticError::InvalidLimitValue { value: -1 });
     }
 
     #[test]
     fn head_large_negative_error() {
-        let cmd = Command::Head(-999);
+        let cmd = ast::Command::Head(-999);
         let err = convert_command(cmd).expect_err("should fail");
         assert_eq!(err, SemanticError::InvalidLimitValue { value: -999 });
     }
@@ -282,34 +285,34 @@ mod tests {
 
     #[test]
     fn fields_single() {
-        let cmd = Command::Fields(vec![Expression::Field("name".to_owned())]);
+        let cmd = ast::Command::Fields(vec![ast::Expr::Field("name".to_owned())]);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
-            PipelineStage::Project(vec![IrFieldRef::new("name".to_owned())])
+            PipelineStage::Project(vec![FieldRef::new("name".to_owned())])
         );
     }
 
     #[test]
     fn fields_multiple() {
         // fields name, age
-        let cmd = Command::Fields(vec![
-            Expression::Field("name".to_owned()),
-            Expression::Field("age".to_owned()),
+        let cmd = ast::Command::Fields(vec![
+            ast::Expr::Field("name".to_owned()),
+            ast::Expr::Field("age".to_owned()),
         ]);
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
             PipelineStage::Project(vec![
-                IrFieldRef::new("name".to_owned()),
-                IrFieldRef::new("age".to_owned()),
+                FieldRef::new("name".to_owned()),
+                FieldRef::new("age".to_owned()),
             ])
         );
     }
 
     #[test]
     fn fields_empty_error() {
-        let cmd = Command::Fields(vec![]);
+        let cmd = ast::Command::Fields(vec![]);
         let err = convert_command(cmd).expect_err("should fail");
         assert_eq!(err, SemanticError::EmptyFieldList);
     }
@@ -317,7 +320,7 @@ mod tests {
     #[test]
     fn fields_non_field_expression_error() {
         // fields 42
-        let cmd = Command::Fields(vec![Expression::Number(42.0)]);
+        let cmd = ast::Command::Fields(vec![ast::Expr::Number(42.0)]);
         let err = convert_command(cmd).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
@@ -325,9 +328,9 @@ mod tests {
     #[test]
     fn fields_mixed_valid_and_invalid() {
         // fields name, 42
-        let cmd = Command::Fields(vec![
-            Expression::Field("name".to_owned()),
-            Expression::Number(42.0),
+        let cmd = ast::Command::Fields(vec![
+            ast::Expr::Field("name".to_owned()),
+            ast::Expr::Number(42.0),
         ]);
         let err = convert_command(cmd).expect_err("should fail on second expr");
         assert!(matches!(err, SemanticError::ConversionError(_)));
@@ -338,19 +341,15 @@ mod tests {
     #[test]
     fn stats_count_no_args_no_group_by() {
         // stats count()
-        let cmd = Command::Stats {
-            aggregates: vec![(Expression::Call("count".to_owned(), vec![]), None)],
+        let cmd = ast::Command::Stats {
+            aggregates: vec![(ast::Expr::Call("count".to_owned(), vec![]), None)],
             by: vec![],
         };
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
             result,
             PipelineStage::Aggregate {
-                measures: vec![AggregateExpr::new(
-                    "count".to_owned(),
-                    None,
-                    None,
-                )],
+                measures: vec![AggregateExpr::new("count".to_owned(), None, None,)],
                 group_by: vec![],
             }
         );
@@ -359,15 +358,12 @@ mod tests {
     #[test]
     fn stats_sum_with_alias_and_group_by() {
         // stats total = sum(bytes) by method
-        let cmd = Command::Stats {
+        let cmd = ast::Command::Stats {
             aggregates: vec![(
-                Expression::Call(
-                    "sum".to_owned(),
-                    vec![Expression::Field("bytes".to_owned())],
-                ),
+                ast::Expr::Call("sum".to_owned(), vec![ast::Expr::Field("bytes".to_owned())]),
                 Some("total".to_owned()),
             )],
-            by: vec![Expression::Field("method".to_owned())],
+            by: vec![ast::Expr::Field("method".to_owned())],
         };
         let result = convert_command(cmd).expect("should convert");
         assert_eq!(
@@ -375,10 +371,10 @@ mod tests {
             PipelineStage::Aggregate {
                 measures: vec![AggregateExpr::new(
                     "sum".to_owned(),
-                    Some(IrExpr::Field(IrFieldRef::new("bytes".to_owned()))),
+                    Some(Expr::Field(FieldRef::new("bytes".to_owned()))),
                     Some("total".to_owned()),
                 )],
-                group_by: vec![IrFieldRef::new("method".to_owned())],
+                group_by: vec![FieldRef::new("method".to_owned())],
             }
         );
     }
@@ -386,18 +382,15 @@ mod tests {
     #[test]
     fn stats_multiple_aggregates_with_group_by() {
         // stats total = sum(bytes), count() by method
-        let cmd = Command::Stats {
+        let cmd = ast::Command::Stats {
             aggregates: vec![
                 (
-                    Expression::Call(
-                        "sum".to_owned(),
-                        vec![Expression::Field("bytes".to_owned())],
-                    ),
+                    ast::Expr::Call("sum".to_owned(), vec![ast::Expr::Field("bytes".to_owned())]),
                     Some("total".to_owned()),
                 ),
-                (Expression::Call("count".to_owned(), vec![]), None),
+                (ast::Expr::Call("count".to_owned(), vec![]), None),
             ],
-            by: vec![Expression::Field("method".to_owned())],
+            by: vec![ast::Expr::Field("method".to_owned())],
         };
         let result = convert_command(cmd).expect("should convert");
 
@@ -411,7 +404,7 @@ mod tests {
 
     #[test]
     fn stats_empty_aggregates_error() {
-        let cmd = Command::Stats {
+        let cmd = ast::Command::Stats {
             aggregates: vec![],
             by: vec![],
         };
@@ -422,8 +415,8 @@ mod tests {
     #[test]
     fn stats_non_call_aggregate_error() {
         // stats 42
-        let cmd = Command::Stats {
-            aggregates: vec![(Expression::Number(42.0), None)],
+        let cmd = ast::Command::Stats {
+            aggregates: vec![(ast::Expr::Number(42.0), None)],
             by: vec![],
         };
         let err = convert_command(cmd).expect_err("should fail");
@@ -433,9 +426,9 @@ mod tests {
     #[test]
     fn stats_non_field_group_by_error() {
         // stats count() by 42
-        let cmd = Command::Stats {
-            aggregates: vec![(Expression::Call("count".to_owned(), vec![]), None)],
-            by: vec![Expression::Number(42.0)],
+        let cmd = ast::Command::Stats {
+            aggregates: vec![(ast::Expr::Call("count".to_owned(), vec![]), None)],
+            by: vec![ast::Expr::Number(42.0)],
         };
         let err = convert_command(cmd).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
@@ -445,65 +438,65 @@ mod tests {
 
     #[test]
     fn convert_sort_expr_ascending() {
-        let spec = SortExpression {
-            expression: Expression::Field("time".to_owned()),
-            order: SortOrder::Ascending,
-        };
+        let spec = ast::SortExpression::new(
+            ast::Expr::Field("time".to_owned()),
+            ast::SortOrder::Ascending,
+        );
         let result = convert_sort_expr(spec);
-        assert!(!result.is_descending());
+        assert_eq!(result.order(), SortOrder::Ascending);
     }
 
     #[test]
     fn convert_sort_expr_descending() {
-        let spec = SortExpression {
-            expression: Expression::Field("count".to_owned()),
-            order: SortOrder::Descending,
-        };
+        let spec = ast::SortExpression::new(
+            ast::Expr::Field("count".to_owned()),
+            ast::SortOrder::Descending,
+        );
         let result = convert_sort_expr(spec);
-        assert!(result.is_descending());
+        assert_eq!(result.order(), SortOrder::Descending);
     }
 
     // ── helper: convert_field_expr ─────────────────────────────────────
 
     #[test]
     fn convert_field_expr_valid() {
-        let expr = Expression::Field("status".to_owned());
+        let expr = ast::Expr::Field("status".to_owned());
         let result = convert_field_expr(expr).expect("should convert");
-        assert_eq!(result, IrFieldRef::new("status".to_owned()));
+        assert_eq!(result, FieldRef::new("status".to_owned()));
     }
 
     #[test]
     fn convert_field_expr_number_error() {
-        let expr = Expression::Number(42.0);
+        let expr = ast::Expr::Number(42.0);
         let err = convert_field_expr(expr).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
 
     #[test]
     fn convert_field_expr_string_literal_error() {
-        let expr = Expression::String("not_a_field".to_owned());
+        let expr = ast::Expr::String("not_a_field".to_owned());
         let err = convert_field_expr(expr).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
 
     #[test]
     fn convert_field_expr_null_error() {
-        let err = convert_field_expr(Expression::Null).expect_err("should fail");
+        let err = convert_field_expr(ast::Expr::Null).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
 
     #[test]
     fn convert_field_expr_boolean_error() {
-        let err = convert_field_expr(Expression::Boolean(true)).expect_err("should fail");
+        let err = convert_field_expr(ast::Expr::Boolean(true)).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
 
     #[test]
     fn convert_field_expr_binary_error() {
-        let expr = Expression::Binary(
-            BinaryOperator::Add,
-            Box::new(Expression::Field("a".to_owned())),
-            Box::new(Expression::Field("b".to_owned())),
+        let expr = ast::Expr::Binary(
+            ast::BinaryOp::Add,
+            Box::new(ast::Expr::Field("a".to_owned())),
+            Box::new(ast::Expr::Field("b".to_owned())),
         );
         let err = convert_field_expr(expr).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
@@ -511,14 +504,14 @@ mod tests {
 
     #[test]
     fn convert_field_expr_not_error() {
-        let expr = Expression::Not(Box::new(Expression::Field("a".to_owned())));
+        let expr = ast::Expr::Not(Box::new(ast::Expr::Field("a".to_owned())));
         let err = convert_field_expr(expr).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
 
     #[test]
     fn convert_field_expr_call_error() {
-        let expr = Expression::Call("count".to_owned(), vec![]);
+        let expr = ast::Expr::Call("count".to_owned(), vec![]);
         let err = convert_field_expr(expr).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
@@ -527,7 +520,7 @@ mod tests {
 
     #[test]
     fn convert_aggregate_expr_call_no_args() {
-        let expr = Expression::Call("count".to_owned(), vec![]);
+        let expr = ast::Expr::Call("count".to_owned(), vec![]);
         let result = convert_aggregate_expr(expr, None).expect("should convert");
         assert_eq!(result.function(), "count");
         assert!(result.argument().is_none());
@@ -536,12 +529,9 @@ mod tests {
 
     #[test]
     fn convert_aggregate_expr_call_with_arg_and_alias() {
-        let expr = Expression::Call(
-            "sum".to_owned(),
-            vec![Expression::Field("bytes".to_owned())],
-        );
-        let result = convert_aggregate_expr(expr, Some("total".to_owned()))
-            .expect("should convert");
+        let expr = ast::Expr::Call("sum".to_owned(), vec![ast::Expr::Field("bytes".to_owned())]);
+        let result =
+            convert_aggregate_expr(expr, Some("total".to_owned())).expect("should convert");
         assert_eq!(result.function(), "sum");
         assert!(result.argument().is_some());
         assert_eq!(result.alias(), Some("total"));
@@ -549,14 +539,14 @@ mod tests {
 
     #[test]
     fn convert_aggregate_expr_non_call_error() {
-        let expr = Expression::Number(42.0);
+        let expr = ast::Expr::Number(42.0);
         let err = convert_aggregate_expr(expr, None).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
 
     #[test]
     fn convert_aggregate_expr_field_error() {
-        let expr = Expression::Field("count".to_owned());
+        let expr = ast::Expr::Field("count".to_owned());
         let err = convert_aggregate_expr(expr, None).expect_err("should fail");
         assert!(matches!(err, SemanticError::ConversionError(_)));
     }
@@ -565,40 +555,37 @@ mod tests {
 
     #[test]
     fn describe_all_expression_kinds() {
+        assert_eq!(describe_expression_kind(&ast::Expr::Null), "null literal");
         assert_eq!(
-            describe_expression_kind(&Expression::Null),
-            "null literal"
-        );
-        assert_eq!(
-            describe_expression_kind(&Expression::Boolean(true)),
+            describe_expression_kind(&ast::Expr::Boolean(true)),
             "boolean literal"
         );
         assert_eq!(
-            describe_expression_kind(&Expression::Number(1.0)),
+            describe_expression_kind(&ast::Expr::Number(1.0)),
             "number literal"
         );
         assert_eq!(
-            describe_expression_kind(&Expression::String("x".to_owned())),
+            describe_expression_kind(&ast::Expr::String("x".to_owned())),
             "string literal"
         );
         assert_eq!(
-            describe_expression_kind(&Expression::Field("x".to_owned())),
+            describe_expression_kind(&ast::Expr::Field("x".to_owned())),
             "field reference"
         );
         assert_eq!(
-            describe_expression_kind(&Expression::Binary(
-                BinaryOperator::Add,
-                Box::new(Expression::Number(1.0)),
-                Box::new(Expression::Number(2.0)),
+            describe_expression_kind(&ast::Expr::Binary(
+                ast::BinaryOp::Add,
+                Box::new(ast::Expr::Number(1.0)),
+                Box::new(ast::Expr::Number(2.0)),
             )),
             "binary expression"
         );
         assert_eq!(
-            describe_expression_kind(&Expression::Not(Box::new(Expression::Null))),
+            describe_expression_kind(&ast::Expr::Not(Box::new(ast::Expr::Null))),
             "negation expression"
         );
         assert_eq!(
-            describe_expression_kind(&Expression::Call("f".to_owned(), vec![])),
+            describe_expression_kind(&ast::Expr::Call("f".to_owned(), vec![])),
             "function call"
         );
     }
@@ -606,13 +593,13 @@ mod tests {
     #[test]
     fn stats_call_with_multiple_args_error() {
         // stats sum(a, b) — two args, should fail
-        let cmd = Command::Stats {
+        let cmd = ast::Command::Stats {
             aggregates: vec![(
-                Expression::Call(
+                ast::Expr::Call(
                     "sum".to_owned(),
                     vec![
-                        Expression::Field("a".to_owned()),
-                        Expression::Field("b".to_owned()),
+                        ast::Expr::Field("a".to_owned()),
+                        ast::Expr::Field("b".to_owned()),
                     ],
                 ),
                 None,
@@ -632,10 +619,10 @@ mod tests {
 
     #[test]
     fn snapshot_where_command() {
-        let cmd = Command::Where(Expression::Binary(
-            BinaryOperator::NotEqual,
-            Box::new(Expression::Field("status".to_owned())),
-            Box::new(Expression::Number(404.0)),
+        let cmd = ast::Command::Where(ast::Expr::Binary(
+            ast::BinaryOp::NotEqual,
+            Box::new(ast::Expr::Field("status".to_owned())),
+            Box::new(ast::Expr::Number(404.0)),
         ));
         let result = convert_command(cmd).expect("should convert");
         insta::assert_debug_snapshot!("where_command", result);
@@ -643,18 +630,15 @@ mod tests {
 
     #[test]
     fn snapshot_stats_command() {
-        let cmd = Command::Stats {
+        let cmd = ast::Command::Stats {
             aggregates: vec![
                 (
-                    Expression::Call(
-                        "sum".to_owned(),
-                        vec![Expression::Field("bytes".to_owned())],
-                    ),
+                    ast::Expr::Call("sum".to_owned(), vec![ast::Expr::Field("bytes".to_owned())]),
                     Some("total_bytes".to_owned()),
                 ),
-                (Expression::Call("count".to_owned(), vec![]), None),
+                (ast::Expr::Call("count".to_owned(), vec![]), None),
             ],
-            by: vec![Expression::Field("method".to_owned())],
+            by: vec![ast::Expr::Field("method".to_owned())],
         };
         let result = convert_command(cmd).expect("should convert");
         insta::assert_debug_snapshot!("stats_command", result);

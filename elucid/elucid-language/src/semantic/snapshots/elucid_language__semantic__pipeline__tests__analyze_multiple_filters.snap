@@ -15,7 +15,7 @@ Pipeline {
             Binary(
                 GreaterThan,
                 Field(
-                    IrFieldRef {
+                    FieldRef {
                         name: "a",
                     },
                 ),
@@ -30,7 +30,7 @@ Pipeline {
             Binary(
                 LessThan,
                 Field(
-                    IrFieldRef {
+                    FieldRef {
                         name: "b",
                     },
                 ),
@@ -45,11 +45,11 @@ Pipeline {
             [
                 SortSpec {
                     expr: Field(
-                        IrFieldRef {
+                        FieldRef {
                             name: "a",
                         },
                     ),
-                    descending: false,
+                    order: Ascending,
                 },
             ],
         ),

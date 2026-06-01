@@ -7,7 +7,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::expr::{AggregateFunction, ScalarFunction};
 use datafusion::logical_expr::{BinaryExpr, LogicalPlan, LogicalPlanBuilder, Operator, SortExpr};
 use datafusion::prelude::*;
-use elucid_language::{BinaryOperator, Command, Expression, Query, SortOrder};
+use elucid_language::ast;
 
 pub struct QueryPlanner<'a> {
     context: &'a SessionContext,
@@ -18,18 +18,19 @@ impl<'a> QueryPlanner<'a> {
         Self { context: ctx }
     }
 
-    pub async fn create_logical_plan(&self, query: Query) -> Result<LogicalPlan> {
+    pub async fn create_logical_plan(&self, query: ast::Query) -> Result<LogicalPlan> {
+        let (source, commands) = query.into_parts();
         let table_provider = self
             .context
-            .table_provider(&query.source)
+            .table_provider(&source)
             .await
             .map_err(|error| {
-                DataFusionError::Plan(format!("Table '{}' not found: {}", query.source, error))
+                DataFusionError::Plan(format!("Table '{}' not found: {}", source, error))
             })?;
         let table_source = DefaultTableSource::new(table_provider);
 
-        let mut builder = LogicalPlanBuilder::scan(&query.source, Arc::new(table_source), None)?;
-        for command in query.commands {
+        let mut builder = LogicalPlanBuilder::scan(&source, Arc::new(table_source), None)?;
+        for command in commands {
             builder = self.apply_command(builder, command)?;
         }
         builder.build()
@@ -38,36 +39,38 @@ impl<'a> QueryPlanner<'a> {
     fn apply_command(
         &self,
         builder: LogicalPlanBuilder,
-        command: Command,
+        command: ast::Command,
     ) -> Result<LogicalPlanBuilder> {
         match command {
-            Command::Where(expression) => {
+            ast::Command::Where(expression) => {
                 let expression = self.map_expression(expression)?;
                 builder.filter(expression)
             }
-            Command::Sort(sort_expressions) => {
+            ast::Command::Sort(sort_expressions) => {
                 let sort_expressions: Vec<SortExpr> = sort_expressions
                     .into_iter()
                     .map(|sort_expression| {
-                        let expression = self.map_expression(sort_expression.expression)?;
-                        let ascending = match sort_expression.order {
-                            SortOrder::Ascending => true,
-                            SortOrder::Descending => false,
+                        let (expression, order) = sort_expression.into_parts();
+                        let expression = self.map_expression(expression)?;
+                        let ascending = match order {
+                            ast::SortOrder::Ascending => true,
+                            ast::SortOrder::Descending => false,
+                            _ => true,
                         };
                         Ok(expression.sort(ascending, false))
                     })
                     .collect::<Result<_>>()?;
                 builder.sort(sort_expressions)
             }
-            Command::Head(n) => builder.limit(0, Some(n as usize)),
-            Command::Fields(expressions) => {
+            ast::Command::Head(n) => builder.limit(0, Some(n as usize)),
+            ast::Command::Fields(expressions) => {
                 let expressions: Vec<Expr> = expressions
                     .into_iter()
                     .map(|e| self.map_expression(e))
                     .collect::<Result<_>>()?;
                 builder.project(expressions)
             }
-            Command::Stats { aggregates, by } => {
+            ast::Command::Stats { aggregates, by } => {
                 let group_expressions: Vec<Expr> = by
                     .into_iter()
                     .map(|expression| self.map_expression(expression))
@@ -84,22 +87,26 @@ impl<'a> QueryPlanner<'a> {
 
                 builder.aggregate(group_expressions, aggregate_expressions)
             }
+            _ => Err(DataFusionError::Plan(format!(
+                "unsupported command: {:?}",
+                command
+            ))),
         }
     }
 
-    fn map_expression(&self, expression: Expression) -> Result<Expr> {
+    fn map_expression(&self, expression: ast::Expr) -> Result<Expr> {
         match expression {
-            Expression::Null => Ok(lit(Null)),
-            Expression::Boolean(v) => Ok(lit(v)),
-            Expression::Number(v) => Ok(lit(v)),
-            Expression::String(v) => Ok(lit(v)),
-            Expression::Field(v) => Ok(col(v)),
-            Expression::Binary(operator, left, right) => {
+            ast::Expr::Null => Ok(lit(Null)),
+            ast::Expr::Boolean(v) => Ok(lit(v)),
+            ast::Expr::Number(v) => Ok(lit(v)),
+            ast::Expr::String(v) => Ok(lit(v)),
+            ast::Expr::Field(v) => Ok(col(v)),
+            ast::Expr::Binary(operator, left, right) => {
                 let left = Box::new(self.map_expression(*left)?);
                 let right = Box::new(self.map_expression(*right)?);
                 match operator {
-                    BinaryOperator::And => Ok(left.and(*right)),
-                    BinaryOperator::Or => Ok(left.or(*right)),
+                    ast::BinaryOp::And => Ok(left.and(*right)),
+                    ast::BinaryOp::Or => Ok(left.or(*right)),
                     _ => Ok(Expr::BinaryExpr(BinaryExpr {
                         left,
                         op: self.map_operator(operator)?,
@@ -107,8 +114,8 @@ impl<'a> QueryPlanner<'a> {
                     })),
                 }
             }
-            Expression::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
-            Expression::Call(function_name, arguments) => {
+            ast::Expr::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
+            ast::Expr::Call(function_name, arguments) => {
                 let mut arguments: Vec<Expr> = arguments
                     .into_iter()
                     .map(|argument| self.map_expression(argument))
@@ -140,27 +147,35 @@ impl<'a> QueryPlanner<'a> {
                     function_name,
                 )))
             }
+            _ => Err(DataFusionError::Plan(format!(
+                "unsupported expression: {:?}",
+                expression
+            ))),
         }
     }
 
-    fn map_operator(&self, operator: BinaryOperator) -> Result<Operator> {
+    fn map_operator(&self, operator: ast::BinaryOp) -> Result<Operator> {
         match operator {
-            BinaryOperator::Add => Ok(Operator::Plus),
-            BinaryOperator::Subtract => Ok(Operator::Minus),
-            BinaryOperator::Multiply => Ok(Operator::Multiply),
-            BinaryOperator::Divide => Ok(Operator::Divide),
-            BinaryOperator::Equal => Ok(Operator::Eq),
-            BinaryOperator::NotEqual => Ok(Operator::NotEq),
-            BinaryOperator::GreaterThan => Ok(Operator::Gt),
-            BinaryOperator::GreaterThanOrEqual => Ok(Operator::GtEq),
-            BinaryOperator::LessThan => Ok(Operator::Lt),
-            BinaryOperator::LessThanOrEqual => Ok(Operator::LtEq),
-            BinaryOperator::And => {
+            ast::BinaryOp::Add => Ok(Operator::Plus),
+            ast::BinaryOp::Subtract => Ok(Operator::Minus),
+            ast::BinaryOp::Multiply => Ok(Operator::Multiply),
+            ast::BinaryOp::Divide => Ok(Operator::Divide),
+            ast::BinaryOp::Equal => Ok(Operator::Eq),
+            ast::BinaryOp::NotEqual => Ok(Operator::NotEq),
+            ast::BinaryOp::GreaterThan => Ok(Operator::Gt),
+            ast::BinaryOp::GreaterThanOrEqual => Ok(Operator::GtEq),
+            ast::BinaryOp::LessThan => Ok(Operator::Lt),
+            ast::BinaryOp::LessThanOrEqual => Ok(Operator::LtEq),
+            ast::BinaryOp::And => {
                 unreachable!("Logical 'and' should be handled in expression builder")
             }
-            BinaryOperator::Or => {
+            ast::BinaryOp::Or => {
                 unreachable!("Logical 'or' should be handled in expression builder")
             }
+            _ => Err(DataFusionError::Plan(format!(
+                "unsupported operator: {:?}",
+                operator
+            ))),
         }
     }
 }

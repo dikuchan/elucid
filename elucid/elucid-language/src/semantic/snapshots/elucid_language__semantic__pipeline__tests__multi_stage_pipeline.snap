@@ -15,7 +15,7 @@ Pipeline {
             Binary(
                 Equal,
                 Field(
-                    IrFieldRef {
+                    FieldRef {
                         name: "status",
                     },
                 ),
@@ -30,11 +30,11 @@ Pipeline {
             [
                 SortSpec {
                     expr: Field(
-                        IrFieldRef {
+                        FieldRef {
                             name: "count",
                         },
                     ),
-                    descending: true,
+                    order: Descending,
                 },
             ],
         ),

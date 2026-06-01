@@ -66,7 +66,7 @@ pub(crate) fn validate_pipeline(pipeline: &Pipeline) -> Result<(), Vec<SemanticE
 mod tests {
     use super::*;
     use crate::ir::{
-        AggregateExpr, IrExpr, IrFieldRef, SortSpec, SourceSpec, TimeRange,
+        AggregateExpr, Expr, FieldRef, SortOrder, SortSpec, SourceSpec, TimeRange,
     };
 
     /// Helper: build a pipeline from the given stages.
@@ -85,8 +85,8 @@ mod tests {
     /// Helper: a sort-by-count-descending stage.
     fn sort_stage() -> PipelineStage {
         PipelineStage::Sort(vec![SortSpec::new(
-            IrExpr::Field(IrFieldRef::new("count".to_owned())),
-            true,
+            Expr::Field(FieldRef::new("count".to_owned())),
+            SortOrder::Descending,
         )])
     }
 
@@ -97,7 +97,7 @@ mod tests {
 
     /// Helper: a filter stage (`where x > 5`).
     fn filter_stage() -> PipelineStage {
-        PipelineStage::Filter(IrExpr::Field(IrFieldRef::new("x".to_owned())))
+        PipelineStage::Filter(Expr::Field(FieldRef::new("x".to_owned())))
     }
 
     // ── Rule 1: at most one Aggregate ────────────────────────────────────
