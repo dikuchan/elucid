@@ -12,7 +12,7 @@ Query {
                     "name",
                 ),
                 String(
-                    "\"O'Conner\"",
+                    "O'Conner",
                 ),
             ),
         ),

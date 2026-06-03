@@ -134,5 +134,10 @@ fn callback_integer<'a>(lexer: &mut Lexer<'a, Token<'a>>) -> Option<i64> {
 }
 
 fn callback_string<'a>(lexer: &mut Lexer<'a, Token<'a>>) -> &'a str {
-    lexer.slice()
+    let s = lexer.slice();
+    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }
