@@ -15,7 +15,7 @@ pub async fn start(context: &Context) -> anyhow::Result<()> {
         DefaultPromptSegment::Empty,
     );
 
-    println!("Lantern REPL v0.1.0");
+    println!("Elucid REPL v0.1.0");
     println!("Type 'exit' or Ctrl-C to quit.");
 
     loop {
@@ -38,9 +38,8 @@ pub async fn start(context: &Context) -> anyhow::Result<()> {
                     Ok(data) => {
                         data.show().await?;
                     }
-                    Err(_) => {
-                        // Engine prints error itself.
-                        // TODO: Return error instead.
+                    Err(e) => {
+                        eprintln!("error: {e}");
                     }
                 }
             }

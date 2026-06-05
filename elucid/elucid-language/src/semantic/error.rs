@@ -87,7 +87,7 @@ pub struct ParseError {
 
 impl ParseError {
     /// Converts a borrowed [`ParserError`] into an owned [`ParseError`]
-    /// by capturing the formatted error messages.
+    /// by capturing human-readable error messages.
     pub(crate) fn from_parser_error(error: &ParserError<'_>, _source: &str) -> Self {
         let messages = vec![error.to_string()];
         Self { messages }

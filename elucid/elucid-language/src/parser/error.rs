@@ -43,9 +43,18 @@ impl<'a> ParserError<'a> {
 
 impl fmt::Display for ParserError<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for error in self.0.iter() {
-            let report = Self::new_error_report(error);
-            report.fmt(f)?;
+        for (i, error) in self.0.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            let span = error.span().to_owned();
+            let reason = error.reason().to_string();
+            write!(
+                f,
+                "parse error at {}..{}: {reason}",
+                span.start(),
+                span.end()
+            )?;
         }
         Ok(())
     }
