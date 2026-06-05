@@ -257,8 +257,8 @@ description: Implement idiomatic, safe and efficient Rust code.
 
 ## Documentation
 
-- Public items get doc comments (`///`) with a summary line.
-- Document panics (`# Panics`), errors (`# Errors`), and safety (`# Safety`) sections when applicable.
+- First and foremost: **DON'T** add comments just for the sake of it. Write self-explanatory code in the first place. Write a doc comment only when it's really needed (e.g. complex invariants).
+- Document panics (`# Panics`), errors (`# Errors`), and safety (`# Safety`) sections **WHEN APPLICABLE**. Not all errors deserve a dedicated section.
 - Examples in doc comments use `?` for error handling, not `unwrap()`.
 
 # Dependencies
