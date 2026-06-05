@@ -7,16 +7,19 @@ use crate::planner::QueryPlanner;
 
 pub struct Context {
     context: SessionContext,
-    data_dir_path: PathBuf,
+    data_dir: PathBuf,
 }
 
 impl Context {
-    pub fn new<P: AsRef<Path>>(data_dir_path: P) -> Self {
-        let config = SessionConfig::new().with_information_schema(true);
+    pub fn new<P: AsRef<Path>>(data_dir: P) -> Self {
+        let config = SessionConfig::new().with_information_schema(true).set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
         let context = SessionContext::new_with_config(config);
         Self {
             context,
-            data_dir_path: data_dir_path.as_ref().to_owned(),
+            data_dir: data_dir.as_ref().to_owned(),
         }
     }
 
@@ -35,7 +38,7 @@ impl Context {
     }
 
     async fn register_table(&self, table_name: &str) -> Result<()> {
-        let table_path = self.data_dir_path.join(table_name);
+        let table_path = self.data_dir.join(table_name);
         if !table_path.exists() {
             return Err(DataFusionError::Execution(format!(
                 "Table '{}' does not exist (directory not found: {:?})",

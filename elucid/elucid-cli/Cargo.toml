@@ -8,7 +8,9 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 nu-ansi-term = { workspace = true }
 reedline = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+uuid = { workspace = true }
 
 elucid-engine = { workspace = true }
+elucid-ingest = { workspace = true }
 elucid-language = { workspace = true }

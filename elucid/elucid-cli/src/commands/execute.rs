@@ -7,7 +7,7 @@ use clap::Args;
 use elucid_engine::Context;
 
 use crate::command::Command;
-use crate::utils::get_data_dir_path;
+use crate::utils::get_data_dir;
 
 #[derive(Args)]
 pub struct ExecuteCommand {
@@ -19,9 +19,9 @@ pub struct ExecuteCommand {
     #[arg(long = "file", short = 'f', value_name = "FILE")]
     pub file_path: Option<PathBuf>,
 
-    /// Path to the data directory. Defaults to `$HOME/.lantern/data`.
+    /// Path to the data directory. Defaults to `$HOME/.elucid/data`.
     #[arg(long = "data-dir", short = 'd', value_name = "DATA_DIR")]
-    pub data_dir_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
 }
 
 impl ExecuteCommand {
@@ -30,22 +30,18 @@ impl ExecuteCommand {
         let _ = input.read_to_end(&mut buffer)?;
         let source = String::from_utf8(buffer)?;
 
-        let data_dir_path = get_data_dir_path(self.data_dir_path.clone())?;
-        if !data_dir_path.exists() {
+        let data_dir = get_data_dir(self.data_dir.clone())?;
+        if !data_dir.exists() {
             return Err(anyhow!("Data directory doesn't exist"));
         }
 
-        self.execute_query(&source, data_dir_path).await
+        self.execute_query(&source, data_dir).await
     }
 
-    async fn execute_query<P: AsRef<Path>>(
-        &self,
-        source: &str,
-        data_dir_path: P,
-    ) -> anyhow::Result<()> {
-        let context = Context::new(data_dir_path);
-        let data = context.execute(&source).await?;
-        data.show().await?;
+    async fn execute_query<P: AsRef<Path>>(&self, source: &str, data_dir: P) -> anyhow::Result<()> {
+        let context = Context::new(data_dir);
+        let df = context.execute(&source).await?;
+        df.show().await?;
 
         Ok(())
     }

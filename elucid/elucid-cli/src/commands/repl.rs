@@ -6,23 +6,23 @@ use elucid_engine::Context;
 
 use crate::command::Command;
 use crate::repl;
-use crate::utils::get_data_dir_path;
+use crate::utils::get_data_dir;
 
 #[derive(Args)]
 pub struct ReplCommand {
-    /// Path to the data directory. Defaults to `$HOME/.lantern/data`.
+    /// Path to the data directory. Defaults to `$HOME/.elucid/data`.
     #[arg(long = "data-dir", short = 'd', value_name = "DATA_DIR")]
-    pub data_dir_path: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
 }
 
 impl Command for ReplCommand {
     async fn execute(&self) -> anyhow::Result<()> {
-        let data_dir_path = get_data_dir_path(self.data_dir_path.clone())?;
-        if !data_dir_path.exists() {
-            return Err(anyhow!("Data directory doesn't exist"));
+        let data_dir = get_data_dir(self.data_dir.clone())?;
+        if !data_dir.exists() {
+            return Err(anyhow!("Data dir doesn't exist"));
         }
 
-        let context = Context::new(data_dir_path);
+        let context = Context::new(data_dir);
         repl::start(&context).await?;
 
         Ok(())
