@@ -1,0 +1,12 @@
+[package]
+name = "elucid-tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+datafusion = { workspace = true }
+elucid-engine = { workspace = true }
+elucid-ingest = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
+tempfile = "3"

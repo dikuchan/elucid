@@ -1573,6 +1573,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "elucid-tests"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "datafusion",
+ "elucid-engine",
+ "elucid-ingest",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
