@@ -1,0 +1,10 @@
+{"_ts":"2025-06-05T08:12:01Z","method":"GET","path":"/api/users","status":200,"bytes":15384,"duration_ms":23,"user_agent":"Mozilla/5.0"}
+{"_ts":"2025-06-05T08:12:02Z","method":"POST","path":"/api/orders","status":201,"bytes":512,"duration_ms":89,"request_id":"a1b2c3"}
+{"_ts":"2025-06-05T08:12:03Z","method":"GET","path":"/api/products","status":200,"bytes":42300,"duration_ms":45,"cache":"HIT"}
+{"_ts":"2025-06-05T08:12:04Z","method":"DELETE","path":"/api/orders/42","status":403,"bytes":128,"duration_ms":12,"reason":"insufficient_permissions"}
+{"_ts":"2025-06-05T08:12:05Z","method":"GET","path":"/static/app.js","status":304,"bytes":0,"duration_ms":3,"cdn":"cloudfront"}
+{"_ts":"2025-06-05T08:12:06Z","method":"PUT","path":"/api/users/7","status":200,"bytes":320,"duration_ms":67}
+{"_ts":"2025-06-05T08:12:07Z","method":"GET","path":"/api/users","status":500,"bytes":96,"duration_ms":302,"error":"db_connection_timeout","retry":true}
+{"_ts":"2025-06-05T08:12:08Z","method":"POST","path":"/api/login","status":401,"bytes":64,"duration_ms":8,"attempt":3,"ip":"10.0.0.5"}
+{"_ts":"2025-06-05T08:12:09Z","method":"GET","path":"/api/products/19","status":200,"bytes":8700,"duration_ms":19}
+{"_ts":"2025-06-05T08:12:10Z","method":"GET","path":"/health","status":200,"bytes":16,"duration_ms":1,"balancer":"nginx"}

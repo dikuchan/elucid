@@ -1,0 +1,15 @@
+table: http_logs
+columns:
+  - name: _ts
+    type: timestamp
+    time: true
+  - name: method
+    type: utf8
+  - name: path
+    type: utf8
+  - name: status
+    type: int64
+  - name: bytes
+    type: uint64
+  - name: duration_ms
+    type: int64
