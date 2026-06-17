@@ -7,8 +7,10 @@ edition.workspace = true
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 nu-ansi-term = { workspace = true }
+object_store = "0.12"
 reedline = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+url = "2"
 uuid = { workspace = true }
 
 elucid-engine = { workspace = true }

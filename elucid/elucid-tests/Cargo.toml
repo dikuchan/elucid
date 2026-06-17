@@ -10,3 +10,11 @@ elucid-engine = { workspace = true }
 elucid-ingest = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
 tempfile = "3"
+
+[dev-dependencies]
+bytes = "1"
+futures = "0.3"
+object_store = { version = "0.12", features = ["aws"] }
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+testcontainers-modules = { version = "0.15", features = ["localstack"] }
+url = "2"

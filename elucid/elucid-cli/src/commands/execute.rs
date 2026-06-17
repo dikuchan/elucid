@@ -1,13 +1,11 @@
 use std::fs::File;
 use std::io::{Read, stdin};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use anyhow::anyhow;
 use clap::Args;
-use elucid_engine::Context;
 
 use crate::command::Command;
-use crate::utils::get_data_dir;
+use crate::utils::{build_engine_context, resolve_data_dir};
 
 #[derive(Args)]
 pub struct ExecuteCommand {
@@ -19,9 +17,10 @@ pub struct ExecuteCommand {
     #[arg(long = "file", short = 'f', value_name = "FILE")]
     pub file_path: Option<PathBuf>,
 
-    /// Path to the data directory. Defaults to `$HOME/.elucid/data`.
+    /// Data directory: a local path or object-store URL (e.g. `s3://bucket/prefix`).
+    /// Defaults to `$HOME/.elucid/data`.
     #[arg(long = "data-dir", short = 'd', value_name = "DATA_DIR")]
-    pub data_dir: Option<PathBuf>,
+    pub data_dir: Option<String>,
 }
 
 impl ExecuteCommand {
@@ -30,16 +29,9 @@ impl ExecuteCommand {
         let _ = input.read_to_end(&mut buffer)?;
         let source = String::from_utf8(buffer)?;
 
-        let data_dir = get_data_dir(self.data_dir.clone())?;
-        if !data_dir.exists() {
-            return Err(anyhow!("Data directory doesn't exist"));
-        }
+        let config = resolve_data_dir(self.data_dir.clone())?;
+        let context = build_engine_context(&config)?;
 
-        self.execute_query(&source, data_dir).await
-    }
-
-    async fn execute_query<P: AsRef<Path>>(&self, source: &str, data_dir: P) -> anyhow::Result<()> {
-        let context = Context::new(data_dir);
         let df = context.execute(&source).await?;
         df.show().await?;
 

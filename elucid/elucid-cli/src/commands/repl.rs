@@ -1,28 +1,21 @@
-use std::path::PathBuf;
-
-use anyhow::anyhow;
 use clap::Args;
-use elucid_engine::Context;
 
 use crate::command::Command;
 use crate::repl;
-use crate::utils::get_data_dir;
+use crate::utils::{build_engine_context, resolve_data_dir};
 
 #[derive(Args)]
 pub struct ReplCommand {
-    /// Path to the data directory. Defaults to `$HOME/.elucid/data`.
+    /// Data directory: a local path or object-store URL (e.g. `s3://bucket/prefix`).
+    /// Defaults to `$HOME/.elucid/data`.
     #[arg(long = "data-dir", short = 'd', value_name = "DATA_DIR")]
-    pub data_dir: Option<PathBuf>,
+    pub data_dir: Option<String>,
 }
 
 impl Command for ReplCommand {
     async fn execute(&self) -> anyhow::Result<()> {
-        let data_dir = get_data_dir(self.data_dir.clone())?;
-        if !data_dir.exists() {
-            return Err(anyhow!("Data dir doesn't exist"));
-        }
-
-        let context = Context::new(data_dir);
+        let config = resolve_data_dir(self.data_dir.clone())?;
+        let context = build_engine_context(&config)?;
         repl::start(&context).await?;
 
         Ok(())

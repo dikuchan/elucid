@@ -5,5 +5,14 @@ edition.workspace = true
 
 [dependencies]
 datafusion = { workspace = true }
+object_store = "0.12"
+url = "2"
 
 elucid-language = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true }
+bytes = "1"
+parquet = { workspace = true, features = ["arrow"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt"] }
