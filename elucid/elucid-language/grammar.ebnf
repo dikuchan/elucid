@@ -11,42 +11,44 @@ char    = ? any character except '"' and '\' ?    ;
 escape  = "\" , ( "t" | "n" | "\"" | "\" | "u" )  ;
 
 (* ---- Keywords ---- *)
-(* ident must not match any keyword. Enforced at the lexer level. *)
+(* Command keywords are contextual: they may also be used as names where the
+   grammar expects an identifier. Operator and literal keywords stay reserved. *)
 
-keyword = "dataset" | "fields" | "where" | "sort" | "head" | "stats" | "by" | "and" | "or" | "not" | "null" | "true" | "false" ;
+command_keyword = "source" | "project" | "filter" | "sort" | "take" | "summarize" ;
+keyword         = command_keyword | "by" | "and" | "or" | "not" | "null" | "true" | "false" ;
+name            = ident | command_keyword ;
 
 (* ---- Top-level ---- *)
 
-query = "dataset" , ident , ( "|" , command )* ;
+query = "source" , name , ( "|" , command )* ;
 
 (* ---- Commands ---- *)
 
-command = fields_cmd
-        | where_cmd
-        | sort_cmd
-        | head_cmd
-        | stats_cmd
+command = project_command
+        | filter_command
+        | sort_command
+        | take_command
+        | summarize_command
         ;
 
-fields_cmd = "fields" , expression , { "," , expression } ;
+project_command = "project" , expression , { "," , expression } ;
 
-where_cmd = "where" , expression ;
+filter_command = "filter" , expression ;
 
-sort_cmd  = "sort" , [ "by" ] , sort_item , { "," , sort_item } ;
-sort_item = [ "+" | "-" ] , sort_atom ;
-            (* "+" = ascending (default), "-" = descending *)
-sort_atom = call
-           | field
-           | "(" , expression , ")"
-           ;
+sort_command      = "sort" , [ "by" ] , sort_command_item , { "," , sort_command_item } ;
+sort_command_item = [ "+" | "-" ] , sort_command_atom ;
+sort_command_atom = call
+                  | field
+                  | "(" , expression , ")"
+                  ;
 
-head_cmd  = "head" , integer ;
+take_command = "take" , integer ;
 
-stats_cmd  = "stats" , stats_item , { "," , stats_item } , [ "by" , expression , { "," , expression } ] ;
-stats_item = ident , "=" , expression    (* aliased aggregate *)
-           | call
-           | field
-           ;
+summarize_command      = "summarize" , summarize_command_item , { "," , summarize_command_item } , [ "by" , expression , { "," , expression } ] ;
+summarize_command_item = name , "=" , expression
+                       | call
+                       | field
+                       ;
 
 (* ---- Expressions ---- *)
 (* All operators are left-associative (except not, which is prefix).
@@ -58,32 +60,31 @@ stats_item = ident , "=" , expression    (* aliased aggregate *)
      and
      or                                                           *)
 
-expression          = or_expr ;
+expression = or_expression ;
 
-or_expr             = and_expr , { "or" , and_expr } ;
+or_expression = and_expression , { "or" , and_expression } ;
 
-and_expr            = comparison_expr , { "and" , comparison_expr } ;
+and_expression = comparison_expression , { "and" , comparison_expression } ;
 
-comparison_expr     = additive_expr , { ( "==" | "!=" | ">" | ">=" | "<" | "<=" ) , additive_expr } ;
+comparison_expression = additive_expression , { ( "==" | "!=" | ">" | ">=" | "<" | "<=" ) , additive_expression } ;
 
-additive_expr       = multiplicative_expr , { ( "+" | "-" ) , multiplicative_expr } ;
+additive_expression = multiplicative_expression , { ( "+" | "-" ) , multiplicative_expression } ;
 
-multiplicative_expr = unary_expr , { ( "*" | "/" ) , unary_expr } ;
+multiplicative_expression = unary_expression , { ( "*" | "/" ) , unary_expression } ;
 
-unary_expr          = "not" , unary_expr
-                    | atom
-                    ;
+unary_expression = "not" , unary_expression
+                 | atom
+                 ;
 
-atom                = integer
-                    | string
-                    | "null"
-                    | "true" | "false"
-                    | call
-                    | field
-                    | "(" , expression , ")"
-                    ;
+atom = integer
+     | string
+     | "null"
+     | "true" | "false"
+     | call
+     | field
+     | "(" , expression , ")"
+     ;
 
-call                = ident , "(" , [ expression , { "," , expression } ] , ")" ;
+call = name , "(" , [ expression , { "," , expression } ] , ")" ;
 
-field               = ident ;
-                    (* a bare identifier not followed by "(" *)
+field = name ; (* a bare identifier not followed by "(" *)

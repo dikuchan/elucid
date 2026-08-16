@@ -13,6 +13,23 @@ use crate::span::Span;
 
 pub use error::ParserError;
 
+fn identifier<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, String, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
+where
+    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
+{
+    select! {
+        Token::Identifier(identifier) => identifier.to_owned(),
+        Token::KeywordSource => "source".to_owned(),
+        Token::KeywordProject => "project".to_owned(),
+        Token::KeywordFilter => "filter".to_owned(),
+        Token::KeywordSort => "sort".to_owned(),
+        Token::KeywordTake => "take".to_owned(),
+        Token::KeywordSummarize => "summarize".to_owned(),
+    }
+    .labelled("identifier")
+}
+
 pub fn parse(source: &'_ str) -> Result<Query, ParserError<'_>> {
     let input = new_input(source);
     query::parser()
@@ -62,55 +79,55 @@ mod tests {
     }
 
     test_snapshots! {
-        basic_dataset:
-            "dataset test",
+        basic_source:
+            "source test",
 
         basic_literal_filter:
-            "dataset test | where status == 200",
+            "source test | filter status == 200",
 
         math_precedence:
-            "dataset test | where a + b * c > 10",
+            "source test | filter a + b * c > 10",
 
         parenthesis_precedence:
-            "dataset test | where (a or b) and c",
+            "source test | filter (a or b) and c",
 
         and_or_precedence:
-            "dataset test | where a or b and c",
+            "source test | filter a or b and c",
 
         string_quoting:
-            r#"dataset test | where name == "O'Conner" "#,
+            r#"source test | filter name == "O'Conner" "#,
 
         null_literal:
-            "dataset test | where value == null",
+            "source test | filter value == null",
 
         boolean_literal:
-            "dataset test | where active == true and deleted == false",
+            "source test | filter active == true and deleted == false",
 
         not_operator:
-            "dataset test | where not active and not deleted == false",
+            "source test | filter not active and not deleted == false",
 
-        fields_cmd:
-            "dataset test | fields name, age, active",
+        project_cmd:
+            "source test | project name, age, active",
 
         sort_mixed:
-            "dataset test | sort by -count, +status, time",
+            "source test | sort by -count, +status, time",
 
         sort_parenthesized:
-            "dataset test | sort by -(a + b)",
+            "source test | sort by -(a + b)",
 
-        head:
-            "dataset test | head 10",
+        take:
+            "source test | take 10",
 
-        stats_aliased:
-            "dataset test | stats total = sum(bytes), count() by method",
+        summarize_aliased:
+            "source test | summarize total = sum(bytes), count() by method",
 
-        stats_field:
-            "dataset test | stats count() by method, status",
+        summarize_field:
+            "source test | summarize count() by method, status",
     }
 
     #[test]
     fn test_should_fail() {
-        let input = "dataset |";
+        let input = "source |";
         let ast = parse(input);
         assert!(ast.is_err());
 
@@ -119,13 +136,35 @@ mod tests {
 
     #[test]
     fn test_sort_rejects_literal() {
-        let input = "dataset test | sort by 3";
+        let input = "source test | sort by 3";
         assert!(parse(input).is_err());
     }
 
     #[test]
-    fn test_stats_rejects_literal() {
-        let input = "dataset test | stats 1 + 2";
+    fn test_summarize_rejects_literal() {
+        let input = "source test | summarize 1 + 2";
         assert!(parse(input).is_err());
+    }
+
+    #[test]
+    fn command_keywords_are_contextual_identifiers() {
+        let input = "source source | filter source == 1 | project filter";
+        assert!(parse(input).is_ok());
+    }
+
+    #[test]
+    fn legacy_command_names_are_rejected() {
+        for input in [
+            "dataset test",
+            "source test | where status == 200",
+            "source test | fields status",
+            "source test | head 10",
+            "source test | stats count()",
+        ] {
+            assert!(
+                parse(input).is_err(),
+                "legacy query unexpectedly parsed: {input}"
+            );
+        }
     }
 }

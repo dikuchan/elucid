@@ -26,7 +26,7 @@ pub use semantic::{AnalyzeError, ParseError, SemanticError};
 /// ```
 /// use elucid_language::analyze;
 ///
-/// let pipeline = analyze("dataset test | where status == 200 | head 10")?;
+/// let pipeline = analyze("source test | filter status == 200 | take 10")?;
 /// assert_eq!(pipeline.source().dataset(), "test");
 /// assert_eq!(pipeline.stages().len(), 2);
 /// # Ok::<(), elucid_language::AnalyzeError>(())

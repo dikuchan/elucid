@@ -144,7 +144,7 @@ mod tests {
         };
 
         let ctx = Context::with_storage_config(config);
-        let df = ctx.execute("dataset my_table").await.expect("execute");
+        let df = ctx.execute("source my_table").await.expect("execute");
 
         let results = df.collect().await.expect("collect");
         let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
@@ -164,7 +164,7 @@ mod tests {
         std::fs::write(&parquet_path, &parquet_bytes).expect("write parquet");
 
         let ctx = Context::new(tmp.path());
-        let df = ctx.execute("dataset test_table").await.expect("execute");
+        let df = ctx.execute("source test_table").await.expect("execute");
 
         let results = df.collect().await.expect("collect");
         let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();

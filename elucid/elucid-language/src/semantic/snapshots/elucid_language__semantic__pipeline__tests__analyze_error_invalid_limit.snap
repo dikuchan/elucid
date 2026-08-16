@@ -2,4 +2,4 @@
 source: elucid-language/src/semantic/pipeline.rs
 expression: err.to_string()
 ---
-limit value must be a positive integer, got 0
+take value must be a positive integer, got 0

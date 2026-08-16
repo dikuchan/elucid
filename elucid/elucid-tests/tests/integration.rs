@@ -96,7 +96,7 @@ async fn ingest_then_query_all_rows() {
 
     let ctx = Context::new(dir.path());
     let df = ctx
-        .execute("dataset test_logs")
+        .execute("source test_logs")
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -111,7 +111,7 @@ async fn ingest_then_query_filter_status_gte_400() {
 
     let ctx = Context::new(dir.path());
     let df = ctx
-        .execute("dataset test_logs | where status >= 400")
+        .execute("source test_logs | filter status >= 400")
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -126,7 +126,7 @@ async fn ingest_then_query_filter_source_nginx() {
 
     let ctx = Context::new(dir.path());
     let df = ctx
-        .execute("dataset test_logs | where source == \"nginx\"")
+        .execute("source test_logs | filter source == \"nginx\"")
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -141,13 +141,13 @@ async fn ingest_then_query_count() {
 
     let ctx = Context::new(dir.path());
     let df = ctx
-        .execute("dataset test_logs | stats count()")
+        .execute("source test_logs | summarize count()")
         .await
         .expect("query failed");
 
     let batches = df.collect().await.expect("collect failed");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 1, "stats count should return 1 row");
+    assert_eq!(total_rows, 1, "summarize count should return 1 row");
 
     let batch = &batches[0];
     let col = batch.column(0);

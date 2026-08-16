@@ -6,15 +6,7 @@ use crate::ast;
 use crate::lexer::Token;
 use crate::span::Span;
 
-use super::expression::expression_parser;
-
-fn identifier<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, String, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
-{
-    select! { Token::Identifier(i) => i.to_string() }.labelled("identifier")
-}
+use super::{expression::expression_parser, identifier};
 
 fn call_or_field<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, ast::Expression, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
@@ -39,30 +31,30 @@ where
     call.or(field).labelled("field or function call")
 }
 
-fn fields_cmd<'tokens, 'source: 'tokens, I>()
+fn project_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    just(Token::KeywordFields)
+    just(Token::KeywordProject)
         .ignore_then(
             expression_parser()
                 .separated_by(just(Token::Comma))
                 .collect(),
         )
-        .map(ast::Command::Fields)
-        .labelled("fields")
+        .map(ast::Command::Project)
+        .labelled("project")
 }
 
-fn where_cmd<'tokens, 'source: 'tokens, I>()
+fn filter_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    just(Token::KeywordWhere)
+    just(Token::KeywordFilter)
         .ignore_then(expression_parser())
-        .map(ast::Command::Where)
-        .labelled("where")
+        .map(ast::Command::Filter)
+        .labelled("filter")
 }
 
 fn sort_cmd<'tokens, 'source: 'tokens, I>()
@@ -92,18 +84,18 @@ where
         .labelled("sort")
 }
 
-fn head_cmd<'tokens, 'source: 'tokens, I>()
+fn take_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    just(Token::KeywordHead)
+    just(Token::KeywordTake)
         .ignore_then(select! { Token::Integer(n) => n }.labelled("integer"))
-        .map(ast::Command::Head)
-        .labelled("head")
+        .map(ast::Command::Take)
+        .labelled("take")
 }
 
-fn stats_cmd<'tokens, 'source: 'tokens, I>()
+fn summarize_cmd<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
@@ -115,7 +107,7 @@ where
 
     let unaliased = call_or_field().map(|expression| (expression, None));
 
-    let stats_item = choice((aliased, unaliased)).labelled("stats item");
+    let summarize_item = choice((aliased, unaliased)).labelled("summarize item");
 
     let by_clause = just(Token::KeywordBy)
         .ignore_then(
@@ -126,11 +118,11 @@ where
         .or_not()
         .map(|option| option.unwrap_or_default());
 
-    just(Token::KeywordStats)
-        .ignore_then(stats_item.separated_by(just(Token::Comma)).collect())
+    just(Token::KeywordSummarize)
+        .ignore_then(summarize_item.separated_by(just(Token::Comma)).collect())
         .then(by_clause)
-        .map(|(aggregates, by)| ast::Command::Stats { aggregates, by })
-        .labelled("stats")
+        .map(|(aggregates, by)| ast::Command::Summarize { aggregates, by })
+        .labelled("summarize")
 }
 
 pub fn command_parser<'tokens, 'source: 'tokens, I>()
@@ -139,11 +131,11 @@ where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
     choice((
-        fields_cmd(),
-        where_cmd(),
+        project_cmd(),
+        filter_cmd(),
         sort_cmd(),
-        head_cmd(),
-        stats_cmd(),
+        take_cmd(),
+        summarize_cmd(),
     ))
     .labelled("command")
 }

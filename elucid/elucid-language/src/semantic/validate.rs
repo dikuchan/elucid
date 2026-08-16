@@ -94,7 +94,7 @@ mod tests {
         ir::PipelineStage::Limit(n)
     }
 
-    /// Helper: a filter stage (`where x > 5`).
+    /// Helper: a filter stage (`filter x > 5`).
     fn filter_stage() -> ir::PipelineStage {
         ir::PipelineStage::Filter(ir::Expression::Field(ir::FieldRef::new("x".to_owned())))
     }
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn filter_after_aggregate_produces_error() {
-        // stats count() by host | where x > 5
+        // summarize count() by host | filter x > 5
         let pipeline = make_pipeline(vec![aggregate_stage(), filter_stage()]);
         let errors = validate_pipeline(&pipeline).expect_err("should fail");
         assert_eq!(errors.len(), 1);
@@ -134,14 +134,14 @@ mod tests {
 
     #[test]
     fn sort_and_limit_after_aggregate_is_valid() {
-        // stats count() by host | sort -count | head 10
+        // summarize count() by host | sort -count | take 10
         let pipeline = make_pipeline(vec![aggregate_stage(), sort_stage(), limit_stage(10)]);
         assert!(validate_pipeline(&pipeline).is_ok());
     }
 
     #[test]
     fn sort_limit_then_filter_after_aggregate_produces_error() {
-        // stats count() by host | sort -count | head 10 | where x > 5
+        // summarize count() by host | sort -count | take 10 | filter x > 5
         let pipeline = make_pipeline(vec![
             aggregate_stage(),
             sort_stage(),

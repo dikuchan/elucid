@@ -5,21 +5,21 @@ The formal grammar is defined in [`grammar.ebnf`](grammar.ebnf).
 ## Examples
 
 ```elucid
-dataset logs
+source logs
 
-dataset logs | where status >= 400
+source logs | filter status >= 400
 
-dataset logs | where method == "POST" and status != 200
+source logs | filter method == "POST" and status != 200
 
-dataset logs | sort by -count, +status
+source logs | sort by -count, +status
 
-dataset logs | head 100
+source logs | take 100
 
-dataset logs | aggr total = sum(bytes), count() by method, status
+source logs | summarize total = sum(bytes), count() by method, status
 
-dataset logs
-  | where status >= 500
-  | aggr count() by path
+source logs
+  | filter status >= 500
+  | summarize count() by path
   | sort by -count
-  | head 10
+  | take 10
 ```

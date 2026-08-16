@@ -17,18 +17,18 @@ pub fn tokenizer(source: &'_ str) -> impl Iterator<Item = (Token<'_>, Span)> {
 pub enum Token<'a> {
     Error,
 
-    #[token("dataset")]
-    KeywordDataset,
-    #[token("where")]
-    KeywordWhere,
-    #[token("fields")]
-    KeywordFields,
+    #[token("source")]
+    KeywordSource,
+    #[token("filter")]
+    KeywordFilter,
+    #[token("project")]
+    KeywordProject,
     #[token("sort")]
     KeywordSort,
-    #[token("head")]
-    KeywordHead,
-    #[token("stats")]
-    KeywordStats,
+    #[token("take")]
+    KeywordTake,
+    #[token("summarize")]
+    KeywordSummarize,
     #[token("by")]
     KeywordBy,
     #[token("not")]
@@ -92,12 +92,12 @@ pub enum Token<'a> {
 impl fmt::Display for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::KeywordDataset => write!(f, "dataset"),
-            Self::KeywordFields => write!(f, "fields"),
-            Self::KeywordWhere => write!(f, "where"),
+            Self::KeywordSource => write!(f, "source"),
+            Self::KeywordProject => write!(f, "project"),
+            Self::KeywordFilter => write!(f, "filter"),
             Self::KeywordSort => write!(f, "sort"),
-            Self::KeywordHead => write!(f, "head"),
-            Self::KeywordStats => write!(f, "stats"),
+            Self::KeywordTake => write!(f, "take"),
+            Self::KeywordSummarize => write!(f, "summarize"),
             Self::KeywordBy => write!(f, "by"),
             Self::KeywordNot => write!(f, "not"),
             Self::KeywordNull => write!(f, "null"),

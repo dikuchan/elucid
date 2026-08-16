@@ -13,22 +13,22 @@ pub enum SemanticError {
     /// The query pipeline contains no stages.
     EmptyPipeline,
 
-    /// More than one `stats` command was found in the pipeline.
+    /// More than one `summarize` command was found in the pipeline.
     MultipleAggregates,
 
-    /// A non-sort/limit command appeared after an aggregate (`stats`) command.
+    /// A non-sort/take command appeared after a `summarize` command.
     AggregateAfterAggregate,
 
-    /// The `limit` value is zero or negative.
+    /// The `take` value is zero or negative.
     InvalidLimitValue {
-        /// The invalid limit value that was provided.
+        /// The invalid take value that was provided.
         value: i64,
     },
 
-    /// A `fields` command was given with no field names.
+    /// A `project` command was given with no field names.
     EmptyFieldList,
 
-    /// A `stats` command was given with no aggregate expressions.
+    /// A `summarize` command was given with no aggregate expressions.
     EmptyAggregateMeasures,
 
     /// A `sort` command was given with no sort expressions.
@@ -43,24 +43,27 @@ impl fmt::Display for SemanticError {
         match self {
             Self::EmptyPipeline => write!(f, "query pipeline must contain at least one stage"),
             Self::MultipleAggregates => {
-                write!(f, "pipeline must not contain more than one 'stats' command")
+                write!(
+                    f,
+                    "pipeline must not contain more than one 'summarize' command"
+                )
             }
             Self::AggregateAfterAggregate => {
                 write!(
                     f,
-                    "only 'sort' and 'limit' commands may follow an aggregate ('stats') command"
+                    "only 'sort' and 'take' commands may follow a 'summarize' command"
                 )
             }
             Self::InvalidLimitValue { value } => {
-                write!(f, "limit value must be a positive integer, got {value}")
+                write!(f, "take value must be a positive integer, got {value}")
             }
             Self::EmptyFieldList => {
-                write!(f, "'fields' command requires at least one field name")
+                write!(f, "'project' command requires at least one field name")
             }
             Self::EmptyAggregateMeasures => {
                 write!(
                     f,
-                    "'stats' command requires at least one aggregate expression"
+                    "'summarize' command requires at least one aggregate expression"
                 )
             }
             Self::EmptySortSpec => {
@@ -163,7 +166,7 @@ mod tests {
         let err = SemanticError::MultipleAggregates;
         assert_eq!(
             err.to_string(),
-            "pipeline must not contain more than one 'stats' command"
+            "pipeline must not contain more than one 'summarize' command"
         );
     }
 
@@ -172,7 +175,7 @@ mod tests {
         let err = SemanticError::AggregateAfterAggregate;
         assert_eq!(
             err.to_string(),
-            "only 'sort' and 'limit' commands may follow an aggregate ('stats') command"
+            "only 'sort' and 'take' commands may follow a 'summarize' command"
         );
     }
 
@@ -181,7 +184,7 @@ mod tests {
         let err = SemanticError::InvalidLimitValue { value: -3 };
         assert_eq!(
             err.to_string(),
-            "limit value must be a positive integer, got -3"
+            "take value must be a positive integer, got -3"
         );
     }
 
@@ -190,7 +193,7 @@ mod tests {
         let err = SemanticError::InvalidLimitValue { value: 0 };
         assert_eq!(
             err.to_string(),
-            "limit value must be a positive integer, got 0"
+            "take value must be a positive integer, got 0"
         );
     }
 
@@ -199,7 +202,7 @@ mod tests {
         let err = SemanticError::EmptyFieldList;
         assert_eq!(
             err.to_string(),
-            "'fields' command requires at least one field name"
+            "'project' command requires at least one field name"
         );
     }
 
@@ -208,7 +211,7 @@ mod tests {
         let err = SemanticError::EmptyAggregateMeasures;
         assert_eq!(
             err.to_string(),
-            "'stats' command requires at least one aggregate expression"
+            "'summarize' command requires at least one aggregate expression"
         );
     }
 
@@ -255,7 +258,7 @@ mod tests {
         let err = AnalyzeError::Semantic(vec![SemanticError::MultipleAggregates]);
         assert_eq!(
             err.to_string(),
-            "pipeline must not contain more than one 'stats' command"
+            "pipeline must not contain more than one 'summarize' command"
         );
     }
 
@@ -267,8 +270,8 @@ mod tests {
         ]);
         let displayed = err.to_string();
         assert!(
-            displayed.contains("'fields' command requires at least one field name"),
-            "missing fields error: {displayed}"
+            displayed.contains("'project' command requires at least one field name"),
+            "missing project error: {displayed}"
         );
         assert!(
             displayed.contains("'sort' command requires at least one sort expression"),

@@ -94,16 +94,16 @@ impl SortExpression {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Command {
-    /// `where <expr>`. Filter rows by a predicate.
-    Where(Expression),
+    /// `filter <expr>`. Filter rows by a predicate.
+    Filter(Expression),
     /// `sort by <specs>`. Sort by one or more expressions.
     Sort(Vec<SortExpression>),
-    /// `head <n>`. Limit output rows.
-    Head(i64),
-    /// `fields <expr>, ...`. Project specific fields.
-    Fields(Vec<Expression>),
-    /// `stats <aggregates> [by <fields>]`. Aggregate with optional group-by.
-    Stats {
+    /// `take <n>`. Limit output rows.
+    Take(i64),
+    /// `project <expr>, ...`. Project specific fields.
+    Project(Vec<Expression>),
+    /// `summarize <aggregates> [by <fields>]`. Aggregate with optional group-by.
+    Summarize {
         /// Aggregate expressions paired with optional aliases.
         aggregates: Vec<(Expression, Option<String>)>,
         /// Group-by field expressions.

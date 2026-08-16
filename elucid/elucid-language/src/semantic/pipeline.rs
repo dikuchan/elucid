@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn source_only_no_stages() {
-        let pipeline = parse_and_convert("dataset test").expect("should convert");
+        let pipeline = parse_and_convert("source test").expect("should convert");
         assert_eq!(pipeline.source().dataset(), "test");
         assert!(pipeline.stages().is_empty());
     }
@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn single_filter_stage() {
         let pipeline =
-            parse_and_convert("dataset test | where status == 200").expect("should convert");
+            parse_and_convert("source test | filter status == 200").expect("should convert");
         assert_eq!(pipeline.source().dataset(), "test");
         assert_eq!(pipeline.stages().len(), 1);
         assert_eq!(
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn single_sort_stage() {
-        let pipeline = parse_and_convert("dataset test | sort by -count, +status, time")
+        let pipeline = parse_and_convert("source test | sort by -count, +status, time")
             .expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn single_limit_stage() {
-        let pipeline = parse_and_convert("dataset test | head 10").expect("should convert");
+        let pipeline = parse_and_convert("source test | take 10").expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
         assert_eq!(&pipeline.stages()[0], &ir::PipelineStage::Limit(10));
     }
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn single_project_stage() {
         let pipeline =
-            parse_and_convert("dataset test | fields name, age, active").expect("should convert");
+            parse_and_convert("source test | project name, age, active").expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
         let ir::PipelineStage::Project(fields) = &pipeline.stages()[0] else {
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn single_aggregate_stage() {
         let pipeline =
-            parse_and_convert("dataset test | stats total = sum(bytes), count() by method")
+            parse_and_convert("source test | summarize total = sum(bytes), count() by method")
                 .expect("should convert");
         assert_eq!(pipeline.stages().len(), 1);
 
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn multi_stage_pipeline() {
         let pipeline =
-            parse_and_convert("dataset test | where status == 200 | sort by -count | head 5")
+            parse_and_convert("source test | filter status == 200 | sort by -count | take 5")
                 .expect("should convert");
 
         assert_eq!(pipeline.source().dataset(), "test");
@@ -207,8 +207,8 @@ mod tests {
         let query = Query::new(
             "test".to_owned(),
             vec![
-                Command::Head(0),        // InvalidLimitValue
-                Command::Fields(vec![]), // EmptyFieldList
+                Command::Take(0),         // InvalidLimitValue
+                Command::Project(vec![]), // EmptyFieldList
             ],
         );
         let result = convert_query(&query);
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn snapshot_multi_stage_pipeline() {
         let pipeline =
-            parse_and_convert("dataset test | where status == 200 | sort by -count | head 5")
+            parse_and_convert("source test | filter status == 200 | sort by -count | take 5")
                 .expect("should convert");
         insta::assert_debug_snapshot!("multi_stage_pipeline", pipeline);
     }
@@ -232,14 +232,14 @@ mod tests {
     #[test]
     fn snapshot_aggregate_pipeline() {
         let pipeline =
-            parse_and_convert("dataset test | stats total = sum(bytes), count() by method")
+            parse_and_convert("source test | summarize total = sum(bytes), count() by method")
                 .expect("should convert");
         insta::assert_debug_snapshot!("aggregate_pipeline", pipeline);
     }
 
     #[test]
-    fn validation_rejects_two_stats_commands() {
-        let result = parse_and_convert("dataset logs | stats count() | stats sum(count)");
+    fn validation_rejects_two_summarize_commands() {
+        let result = parse_and_convert("source logs | summarize count() | summarize sum(count)");
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -247,8 +247,8 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_filter_after_stats() {
-        let result = parse_and_convert("dataset logs | stats count() | where x > 1");
+    fn validation_rejects_filter_after_summarize() {
+        let result = parse_and_convert("source logs | summarize count() | filter x > 1");
         assert!(result.is_err());
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -256,9 +256,9 @@ mod tests {
     }
 
     #[test]
-    fn validation_allows_sort_limit_after_stats() {
+    fn validation_allows_sort_take_after_summarize() {
         let result =
-            parse_and_convert("dataset logs | stats count() by host | sort -count | head 10");
+            parse_and_convert("source logs | summarize count() by host | sort -count | take 10");
         assert!(result.is_ok());
         let pipeline = result.expect("should convert");
         assert_eq!(pipeline.stages().len(), 3);
@@ -277,40 +277,41 @@ mod tests {
 
     #[test]
     fn analyze_snapshot_filter() {
-        let pipeline = analyze("dataset test | where status == 200").expect("should analyze");
+        let pipeline = analyze("source test | filter status == 200").expect("should analyze");
         insta::assert_debug_snapshot!("analyze_filter", pipeline);
     }
 
     #[test]
-    fn analyze_snapshot_stats_sort_head() {
-        let pipeline = analyze("dataset test | stats count() by method | sort by -count | head 10")
-            .expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_stats_sort_head", pipeline);
+    fn analyze_snapshot_summarize_sort_take() {
+        let pipeline =
+            analyze("source test | summarize count() by method | sort by -count | take 10")
+                .expect("should analyze");
+        insta::assert_debug_snapshot!("analyze_summarize_sort_take", pipeline);
     }
 
     #[test]
-    fn analyze_snapshot_fields_sort_head() {
-        let pipeline = analyze("dataset test | fields name, age | sort by name | head 5")
+    fn analyze_snapshot_project_sort_take() {
+        let pipeline = analyze("source test | project name, age | sort by name | take 5")
             .expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_fields_sort_head", pipeline);
+        insta::assert_debug_snapshot!("analyze_project_sort_take", pipeline);
     }
 
     #[test]
     fn analyze_snapshot_multiple_filters() {
-        let pipeline = analyze("dataset test | where a > 1 | where b < 2 | sort by a")
+        let pipeline = analyze("source test | filter a > 1 | filter b < 2 | sort by a")
             .expect("should analyze");
         insta::assert_debug_snapshot!("analyze_multiple_filters", pipeline);
     }
 
     #[test]
     fn analyze_snapshot_source_only() {
-        let pipeline = analyze("dataset test").expect("should analyze");
+        let pipeline = analyze("source test").expect("should analyze");
         insta::assert_debug_snapshot!("analyze_source_only", pipeline);
     }
 
     #[test]
     fn analyze_error_multiple_aggregates() {
-        let result = analyze("dataset logs | stats count() | stats sum(count)");
+        let result = analyze("source logs | summarize count() | summarize sum(count)");
         assert!(result.is_err());
         let err = result.unwrap_err();
         match &err {
@@ -325,7 +326,7 @@ mod tests {
 
     #[test]
     fn analyze_error_aggregate_after_aggregate() {
-        let result = analyze("dataset logs | stats count() | where x > 1");
+        let result = analyze("source logs | summarize count() | filter x > 1");
         assert!(result.is_err());
         let err = result.unwrap_err();
         match &err {
@@ -340,7 +341,7 @@ mod tests {
 
     #[test]
     fn analyze_error_invalid_limit() {
-        let result = analyze("dataset logs | head 0");
+        let result = analyze("source logs | take 0");
         assert!(result.is_err());
         let err = result.unwrap_err();
         match &err {
@@ -364,12 +365,12 @@ mod tests {
     }
 
     #[test]
-    fn analyze_error_parse_failure_no_dataset() {
-        let result = analyze("| where x > 1");
-        assert!(result.is_err(), "missing dataset should fail");
+    fn analyze_error_parse_failure_no_source() {
+        let result = analyze("| filter x > 1");
+        assert!(result.is_err(), "missing source should fail");
         assert!(
             matches!(result.unwrap_err(), AnalyzeError::Parse(_)),
-            "missing dataset should produce a Parse error"
+            "missing source should produce a Parse error"
         );
     }
 }

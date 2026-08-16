@@ -7,12 +7,14 @@ use crate::ast;
 use crate::lexer::Token;
 use crate::span::Span;
 
+use super::identifier;
+
 pub fn expression_parser<'tokens, 'source: 'tokens, I>()
 -> impl Parser<'tokens, I, ast::Expression, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    let identifier = select! { Token::Identifier(i) => i.to_string() }.labelled("identifier");
+    let identifier = identifier();
     let number =
         select! { Token::Integer(n) => ast::Expression::Number(n as f64) }.labelled("number");
     let string = select! { Token::StringLiteral(s) => ast::Expression::String(s.to_owned()) }

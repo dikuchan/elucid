@@ -5,8 +5,21 @@ expression: ast
 Query {
     source: "test",
     commands: [
-        Stats {
+        Summarize {
             aggregates: [
+                (
+                    Call(
+                        "sum",
+                        [
+                            Field(
+                                "bytes",
+                            ),
+                        ],
+                    ),
+                    Some(
+                        "total",
+                    ),
+                ),
                 (
                     Call(
                         "count",
@@ -18,9 +31,6 @@ Query {
             by: [
                 Field(
                     "method",
-                ),
-                Field(
-                    "status",
                 ),
             ],
         },

@@ -4,6 +4,6 @@ expression: ast.unwrap_err()
 ---
 ParserError(
     [
-        found 'Pipe' at 8..9 expected dataset name,
+        found 'Pipe' at 7..8 expected source name,
     ],
 )

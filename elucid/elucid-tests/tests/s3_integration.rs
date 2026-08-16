@@ -165,7 +165,7 @@ async fn s3_ingest_then_query_all_rows() {
     let ctx = Context::with_storage_config(config);
 
     let df = ctx
-        .execute(&format!("dataset {table}"))
+        .execute(&format!("source {table}"))
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -205,7 +205,7 @@ async fn s3_ingest_then_query_filter() {
     let ctx = Context::with_storage_config(config);
 
     let df = ctx
-        .execute(&format!("dataset {table} | where status >= 400"))
+        .execute(&format!("source {table} | filter status >= 400"))
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -245,13 +245,13 @@ async fn s3_ingest_then_query_count() {
     let ctx = Context::with_storage_config(config);
 
     let df = ctx
-        .execute(&format!("dataset {table} | stats count()"))
+        .execute(&format!("source {table} | summarize count()"))
         .await
         .expect("query failed");
 
     let batches = df.collect().await.expect("collect failed");
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 1, "stats count should return 1 row");
+    assert_eq!(total_rows, 1, "summarize count should return 1 row");
 
     let batch = &batches[0];
     let col = batch.column(0);
@@ -325,7 +325,7 @@ async fn s3_ingest_multiple_batches_then_query() {
     let ctx = Context::with_storage_config(config);
 
     let df = ctx
-        .execute(&format!("dataset {table}"))
+        .execute(&format!("source {table}"))
         .await
         .expect("query failed");
     let rows = count_rows(df).await;

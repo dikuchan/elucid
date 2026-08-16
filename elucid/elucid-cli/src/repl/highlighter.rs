@@ -15,12 +15,12 @@ impl Highlighter for QueryHighlighter {
             }
 
             let style = match token {
-                Token::KeywordDataset
-                | Token::KeywordFields
-                | Token::KeywordWhere
+                Token::KeywordSource
+                | Token::KeywordProject
+                | Token::KeywordFilter
                 | Token::KeywordSort
-                | Token::KeywordHead
-                | Token::KeywordStats
+                | Token::KeywordTake
+                | Token::KeywordSummarize
                 | Token::KeywordBy
                 | Token::KeywordNot
                 | Token::KeywordNull
