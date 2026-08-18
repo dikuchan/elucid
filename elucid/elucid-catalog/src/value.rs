@@ -84,6 +84,12 @@ impl SchemaVersion {
     }
 }
 
+impl Display for SchemaVersion {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.get(), formatter)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct ProfileRevision(NonZeroU64);
@@ -100,6 +106,12 @@ impl ProfileRevision {
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0.get()
+    }
+}
+
+impl Display for ProfileRevision {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.get(), formatter)
     }
 }
 

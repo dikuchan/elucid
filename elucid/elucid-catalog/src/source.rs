@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CatalogModelError, DeclarationDigest, FieldId, FieldRole, Input, InputId, Schema, SchemaId,
-    SourceId, SourceName, VersionKind,
+    CatalogModelError, DeclarationDigest, FieldId, FieldRole, IngestProfileRevision, Input,
+    InputId, Schema, SchemaId, SourceId, SourceName, VersionKind,
 };
 
 #[derive(Clone, Debug)]
@@ -211,7 +211,7 @@ fn validate_inputs(
 }
 
 fn validate_profile_mappings(
-    revision: &crate::IngestProfileRevision,
+    revision: &IngestProfileRevision,
     schema: &Schema,
 ) -> Result<(), CatalogModelError> {
     for mapping in revision.profile().mappings() {

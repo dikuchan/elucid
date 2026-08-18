@@ -177,6 +177,18 @@ pub struct Schema {
     arrow_schema: ArrowSchema,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SchemaMaterialization {
+    fields: Box<[Field]>,
+    arrow_schema: ArrowSchema,
+}
+
+impl SchemaMaterialization {
+    pub(crate) fn fields(&self) -> &[Field] {
+        &self.fields
+    }
+}
+
 impl Schema {
     pub fn new(
         id: SchemaId,
@@ -185,6 +197,19 @@ impl Schema {
         digests: DefinitionDigests,
         user_fields: Vec<UserField>,
     ) -> Result<Self, CatalogModelError> {
+        let materialization = Self::materialize_user_fields(user_fields)?;
+        Ok(Self::from_materialization(
+            id,
+            source_id,
+            version,
+            digests,
+            materialization,
+        ))
+    }
+
+    pub(crate) fn materialize_user_fields(
+        user_fields: Vec<UserField>,
+    ) -> Result<SchemaMaterialization, CatalogModelError> {
         validate_unique_user_fields(&user_fields)?;
 
         let field_capacity = user_fields
@@ -235,14 +260,27 @@ impl Schema {
 
         let arrow_fields = fields.iter().map(Field::to_arrow).collect::<Vec<_>>();
         let arrow_schema = ArrowSchema::new(arrow_fields);
-        Ok(Self {
+        Ok(SchemaMaterialization {
+            fields: fields.into_boxed_slice(),
+            arrow_schema,
+        })
+    }
+
+    pub(crate) fn from_materialization(
+        id: SchemaId,
+        source_id: SourceId,
+        version: SchemaVersion,
+        digests: DefinitionDigests,
+        materialization: SchemaMaterialization,
+    ) -> Self {
+        Self {
             id,
             source_id,
             version,
             digests,
-            fields: fields.into_boxed_slice(),
-            arrow_schema,
-        })
+            fields: materialization.fields,
+            arrow_schema: materialization.arrow_schema,
+        }
     }
 
     #[must_use]

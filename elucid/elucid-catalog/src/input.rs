@@ -12,10 +12,28 @@ pub enum InputKind {
     HttpNdjson,
 }
 
+impl InputKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HttpNdjson => "HTTP_NDJSON",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ParserKind {
     Ndjson,
+}
+
+impl ParserKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ndjson => "NDJSON",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -24,10 +42,28 @@ pub enum InputEncoding {
     Utf8,
 }
 
+impl InputEncoding {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF8",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum LineBoundaryPolicy {
     LfWithOptionalCr,
+}
+
+impl LineBoundaryPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LfWithOptionalCr => "LF_WITH_OPTIONAL_CR",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -36,10 +72,28 @@ pub enum UnknownFieldPolicy {
     CaptureTopLevelRemainder,
 }
 
+impl UnknownFieldPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CaptureTopLevelRemainder => "CAPTURE_TOP_LEVEL_REMAINDER",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ConversionPolicy {
     Strict,
+}
+
+impl ConversionPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "STRICT",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -47,6 +101,16 @@ pub enum ConversionPolicy {
 pub enum EventTimeFormat {
     Rfc3339,
     UnixMilliseconds,
+}
+
+impl EventTimeFormat {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rfc3339 => "RFC3339",
+            Self::UnixMilliseconds => "UNIX_MILLISECONDS",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

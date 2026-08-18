@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use arrow::datatypes::{DataType, TimeUnit};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -17,6 +19,23 @@ pub enum LogicalType {
 }
 
 impl LogicalType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bool => "bool",
+            Self::Int32 => "int32",
+            Self::Int64 => "int64",
+            Self::UInt32 => "uint32",
+            Self::UInt64 => "uint64",
+            Self::Float32 => "float32",
+            Self::Float64 => "float64",
+            Self::Utf8 => "utf8",
+            Self::Datetime => "datetime",
+            Self::Eid => "eid",
+            Self::Json => "json",
+        }
+    }
+
     #[must_use]
     pub fn arrow_data_type(self) -> DataType {
         match self {
@@ -50,6 +69,12 @@ impl LogicalType {
     }
 }
 
+impl Display for LogicalType {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum UserLogicalType {
@@ -80,6 +105,23 @@ impl From<UserLogicalType> for LogicalType {
     }
 }
 
+impl UserLogicalType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bool => "bool",
+            Self::Int32 => "int32",
+            Self::Int64 => "int64",
+            Self::UInt32 => "uint32",
+            Self::UInt64 => "uint64",
+            Self::Float32 => "float32",
+            Self::Float64 => "float64",
+            Self::Utf8 => "utf8",
+            Self::Datetime => "datetime",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum Nullability {
@@ -88,11 +130,25 @@ pub enum Nullability {
 }
 
 impl Nullability {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NonNull => "NON_NULL",
+            Self::Nullable => "NULLABLE",
+        }
+    }
+
     pub(crate) const fn is_nullable(self) -> bool {
         match self {
             Self::NonNull => false,
             Self::Nullable => true,
         }
+    }
+}
+
+impl Display for Nullability {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -104,4 +160,17 @@ pub enum FieldRole {
     EventId,
     Data,
     Remainder,
+}
+
+impl FieldRole {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::EventTime => "EVENT_TIME",
+            Self::IngestTime => "INGEST_TIME",
+            Self::EventId => "EVENT_ID",
+            Self::Data => "DATA",
+            Self::Remainder => "REMAINDER",
+        }
+    }
 }
