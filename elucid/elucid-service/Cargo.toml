@@ -1,0 +1,16 @@
+[package]
+name = "elucid-service"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+toml_edit = { workspace = true, features = ["parse", "serde"] }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

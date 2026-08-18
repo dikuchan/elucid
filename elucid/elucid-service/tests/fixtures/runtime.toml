@@ -1,0 +1,119 @@
+[server]
+bind = "127.0.0.1:8080"
+browser_origin = "http://127.0.0.1:8080"
+network_trust = "LOOPBACK_ONLY"
+roles = ["SERVING", "MAINTENANCE"]
+maximum_json_request_body_bytes = 1048576
+maximum_request_header_bytes = 32768
+request_timeout_seconds = 60
+header_timeout_seconds = 5
+idle_timeout_seconds = 30
+shutdown_timeout_seconds = 15
+default_page_items = 50
+maximum_page_items = 200
+cursor_hmac_key_environment_variable = "ELUCID_CURSOR_HMAC_KEY"
+
+[metastore]
+postgresql_dsn_environment_variable = "ELUCID_POSTGRES_DSN"
+maximum_connections = 10
+connection_timeout_seconds = 5
+migration_lock_timeout_seconds = 30
+statement_timeout_seconds = 30
+
+[catalog]
+maximum_manifest_bytes = 1048576
+maximum_concurrent_applications = 2
+
+[object_store]
+alias = "default"
+authority = "showcase-minio"
+endpoint = "http://minio:9000"
+region = "us-east-1"
+bucket = "elucid"
+root_prefix = "showcase"
+addressing_style = "PATH"
+access_key_id_environment_variable = "ELUCID_S3_ACCESS_KEY_ID"
+secret_access_key_environment_variable = "ELUCID_S3_SECRET_ACCESS_KEY"
+request_timeout_seconds = 30
+maximum_request_attempts = 3
+
+[ingestion]
+staging_directory = "/var/lib/elucid/staging"
+staging_capacity_bytes = 2147483648
+maximum_request_body_bytes = 16777216
+maximum_record_bytes = 10485760
+dead_letter_complete_raw_maximum_bytes = 65536
+dead_letter_raw_prefix_bytes = 4096
+maximum_dead_letter_page_bytes = 4194304
+target_segment_rows = 500
+target_segment_uncompressed_bytes = 16777216
+maximum_parquet_row_group_rows = 250
+maximum_open_event_time_buckets = 8
+maximum_concurrent_requests = 4
+attempt_heartbeat_interval_seconds = 5
+attempt_stale_after_seconds = 30
+attempt_timeout_seconds = 900
+
+[compaction]
+scan_interval_seconds = 10
+working_directory = "/var/lib/elucid/compaction"
+working_capacity_bytes = 2147483648
+memory_pool_bytes = 268435456
+minimum_input_segments = 2
+maximum_input_segments = 32
+maximum_input_rows = 16000000
+maximum_input_uncompressed_bytes = 4294967296
+maximum_input_parquet_bytes = 1073741824
+target_output_segment_uncompressed_bytes = 268435456
+maximum_output_segment_rows = 1000000
+maximum_parquet_row_group_rows = 250
+maximum_output_segments = 16
+maximum_output_parquet_object_bytes = 536870912
+maximum_output_parquet_bytes = 2147483648
+maximum_concurrent_runs = 1
+maximum_cluster_concurrent_runs = 4
+maximum_recovery_batch_runs = 100
+run_heartbeat_interval_seconds = 5
+run_stale_after_seconds = 30
+run_timeout_seconds = 900
+
+[garbage_collection]
+orphan_grace_period_seconds = 3600
+retired_object_grace_period_seconds = 60
+scan_interval_seconds = 300
+maximum_batch_objects = 100
+maximum_concurrent_object_deletions = 4
+
+[retention]
+idempotency_retention_seconds = 86400
+event_data_retention_seconds = 2592000
+dead_letter_retention_seconds = 604800
+ingest_provenance_retention_seconds = 2592000
+compaction_provenance_retention_seconds = 2592000
+scan_interval_seconds = 60
+maximum_task_duration_seconds = 30
+maximum_expiration_batch_segments = 100
+maximum_retry_expiration_batch_requests = 100
+maximum_idempotency_expiration_batch_reservations = 100
+maximum_provenance_roots_per_batch = 100
+
+[query]
+default_output_rows = 1000
+maximum_output_rows = 10000
+maximum_result_bytes = 16777216
+maximum_query_bytes = 65536
+maximum_pipeline_stages = 100
+maximum_expression_depth = 128
+maximum_selected_segments = 10000
+maximum_selected_object_bytes = 107374182400
+execution_timeout_seconds = 30
+memory_pool_bytes = 536870912
+spill_directory = "/var/lib/elucid/spill"
+spill_capacity_bytes = 2147483648
+maximum_concurrent_queries = 2
+maximum_queued_queries = 16
+
+[telemetry]
+log_format = "JSON"
+log_level = "info"
+metrics_path = "/metrics"
