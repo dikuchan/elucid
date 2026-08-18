@@ -12,7 +12,7 @@ The operator journey MUST be:
 1. Build the executable, embedded web assets, and container image from a clean checkout.
 2. Start PostgreSQL, MinIO, and a serving-only Elucid instance with one documented command.
 3. Wait for readiness.
-4. Apply the demo source manifest.
+4. Apply the demo source manifest through `elucid catalog apply` and the product HTTP API.
 5. Send the demo NDJSON fixture through the HTTP ingestion endpoint with a stable idempotency key.
 6. Observe the ingest request reach `COMMITTED`.
 7. Inspect source, schema, event-time bounds, segments, and event count.
@@ -165,7 +165,7 @@ The server MUST emit `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-ref
 
 ## 8. Local environment and packaging
 
-The repository MUST contain one Compose definition with health-checked PostgreSQL major version `16`, MinIO, bucket initialization, one serving Elucid instance, catalog application, one HTTP fixture-ingestion client, pre-compaction verification, and one maintenance Elucid instance. The maintenance instance MUST depend on successful pre-compaction verification. Container images MUST be pinned to immutable digests. Dependencies MUST use health or successful one-shot completion, not container start order.
+The repository MUST contain one Compose definition with health-checked PostgreSQL major version `16`, MinIO, bucket initialization, one serving Elucid instance, one HTTP catalog-application client, one HTTP fixture-ingestion client, pre-compaction verification, and one maintenance Elucid instance. The catalog-application client MUST depend on serving readiness and MUST receive neither PostgreSQL nor object-store credentials. The maintenance instance MUST depend on successful pre-compaction verification. Container images MUST be pinned to immutable digests. Dependencies MUST use health or successful one-shot completion, not container start order.
 
 The documented startup command MUST converge on repeated execution. Catalog application, bucket creation, and fixture ingestion with the fixed key `showcase-demo-fixture-v1` MUST treat existing matching state as success.
 
@@ -181,7 +181,7 @@ The build MUST use committed Rust and npm lockfiles. It MUST run `npm ci`, gener
 
 The repository README MUST state the product thesis, show topology, provide the clean-checkout startup command, link the v0 specifications, document demo queries and CLI equivalents, explain configuration and secrets, and describe recovery from unavailable PostgreSQL, unavailable object storage, and stale local volumes.
 
-Documentation MUST state tested prerequisites, build and verification commands, startup and shutdown, runtime roles, network trust and bearer-token configuration, authenticated Prometheus scraping through `authorization.credentials_file`, direct PostgreSQL access and privileges for manifest application, HTTP fixture ingestion, post-claim task ownership, HTTP-waiter and attempt timeouts, sender retry ownership, recommended batching, compaction capacity planning, retention task draining, reclamation, provenance pruning, dead-letter inspection, browser workflow, crate responsibilities, and the exact commit used for published screenshots or recordings. Every quickstart command MUST run in automated verification.
+Documentation MUST state tested prerequisites, build and verification commands, startup and shutdown, runtime roles, network trust and bearer-token configuration, authenticated Prometheus scraping through `authorization.credentials_file`, HTTP catalog application, HTTP fixture ingestion, post-claim task ownership, HTTP-waiter and attempt timeouts, sender retry ownership, recommended batching, compaction capacity planning, retention task draining, reclamation, provenance pruning, dead-letter inspection, browser workflow, crate responsibilities, and the exact commit used for published screenshots or recordings. Every quickstart command MUST run in automated verification.
 
 ## 10. Verification
 
@@ -190,7 +190,7 @@ The complete showcase MUST pass this clean-state scenario:
 1. Build frontend, Rust workspace, executable, and image with warnings treated as errors.
 2. Start clean PostgreSQL and MinIO, then start one serving-only Elucid instance and observe `LIVE` before `READY`.
 3. Verify automatic migrations and create-only, exact-read, range-read, and exact-delete object-store capabilities.
-4. Apply the demo manifest twice and compare persistent identities.
+4. Apply the demo manifest twice through `elucid catalog apply` and `POST /api/v1/catalog-applications`, compare persistent identities, and verify that the catalog client has no PostgreSQL or object-store credentials.
 5. Send the fixture to `POST /api/v1/sources/demo_logs/inputs/demo_http/events` with key `showcase-demo-fixture-v1` and verify a new `COMMITTED` ingest request.
 6. Verify body digest and byte count, committed counts, four ingestion-origin segments, six ingestion row groups, object digests, footer metadata, direct references, computed source summary, and paginated dead-letter entries through the HTTP API.
 7. Verify every `@ingest_time` equals the ingest request's durable creation time and identical records at different positions have distinct event identities.

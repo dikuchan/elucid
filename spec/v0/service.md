@@ -9,11 +9,13 @@ The product MUST build one executable named `elucid`. Its HTTP runtime MUST use 
 
 `elucid server --config <path>` MUST start HTTP health and metrics endpoints, apply metastore migrations, verify object-store capabilities, recover durable work, initialize every configured runtime role, and admit only the traffic and work owned by those roles.
 
-`elucid catalog apply --config <path> --file <manifest>` MUST atomically apply one source manifest according to the [Catalog](catalog.md#7-catalog-application). It MUST connect directly to PostgreSQL using the configured metastore credentials and MUST NOT use the product HTTP API. The deployment MUST grant its operator direct metastore network access and catalog-mutation privileges. The command MUST validate the metastore ledger without applying migrations; an absent or behind ledger MUST produce `METASTORE_SCHEMA_NOT_READY`.
+`elucid catalog apply --endpoint <base-url> --file <path-or-dash> [--operator-bearer-token-environment-variable <name>] [--timeout-seconds <seconds>]` MUST send the exact file or standard-input bytes to `POST /api/v1/catalog-applications`. Timeout MUST default to 120 seconds; expiry MUST stop only local waiting, return exit code `7`, and leave the server outcome indeterminate. Repeating the command with the exact same manifest MUST be safe: it MUST NOT duplicate immutable history or partially mutate catalog state, and its outcome MUST be derived from the current durable catalog.
 
-`elucid ingest send --endpoint <base-url> --source <source-name> --input <input-name> --file <path-or-dash> --idempotency-key <key> [--operator-bearer-token-environment-variable <name>] [--timeout-seconds <seconds>]` MUST send the exact file or standard-input bytes to the HTTP ingestion endpoint. When the token option is present, the command MUST read the token from the named environment variable and send it through `Authorization: Bearer`; the token MUST NOT appear in process arguments, output, or logs. Timeout MUST default to 120 seconds, stop only local waiting, and return exit code `7` on expiry. This command MUST NOT access PostgreSQL or S3 directly.
+`elucid ingest send --endpoint <base-url> --source <source-name> --input <input-name> --file <path-or-dash> --idempotency-key <key> [--operator-bearer-token-environment-variable <name>] [--timeout-seconds <seconds>]` MUST send the exact file or standard-input bytes to the HTTP ingestion endpoint. Timeout MUST default to 120 seconds, stop only local waiting, and return exit code `7` on expiry.
 
-Process exit codes MUST be `0` success, `1` uncategorized internal failure, `2` command or document validation failure, `3` configuration failure, `4` dependency or metastore readiness failure, `5` catalog conflict, `6` terminal ingestion failure, and `7` local client timeout.
+When the token option is present, a client command MUST read the token from the named environment variable and send it through `Authorization: Bearer`; the token MUST NOT appear in process arguments, output, or logs. Client commands MUST NOT access PostgreSQL or S3 directly.
+
+Process exit codes MUST be `0` success, `1` uncategorized internal failure, `2` command or document validation failure, `3` configuration failure, `4` remote service availability or dependency readiness failure, `5` catalog conflict, `6` terminal ingestion failure, and `7` local client timeout.
 
 ## 2. Configuration
 
@@ -45,6 +47,10 @@ maximum_connections = 10
 connection_timeout_seconds = 5
 migration_lock_timeout_seconds = 30
 statement_timeout_seconds = 30
+
+[catalog]
+maximum_manifest_bytes = 1048576
+maximum_concurrent_applications = 2
 
 [object_store]
 alias = "default"
@@ -147,7 +153,7 @@ Cross-field validation MUST reject `maximum_input_rows` above the checked produc
 
 `server.request_timeout_seconds` bounds HTTP waiting, while `ingestion.attempt_timeout_seconds` bounds durable post-claim execution. Their values are independent because expiry of the former MUST NOT cancel the latter.
 
-Concurrency and local-capacity limits MUST apply independently to each server process. PostgreSQL constraints and fencing, not process-local limits, MUST preserve cluster correctness. Compaction input byte limits apply to registered Parquet bytes and MUST NOT be inferred from object-store listing.
+Concurrency and local-capacity limits MUST apply independently to each server process. Catalog-application admission, PostgreSQL constraints, and fencing, not an unbounded process-local queue, MUST preserve cluster correctness and overload behavior. Compaction input byte limits apply to registered Parquet bytes and MUST NOT be inferred from object-store listing.
 
 The ingestion `maximum_record_bytes` value is a service-wide safety ceiling. Catalog application MUST reject an ingest-profile revision whose `maximum_record_bytes` exceeds it.
 
@@ -209,7 +215,15 @@ While its reservation remains active, the same input, key, body digest, and body
 
 List endpoints MUST accept optional `page_items` and `cursor` query parameters. On an initial page, `page_items` MUST default to `default_page_items` and fit `[1, maximum_page_items]`. On a continuation page, absent `page_items` MUST use the cursor's page size and a supplied value MUST equal it. Responses MUST use `{"items":[...],"next_cursor":null|string}` with stable ordering. A cursor MUST contain version, endpoint kind, canonical filter digest, page size, and final ordering key, authenticate those bytes with HMAC-SHA256, and use unpadded base64url. Decode, version, endpoint, filter, page-size, and authentication failures MUST return `INVALID_CURSOR`.
 
-## 6. Source API
+## 6. Catalog application and source API
+
+`POST /api/v1/catalog-applications` MUST require `Content-Type: application/yaml`, absent or `identity` `Content-Encoding`, and no `Idempotency-Key`. Another media type MUST return `415 UNSUPPORTED_MEDIA_TYPE`; another content coding MUST return `415 UNSUPPORTED_CONTENT_ENCODING`; an `Idempotency-Key` MUST return `400 INVALID_REQUEST`. The request body MUST be the exact UTF-8 YAML catalog manifest and MUST NOT be rewritten by the client or transport.
+
+The endpoint MUST acquire one process-local catalog-application permit before reading the body. Exhausted admission MUST return `429 CAPACITY_EXHAUSTED` without reading the body. A declared or observed body size above `catalog.maximum_manifest_bytes` MUST return `413 REQUEST_TOO_LARGE`; otherwise the server MUST buffer the complete bounded body, decode it exactly once, and validate and canonicalize it according to the [Catalog](catalog.md#6-manifest).
+
+After document validation, the server MUST execute the [catalog-application transaction](catalog.md#7-catalog-application) through one semantic metastore operation. Any serving instance MAY handle the request; request affinity MUST NOT be required, and the source-name PostgreSQL advisory lock MUST serialize concurrent applications for the same source across the cluster.
+
+A `CREATED` result MUST return `201`; `UPDATED` and `UNCHANGED` MUST return `200`. Every successful response MUST contain the catalog result defined by the Catalog specification and `Location: /api/v1/sources/{source_id}`. If the client cannot determine the response after submitting the complete body, resubmitting the exact manifest MUST preserve committed identities and return the outcome or conflict implied by the current durable catalog.
 
 `GET /api/v1/sources` MUST order sources by name and source identity. Each item MUST contain source identity, name, display name, active schema identity and version, input count, active segment count, event count, and minimum and maximum event time. Empty time bounds MUST be null. The service MUST select the requested source page before computing exact counts and bounds for those sources through grouped reads from catalog rows and `ACTIVE` segments in the same read-only transaction under the configured statement timeout. It MUST NOT update or read a mutable per-source statistics row or issue one query per source.
 
@@ -300,16 +314,16 @@ HTTP mapping MUST follow this table:
 
 | Status | Codes |
 |---|---|
-| `400` | `INVALID_REQUEST`, `INVALID_CURSOR`, `INVALID_TIME_RANGE`, `QUERY_SYNTAX_ERROR`, `QUERY_SEMANTIC_ERROR`, `QUERY_RESOURCE_LIMIT_EXCEEDED` |
+| `400` | `INVALID_REQUEST`, `INVALID_CURSOR`, `INVALID_TIME_RANGE`, `CATALOG_MANIFEST_INVALID`, `QUERY_SYNTAX_ERROR`, `QUERY_SEMANTIC_ERROR`, `QUERY_RESOURCE_LIMIT_EXCEEDED` |
 | `401` | `AUTHENTICATION_REQUIRED` |
 | `403` | `ORIGIN_NOT_ALLOWED` |
 | `404` | `SOURCE_NOT_FOUND`, `INPUT_NOT_FOUND`, `INGEST_REQUEST_NOT_FOUND`, `ROUTE_NOT_FOUND` |
 | `408` | `REQUEST_TIMEOUT`, `QUERY_TIMEOUT` |
-| `409` | `INGEST_REQUEST_IN_PROGRESS`, `INGEST_REQUEST_NOT_COMMITTED`, `IDEMPOTENCY_KEY_REUSED` |
+| `409` | `CATALOG_DEFINITION_CONFLICT`, `CATALOG_HISTORY_DIVERGED`, `INGEST_REQUEST_IN_PROGRESS`, `INGEST_REQUEST_NOT_COMMITTED`, `IDEMPOTENCY_KEY_REUSED` |
 | `410` | `DEAD_LETTER_EXPIRED` |
 | `413` | `REQUEST_TOO_LARGE` |
 | `415` | `UNSUPPORTED_MEDIA_TYPE`, `UNSUPPORTED_CONTENT_ENCODING` |
-| `422` | `INGEST_REQUEST_FAILED`, `QUERY_CAST_FAILED`, `QUERY_EVALUATION_FAILED`, `QUERY_RESULT_ROW_TOO_LARGE` |
+| `422` | `CATALOG_PROFILE_TARGET_MISMATCH`, `CATALOG_SCHEMA_INCOMPATIBLE`, `INGEST_REQUEST_FAILED`, `QUERY_CAST_FAILED`, `QUERY_EVALUATION_FAILED`, `QUERY_RESULT_ROW_TOO_LARGE` |
 | `429` | `CAPACITY_EXHAUSTED` |
 | `500` | `CATALOG_CORRUPTION`, `QUERY_EXECUTION_FAILED`, `QUERY_RESULT_ENCODING_FAILED`, `PUBLISHED_OBJECT_MISSING`, `PUBLISHED_OBJECT_CORRUPT`, `INTERNAL_ERROR` |
 | `503` | `METASTORE_UNAVAILABLE`, `OBJECT_STORE_UNAVAILABLE`, `SERVER_DRAINING` |
@@ -322,8 +336,8 @@ A persisted record, attempt, dead-letter-build, or ingestion-publication code MU
 
 ## 10. Limits and telemetry
 
-The server MUST enforce bounded HTTP headers, JSON bodies, ingestion bodies, dead-letter pages, idle time, HTTP request lifetime, ingestion-attempt lifetime, query text, pipeline stages, expression depth, selected segments, selected bytes, result rows, result bytes, query memory, spill bytes, staging bytes, record bytes, open event-time buckets, concurrent ingestion requests, concurrent queries, queued queries, compaction inputs, compaction outputs, compaction memory, compaction working bytes, concurrent compaction runs, recovery batches, retry-expiration batches, idempotency-reservation-expiration batches, segment-expiration batches, provenance-pruning batches, garbage-collection batches, and concurrent object deletions.
+The server MUST enforce bounded HTTP headers, JSON bodies, catalog manifest bodies, ingestion bodies, dead-letter pages, idle time, HTTP request lifetime, ingestion-attempt lifetime, query text, pipeline stages, expression depth, selected segments, selected bytes, result rows, result bytes, query memory, spill bytes, staging bytes, record bytes, open event-time buckets, concurrent catalog applications, concurrent ingestion requests, concurrent queries, queued queries, compaction inputs, compaction outputs, compaction memory, compaction working bytes, concurrent compaction runs, recovery batches, retry-expiration batches, idempotency-reservation-expiration batches, segment-expiration batches, provenance-pruning batches, garbage-collection batches, and concurrent object deletions.
 
 Structured events MUST cover startup phases, configured runtime roles, migration operations, HTTP requests, authentication outcomes, catalog application, ingest-request claims, ingestion state transitions, compaction claims and state transitions, object upload, publication, recovery, retention expiration, garbage collection, provenance pruning, query phases, and shutdown. Events MUST use stable phase and outcome names and full unit suffixes.
 
-`GET /metrics` MUST return Prometheus text format with process, HTTP, authentication, query, ingestion, compaction, publication, storage, retention, garbage-collection, provenance-pruning, dependency, and semaphore metrics. Duration metric names MUST end in `_seconds`; byte metric names MUST end in `_bytes`. Labels MUST use bounded vocabularies and MUST NOT contain persistent identities, object keys, query text, request bodies, record data, idempotency keys, bearer tokens, or error messages.
+`GET /metrics` MUST return Prometheus text format with process, HTTP, authentication, catalog, query, ingestion, compaction, publication, storage, retention, garbage-collection, provenance-pruning, dependency, and semaphore metrics. Duration metric names MUST end in `_seconds`; byte metric names MUST end in `_bytes`. Labels MUST use bounded vocabularies and MUST NOT contain persistent identities, object keys, query text, request bodies, record data, idempotency keys, bearer tokens, or error messages.

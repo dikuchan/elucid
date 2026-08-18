@@ -140,7 +140,7 @@ The source declaration digest MUST cover exact name. The schema declaration dige
 
 ## 7. Catalog application
 
-`catalog apply` MUST validate and canonicalize the complete manifest before opening its mutation transaction. The transaction MUST acquire a source-name advisory lock and perform these operations atomically:
+A catalog application MUST validate and canonicalize the complete manifest before opening its mutation transaction. The transaction MUST acquire a source-name advisory lock and perform these operations atomically:
 
 1. Resolve or create the source.
 2. Compare persisted and declared schema histories; reject an omitted persisted version as `CATALOG_HISTORY_DIVERGED`.
@@ -152,9 +152,9 @@ The source declaration digest MUST cover exact name. The schema declaration dige
 8. Update `display_name`, `active_schema_id`, and active ingest-profile pointers.
 9. Commit.
 
-Failure MUST leave no partial history or pointer update. Reapplying the same manifest MUST preserve every identity and return `UNCHANGED`. Creating an immutable entity MUST return `CREATED`. Changing mutable display metadata or an active pointer MUST return `UPDATED`.
+Failure MUST leave no partial history or pointer update. Reapplying a manifest whose complete declared state is already current MUST preserve every identity and return `UNCHANGED`. Repeating an application after an indeterminate transport result MUST NOT duplicate immutable history; it MAY return `CREATED`, `UPDATED`, `UNCHANGED`, or a catalog conflict according to the current durable state. Creating an immutable entity MUST return `CREATED`. Changing mutable display metadata or an active pointer MUST return `UPDATED`.
 
-Successful JSON output MUST contain `source_id`, `active_schema_id`, `active_schema_version`, every declared schema identity and version, and every input identity with its active ingest-profile revision identity and number.
+Successful JSON output MUST contain `outcome`, `source_id`, `active_schema_id`, `active_schema_version`, every declared schema identity and version, and every input identity with its active ingest-profile revision identity and number. Outcome MUST be `CREATED`, `UPDATED`, or `UNCHANGED`.
 
 ## 8. Errors
 
