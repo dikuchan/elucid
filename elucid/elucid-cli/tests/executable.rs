@@ -10,7 +10,7 @@ const ELUCID: &str = env!("CARGO_BIN_EXE_elucid");
 const MAXIMUM_TEST_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 
 #[test]
-fn executable_exposes_only_the_v0_command_tree() {
+fn executable_exposes_the_supported_command_tree() {
     let help = Command::new(ELUCID)
         .arg("--help")
         .output()

@@ -1,0 +1,320 @@
+---
+source: elucid-language/src/parser/tests.rs
+expression: query
+---
+Query {
+    source: SourceExpression {
+        name: Identifier {
+            value: "source",
+            span: 7..15,
+        },
+        start_inclusive: Some(
+            TimeExpression {
+                kind: Relative(
+                    [
+                        TimeOperation {
+                            kind: Shift {
+                                direction: Backward,
+                                magnitude: 1,
+                                unit: Day,
+                            },
+                            span: 32..35,
+                        },
+                        TimeOperation {
+                            kind: Truncate(
+                                Hour,
+                            ),
+                            span: 35..37,
+                        },
+                    ],
+                ),
+                span: 32..37,
+            },
+        ),
+        end_exclusive: Some(
+            TimeExpression {
+                kind: Datetime(
+                    StringLiteral {
+                        value: "2026-08-18T00:00:00Z",
+                        span: 61..83,
+                    },
+                ),
+                span: 52..84,
+            },
+        ),
+        span: 0..84,
+    },
+    stages: [
+        Stage {
+            kind: Filter(
+                Expression {
+                    kind: Binary {
+                        operator: Or,
+                        left: Expression {
+                            kind: Unary {
+                                operator: Not,
+                                operand: Expression {
+                                    kind: Field(
+                                        User(
+                                            Identifier {
+                                                value: "active",
+                                                span: 98..104,
+                                            },
+                                        ),
+                                    ),
+                                    span: 98..104,
+                                },
+                            },
+                            span: 94..104,
+                        },
+                        right: Expression {
+                            kind: Binary {
+                                operator: And,
+                                left: Expression {
+                                    kind: Binary {
+                                        operator: GreaterThanOrEqual,
+                                        left: Expression {
+                                            kind: Field(
+                                                User(
+                                                    Identifier {
+                                                        value: "status",
+                                                        span: 108..114,
+                                                    },
+                                                ),
+                                            ),
+                                            span: 108..114,
+                                        },
+                                        right: Expression {
+                                            kind: Constructor(
+                                                Constructor {
+                                                    kind: Numeric {
+                                                        target: UInt32,
+                                                        literal: SignedNumericLiteral {
+                                                            sign: NonNegative,
+                                                            kind: Integer(
+                                                                400,
+                                                            ),
+                                                            span: 125..128,
+                                                        },
+                                                    },
+                                                    span: 118..129,
+                                                },
+                                            ),
+                                            span: 118..129,
+                                        },
+                                    },
+                                    span: 108..129,
+                                },
+                                right: Expression {
+                                    kind: Remainder(
+                                        RemainderExpression {
+                                            function: Exists,
+                                            key: StringLiteral {
+                                                value: "threat",
+                                                span: 146..154,
+                                            },
+                                            span: 134..155,
+                                        },
+                                    ),
+                                    span: 134..155,
+                                },
+                            },
+                            span: 108..155,
+                        },
+                    },
+                    span: 94..155,
+                },
+            ),
+            span: 87..155,
+        },
+        Stage {
+            kind: Project(
+                [
+                    Field(
+                        System(
+                            SystemIdentifier {
+                                value: "@event_time",
+                                span: 166..177,
+                            },
+                        ),
+                    ),
+                    Field(
+                        User(
+                            Identifier {
+                                value: "status",
+                                span: 179..185,
+                            },
+                        ),
+                    ),
+                    Computed(
+                        ComputedProjection {
+                            alias: Identifier {
+                                value: "parsed",
+                                span: 187..193,
+                            },
+                            expression: Expression {
+                                kind: Cast(
+                                    CastExpression {
+                                        kind: NullOnFailure,
+                                        expression: Expression {
+                                            kind: Remainder(
+                                                RemainderExpression {
+                                                    function: Value,
+                                                    key: StringLiteral {
+                                                        value: "status",
+                                                        span: 210..218,
+                                                    },
+                                                    span: 205..219,
+                                                },
+                                            ),
+                                            span: 205..219,
+                                        },
+                                        target: UInt32,
+                                        span: 196..230,
+                                    },
+                                ),
+                                span: 196..230,
+                            },
+                            span: 187..230,
+                        },
+                    ),
+                    Computed(
+                        ComputedProjection {
+                            alias: Identifier {
+                                value: "ratio",
+                                span: 232..237,
+                            },
+                            expression: Expression {
+                                kind: Constructor(
+                                    Constructor {
+                                        kind: Numeric {
+                                            target: Float32,
+                                            literal: SignedNumericLiteral {
+                                                sign: Negative,
+                                                kind: FloatingPoint(
+                                                    "0.1",
+                                                ),
+                                                span: 248..252,
+                                            },
+                                        },
+                                        span: 240..253,
+                                    },
+                                ),
+                                span: 240..253,
+                            },
+                            span: 232..253,
+                        },
+                    ),
+                    Computed(
+                        ComputedProjection {
+                            alias: Identifier {
+                                value: "id",
+                                span: 255..257,
+                            },
+                            expression: Expression {
+                                kind: Constructor(
+                                    Constructor {
+                                        kind: Eid(
+                                            StringLiteral {
+                                                value: "00112233445566778899aabbccddeeff",
+                                                span: 264..298,
+                                            },
+                                        ),
+                                        span: 260..299,
+                                    },
+                                ),
+                                span: 260..299,
+                            },
+                            span: 255..299,
+                        },
+                    ),
+                ],
+            ),
+            span: 158..299,
+        },
+        Stage {
+            kind: Summarize {
+                measures: [
+                    Measure {
+                        alias: Identifier {
+                            value: "event_count",
+                            span: 312..323,
+                        },
+                        aggregate: AggregateCall {
+                            function: Count,
+                            argument: None,
+                            span: 326..333,
+                        },
+                        span: 312..333,
+                    },
+                    Measure {
+                        alias: Identifier {
+                            value: "total",
+                            span: 335..340,
+                        },
+                        aggregate: AggregateCall {
+                            function: Sum,
+                            argument: Some(
+                                User(
+                                    Identifier {
+                                        value: "parsed",
+                                        span: 347..353,
+                                    },
+                                ),
+                            ),
+                            span: 343..354,
+                        },
+                        span: 335..354,
+                    },
+                ],
+                group_by: [
+                    User(
+                        Identifier {
+                            value: "status",
+                            span: 358..364,
+                        },
+                    ),
+                ],
+            },
+            span: 302..364,
+        },
+        Stage {
+            kind: Sort(
+                [
+                    SortItem {
+                        field: User(
+                            Identifier {
+                                value: "event_count",
+                                span: 376..387,
+                            },
+                        ),
+                        direction: Descending,
+                        span: 375..387,
+                    },
+                    SortItem {
+                        field: User(
+                            Identifier {
+                                value: "status",
+                                span: 390..396,
+                            },
+                        ),
+                        direction: Ascending,
+                        span: 389..396,
+                    },
+                ],
+            ),
+            span: 367..396,
+        },
+        Stage {
+            kind: Take(
+                SignedIntegerLiteral {
+                    sign: NonNegative,
+                    magnitude: 10,
+                    span: 404..406,
+                },
+            ),
+            span: 399..406,
+        },
+    ],
+    span: 0..406,
+}

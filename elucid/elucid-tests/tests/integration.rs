@@ -138,7 +138,7 @@ async fn ingest_then_query_count() {
 
     let ctx = Context::new(dir.path());
     let df = ctx
-        .execute("source test_logs | summarize count()")
+        .execute("source test_logs | summarize event_count = count()")
         .await
         .expect("query failed");
 

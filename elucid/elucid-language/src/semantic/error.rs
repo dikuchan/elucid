@@ -19,7 +19,7 @@ pub enum SemanticError {
     /// A non-sort/take command appeared after a `summarize` command.
     AggregateAfterAggregate,
 
-    /// The `take` value is zero or negative.
+    /// The `take` value is negative.
     InvalidLimitValue {
         /// The invalid take value that was provided.
         value: i64,
@@ -55,7 +55,7 @@ impl fmt::Display for SemanticError {
                 )
             }
             Self::InvalidLimitValue { value } => {
-                write!(f, "take value must be a positive integer, got {value}")
+                write!(f, "take value must be a non-negative integer, got {value}")
             }
             Self::EmptyFieldList => {
                 write!(f, "'project' command requires at least one field name")
@@ -184,16 +184,7 @@ mod tests {
         let err = SemanticError::InvalidLimitValue { value: -3 };
         assert_eq!(
             err.to_string(),
-            "take value must be a positive integer, got -3"
-        );
-    }
-
-    #[test]
-    fn display_invalid_limit_value_zero() {
-        let err = SemanticError::InvalidLimitValue { value: 0 };
-        assert_eq!(
-            err.to_string(),
-            "take value must be a positive integer, got 0"
+            "take value must be a non-negative integer, got -3"
         );
     }
 

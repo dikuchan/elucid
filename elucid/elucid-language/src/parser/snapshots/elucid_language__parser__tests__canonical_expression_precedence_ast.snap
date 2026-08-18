@@ -1,0 +1,149 @@
+---
+source: elucid-language/src/parser/tests.rs
+expression: query
+---
+Query {
+    source: SourceExpression {
+        name: Identifier {
+            value: "logs",
+            span: 7..11,
+        },
+        start_inclusive: None,
+        end_exclusive: None,
+        span: 0..11,
+    },
+    stages: [
+        Stage {
+            kind: Filter(
+                Expression {
+                    kind: Binary {
+                        operator: Or,
+                        left: Expression {
+                            kind: Binary {
+                                operator: GreaterThanOrEqual,
+                                left: Expression {
+                                    kind: Binary {
+                                        operator: Add,
+                                        left: Expression {
+                                            kind: Field(
+                                                User(
+                                                    Identifier {
+                                                        value: "a",
+                                                        span: 21..22,
+                                                    },
+                                                ),
+                                            ),
+                                            span: 21..22,
+                                        },
+                                        right: Expression {
+                                            kind: Binary {
+                                                operator: Multiply,
+                                                left: Expression {
+                                                    kind: Field(
+                                                        User(
+                                                            Identifier {
+                                                                value: "b",
+                                                                span: 25..26,
+                                                            },
+                                                        ),
+                                                    ),
+                                                    span: 25..26,
+                                                },
+                                                right: Expression {
+                                                    kind: Field(
+                                                        User(
+                                                            Identifier {
+                                                                value: "c",
+                                                                span: 29..30,
+                                                            },
+                                                        ),
+                                                    ),
+                                                    span: 29..30,
+                                                },
+                                            },
+                                            span: 25..30,
+                                        },
+                                    },
+                                    span: 21..30,
+                                },
+                                right: Expression {
+                                    kind: Constructor(
+                                        Constructor {
+                                            kind: Numeric {
+                                                target: Int64,
+                                                literal: SignedNumericLiteral {
+                                                    sign: Negative,
+                                                    kind: Integer(
+                                                        10,
+                                                    ),
+                                                    span: 40..43,
+                                                },
+                                            },
+                                            span: 34..44,
+                                        },
+                                    ),
+                                    span: 34..44,
+                                },
+                            },
+                            span: 21..44,
+                        },
+                        right: Expression {
+                            kind: Unary {
+                                operator: Not,
+                                operand: Expression {
+                                    kind: Binary {
+                                        operator: And,
+                                        left: Expression {
+                                            kind: Field(
+                                                User(
+                                                    Identifier {
+                                                        value: "active",
+                                                        span: 53..59,
+                                                    },
+                                                ),
+                                            ),
+                                            span: 53..59,
+                                        },
+                                        right: Expression {
+                                            kind: Binary {
+                                                operator: Equal,
+                                                left: Expression {
+                                                    kind: Field(
+                                                        User(
+                                                            Identifier {
+                                                                value: "deleted",
+                                                                span: 64..71,
+                                                            },
+                                                        ),
+                                                    ),
+                                                    span: 64..71,
+                                                },
+                                                right: Expression {
+                                                    kind: Literal(
+                                                        Literal {
+                                                            kind: Boolean(
+                                                                false,
+                                                            ),
+                                                            span: 75..80,
+                                                        },
+                                                    ),
+                                                    span: 75..80,
+                                                },
+                                            },
+                                            span: 64..80,
+                                        },
+                                    },
+                                    span: 52..81,
+                                },
+                            },
+                            span: 48..81,
+                        },
+                    },
+                    span: 21..81,
+                },
+            ),
+            span: 14..81,
+        },
+    ],
+    span: 0..81,
+}

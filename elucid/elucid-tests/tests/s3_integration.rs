@@ -236,7 +236,7 @@ async fn s3_ingest_then_query_count() {
     let ctx = Context::with_storage_config(config);
 
     let df = ctx
-        .execute(&format!("source {table} | summarize count()"))
+        .execute(&format!("source {table} | summarize event_count = count()"))
         .await
         .expect("query failed");
 

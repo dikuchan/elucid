@@ -15,8 +15,15 @@ type RichErrors<'a> = Vec<RichError<'a>>;
 pub struct ParserError<'a>(RichErrors<'a>);
 
 impl<'a> ParserError<'a> {
-    pub fn new(errors: RichErrors<'a>) -> Self {
+    pub(crate) fn new(errors: RichErrors<'a>) -> Self {
         Self(errors)
+    }
+
+    #[must_use]
+    pub fn span(&self) -> Span {
+        self.0
+            .first()
+            .map_or_else(|| Span::new(0..0), |error| *error.span())
     }
 
     /// Renders a pretty visual report to `stderr`.
@@ -30,7 +37,7 @@ impl<'a> ParserError<'a> {
 
     fn new_error_report(error: &Rich<Token<'a>, Span>) -> Report<'a, Span> {
         let span = error.span().to_owned();
-        Report::build(ReportKind::Error, span.clone())
+        Report::build(ReportKind::Error, span)
             .with_message(error.to_string())
             .with_label(
                 Label::new(span)

@@ -1798,6 +1798,7 @@ dependencies = [
  "chumsky",
  "insta",
  "logos",
+ "serde_json",
 ]
 
 [[package]]

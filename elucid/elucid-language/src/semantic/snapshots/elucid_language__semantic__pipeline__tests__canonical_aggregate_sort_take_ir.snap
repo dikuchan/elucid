@@ -4,7 +4,7 @@ expression: pipeline
 ---
 Pipeline {
     source: SourceSpec {
-        dataset: "test",
+        dataset: "logs",
     },
     time_range: TimeRange {
         earliest: None,
@@ -16,12 +16,27 @@ Pipeline {
                 AggregateExpr {
                     function: "count",
                     argument: None,
-                    alias: None,
+                    alias: Some(
+                        "event_count",
+                    ),
+                },
+                AggregateExpr {
+                    function: "sum",
+                    argument: Some(
+                        Field(
+                            FieldRef {
+                                name: "status",
+                            },
+                        ),
+                    ),
+                    alias: Some(
+                        "total",
+                    ),
                 },
             ],
             group_by: [
                 FieldRef {
-                    name: "method",
+                    name: "source",
                 },
             ],
         },
@@ -30,7 +45,7 @@ Pipeline {
                 SortSpec {
                     expr: Field(
                         FieldRef {
-                            name: "count",
+                            name: "event_count",
                         },
                     ),
                     order: Descending,

@@ -1,8 +1,0 @@
----
-source: elucid-language/src/semantic/expression.rs
-expression: result
----
-Call(
-    "count",
-    [],
-)

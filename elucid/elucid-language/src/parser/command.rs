@@ -2,140 +2,180 @@ use chumsky::Parser;
 use chumsky::input::ValueInput;
 use chumsky::prelude::*;
 
-use crate::ast;
+use crate::ast::{
+    AggregateCall, AggregateFunction, ComputedProjection, Measure, Projection, SortDirection,
+    SortItem, Stage, StageKind,
+};
 use crate::lexer::Token;
 use crate::span::Span;
 
-use super::{expression::expression_parser, identifier};
+use super::expression::{expression_parser, signed_integer_literal};
+use super::{field_reference, identifier};
 
-fn call_or_field<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Expression, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
-{
-    let identifier = identifier();
-
-    let call = identifier
-        .clone()
-        .then_ignore(just(Token::LeftParenthesis))
-        .then(
-            expression_parser()
-                .separated_by(just(Token::Comma))
-                .collect(),
-        )
-        .then_ignore(just(Token::RightParenthesis))
-        .map(|(name, arguments)| ast::Expression::Call(name, arguments));
-
-    let field = identifier.map(ast::Expression::Field);
-
-    call.or(field).labelled("field or function call")
-}
-
-fn project_cmd<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
-where
-    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
-{
-    just(Token::KeywordProject)
-        .ignore_then(
-            expression_parser()
-                .separated_by(just(Token::Comma))
-                .collect(),
-        )
-        .map(ast::Command::Project)
-        .labelled("project")
-}
-
-fn filter_cmd<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+fn filter_stage<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Stage, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
     just(Token::KeywordFilter)
         .ignore_then(expression_parser())
-        .map(ast::Command::Filter)
-        .labelled("filter")
+        .map_with(|expression, extra| Stage::new(StageKind::Filter(expression), extra.span()))
+        .labelled("filter stage")
 }
 
-fn sort_cmd<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+fn project_stage<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Stage, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    let sort_atom = call_or_field()
-        .or(expression_parser()
-            .delimited_by(just(Token::LeftParenthesis), just(Token::RightParenthesis)))
-        .labelled("sort expression");
+    let computed = identifier()
+        .then_ignore(just(Token::OperatorAssign))
+        .then(expression_parser())
+        .map_with(|(alias, expression), extra| {
+            Projection::Computed(ComputedProjection::new(alias, expression, extra.span()))
+        });
+    let field = field_reference().map(Projection::Field);
+    let projection = choice((computed, field)).labelled("projection");
 
-    let sort_item = choice((
-        just(Token::OperatorSubtract)
-            .ignore_then(sort_atom.clone())
-            .map(|expression| ast::SortExpression::new(expression, ast::SortOrder::Descending)),
-        just(Token::OperatorAdd)
-            .ignore_then(sort_atom.clone())
-            .map(|expression| ast::SortExpression::new(expression, ast::SortOrder::Ascending)),
-        sort_atom.map(|expression| ast::SortExpression::new(expression, ast::SortOrder::Ascending)),
-    ));
+    just(Token::KeywordProject)
+        .ignore_then(
+            projection
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map_with(|projections, extra| {
+            Stage::new(
+                StageKind::Project(projections.into_boxed_slice()),
+                extra.span(),
+            )
+        })
+        .labelled("project stage")
+}
+
+fn sort_stage<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Stage, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+where
+    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
+{
+    let direction = choice((
+        just(Token::OperatorAdd).to(SortDirection::Ascending),
+        just(Token::OperatorSubtract).to(SortDirection::Descending),
+    ))
+    .or_not();
+    let item = direction
+        .then(field_reference())
+        .map_with(|(direction, field), extra| {
+            SortItem::new(
+                field,
+                direction.unwrap_or(SortDirection::Ascending),
+                extra.span(),
+            )
+        });
 
     just(Token::KeywordSort)
         .ignore_then(just(Token::KeywordBy).or_not())
-        .ignore_then(sort_item.separated_by(just(Token::Comma)).collect())
-        .map(ast::Command::Sort)
-        .labelled("sort")
+        .ignore_then(
+            item.separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map_with(|items, extra| {
+            Stage::new(StageKind::Sort(items.into_boxed_slice()), extra.span())
+        })
+        .labelled("sort stage")
 }
 
-fn take_cmd<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+fn take_stage<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Stage, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
     just(Token::KeywordTake)
-        .ignore_then(select! { Token::Integer(n) => n }.labelled("integer"))
-        .map(ast::Command::Take)
-        .labelled("take")
+        .ignore_then(signed_integer_literal())
+        .map_with(|value, extra| Stage::new(StageKind::Take(value), extra.span()))
+        .labelled("take stage")
 }
 
-fn summarize_cmd<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+fn aggregate_function<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, AggregateFunction, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    let aliased = identifier()
-        .then_ignore(just(Token::OperatorAssign))
-        .then(expression_parser())
-        .map(|(alias, expression)| (expression, Some(alias)));
-
-    let unaliased = call_or_field().map(|expression| (expression, None));
-
-    let summarize_item = choice((aliased, unaliased)).labelled("summarize item");
-
-    let by_clause = just(Token::KeywordBy)
-        .ignore_then(
-            expression_parser()
-                .separated_by(just(Token::Comma))
-                .collect(),
-        )
-        .or_not()
-        .map(|option| option.unwrap_or_default());
-
-    just(Token::KeywordSummarize)
-        .ignore_then(summarize_item.separated_by(just(Token::Comma)).collect())
-        .then(by_clause)
-        .map(|(aggregates, by)| ast::Command::Summarize { aggregates, by })
-        .labelled("summarize")
+    select! {
+        Token::KeywordCount => AggregateFunction::Count,
+        Token::KeywordSum => AggregateFunction::Sum,
+        Token::KeywordMin => AggregateFunction::Min,
+        Token::KeywordMax => AggregateFunction::Max,
+        Token::KeywordAvg => AggregateFunction::Avg,
+    }
+    .labelled("aggregate function")
 }
 
-pub fn command_parser<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, ast::Command, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+fn aggregate_call<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, AggregateCall, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
+where
+    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
+{
+    aggregate_function()
+        .then_ignore(just(Token::LeftParenthesis))
+        .then(field_reference().or_not())
+        .then_ignore(just(Token::RightParenthesis))
+        .map_with(|(function, argument), extra| {
+            AggregateCall::new(function, argument, extra.span())
+        })
+        .labelled("aggregate call")
+}
+
+fn summarize_stage<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Stage, extra::Err<Rich<'tokens, Token<'source>, Span>>>
+where
+    I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
+{
+    let measure = identifier()
+        .then_ignore(just(Token::OperatorAssign))
+        .then(aggregate_call())
+        .map_with(|(alias, aggregate), extra| Measure::new(alias, aggregate, extra.span()));
+    let measures = measure
+        .separated_by(just(Token::Comma))
+        .at_least(1)
+        .collect::<Vec<_>>();
+    let group_by = just(Token::KeywordBy)
+        .ignore_then(
+            field_reference()
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .or_not()
+        .map(|fields| fields.unwrap_or_default());
+
+    just(Token::KeywordSummarize)
+        .ignore_then(measures)
+        .then(group_by)
+        .map_with(|(measures, group_by), extra| {
+            Stage::new(
+                StageKind::Summarize {
+                    measures: measures.into_boxed_slice(),
+                    group_by: group_by.into_boxed_slice(),
+                },
+                extra.span(),
+            )
+        })
+        .labelled("summarize stage")
+}
+
+pub(super) fn stage_parser<'tokens, 'source: 'tokens, I>()
+-> impl Parser<'tokens, I, Stage, extra::Err<Rich<'tokens, Token<'source>, Span>>>
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
     choice((
-        project_cmd(),
-        filter_cmd(),
-        sort_cmd(),
-        take_cmd(),
-        summarize_cmd(),
+        filter_stage(),
+        project_stage(),
+        sort_stage(),
+        take_stage(),
+        summarize_stage(),
     ))
-    .labelled("command")
+    .labelled("pipeline stage")
 }

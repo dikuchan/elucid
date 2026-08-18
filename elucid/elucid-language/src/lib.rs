@@ -3,10 +3,11 @@ mod semantic;
 mod span;
 
 pub mod ir;
-pub mod lexer;
+mod lexer;
 pub mod parser;
 
 pub use semantic::{AnalyzeError, ParseError, SemanticError};
+pub use span::Span;
 
 /// Analyzes a query string, producing a validated [`ir::Pipeline`].
 ///

@@ -3,25 +3,25 @@ use std::ops::Range;
 
 use chumsky::span::SimpleSpan;
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct Span {
     start: usize,
     end: usize,
 }
 
 impl Span {
-    pub fn new(range: Range<usize>) -> Self {
+    pub const fn new(range: Range<usize>) -> Self {
         Self {
             start: range.start,
             end: range.end,
         }
     }
 
-    pub fn start(&self) -> usize {
+    pub const fn start(&self) -> usize {
         self.start
     }
 
-    pub fn end(&self) -> usize {
+    pub const fn end(&self) -> usize {
         self.end
     }
 

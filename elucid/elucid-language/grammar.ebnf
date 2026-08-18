@@ -1,90 +1,57 @@
-(* EQL — EBNF Grammar *)
+(* Elucid query language grammar. *)
 
-(* ---- Lexical tokens ---- *)
+query                   = source_expression, { "|", stage } ;
+source_expression       = "source", identifier, [ start_bound ], [ end_bound ] ;
+start_bound             = "start_inclusive", "=", time_expression ;
+end_bound               = "end_exclusive", "=", time_expression ;
+time_expression         = datetime_constructor | "now" | relative_time ;
+relative_time           = time_operation, { time_operation } ;
+time_operation          = "@", time_unit | ( "+" | "-" ), [ positive_integer ], time_unit ;
+time_unit               = "s" | "m" | "h" | "d" ;
 
-integer = [ "-" ] , digit+                        ;
-string  = '"' , ( char | escape )* , '"'          ;
-ident   = alpha , ( alpha | digit | "_" )*        ;
-digit   = ? 0..9 ?                                ;
-alpha   = ? a..z | A..Z | _ ?                     ;
-char    = ? any character except '"' and '\' ?    ;
-escape  = "\" , ( "t" | "n" | "\"" | "\" | "u" )  ;
+stage                   = filter | project | sort | take | summarize ;
+filter                  = "filter", expression ;
+project                 = "project", projection, { ",", projection } ;
+projection              = field_reference | identifier, "=", expression ;
+sort                    = "sort", [ "by" ], sort_item, { ",", sort_item } ;
+sort_item               = [ "+" | "-" ], field_reference ;
+take                    = "take", signed_integer_literal ;
+summarize               = "summarize", measure, { ",", measure }, [ "by", field_reference, { ",", field_reference } ] ;
+measure                 = identifier, "=", aggregate_call ;
+aggregate_call          = aggregate_name, "(", [ field_reference ], ")" ;
 
-(* ---- Keywords ---- *)
-(* Command keywords are contextual: they may also be used as names where the
-   grammar expects an identifier. Operator and literal keywords stay reserved. *)
+expression              = logical_or ;
+logical_or              = logical_and, { "or", logical_and } ;
+logical_and             = comparison, { "and", comparison } ;
+comparison              = additive, [ comparison_operator, additive ] ;
+additive                = multiplicative, { ( "+" | "-" ), multiplicative } ;
+multiplicative          = unary, { ( "*" | "/" ), unary } ;
+unary                   = [ "not" | "-" ], primary ;
+primary                 = literal | field_reference | constructor | cast_expression | remainder_expression | "(", expression, ")" ;
 
-command_keyword = "source" | "project" | "filter" | "sort" | "take" | "summarize" ;
-keyword         = command_keyword | "by" | "and" | "or" | "not" | "null" | "true" | "false" ;
-name            = ident | command_keyword ;
+constructor             = numeric_constructor | datetime_constructor | eid_constructor ;
+numeric_constructor     = integer_constructor | floating_constructor ;
+integer_constructor     = integer_type, "(", signed_integer_literal, ")" ;
+floating_constructor    = floating_type, "(", signed_numeric_literal, ")" ;
+datetime_constructor    = "datetime", "(", string_literal, ")" ;
+eid_constructor         = "eid", "(", string_literal, ")" ;
+cast_expression         = ( "cast" | "try_cast" ), "(", expression, "as", logical_type, ")" ;
+remainder_expression    = ( "rest" | "rest_exists" ), "(", string_literal, ")" ;
 
-(* ---- Top-level ---- *)
-
-query = "source" , name , ( "|" , command )* ;
-
-(* ---- Commands ---- *)
-
-command = project_command
-        | filter_command
-        | sort_command
-        | take_command
-        | summarize_command
-        ;
-
-project_command = "project" , expression , { "," , expression } ;
-
-filter_command = "filter" , expression ;
-
-sort_command      = "sort" , [ "by" ] , sort_command_item , { "," , sort_command_item } ;
-sort_command_item = [ "+" | "-" ] , sort_command_atom ;
-sort_command_atom = call
-                  | field
-                  | "(" , expression , ")"
-                  ;
-
-take_command = "take" , integer ;
-
-summarize_command      = "summarize" , summarize_command_item , { "," , summarize_command_item } , [ "by" , expression , { "," , expression } ] ;
-summarize_command_item = name , "=" , expression
-                       | call
-                       | field
-                       ;
-
-(* ---- Expressions ---- *)
-(* All operators are left-associative (except not, which is prefix).
-   Precedence from highest to lowest binding:
-     not (prefix)
-     *  /
-     +  -
-     ==  !=  >  >=  <  <=
-     and
-     or                                                           *)
-
-expression = or_expression ;
-
-or_expression = and_expression , { "or" , and_expression } ;
-
-and_expression = comparison_expression , { "and" , comparison_expression } ;
-
-comparison_expression = additive_expression , { ( "==" | "!=" | ">" | ">=" | "<" | "<=" ) , additive_expression } ;
-
-additive_expression = multiplicative_expression , { ( "+" | "-" ) , multiplicative_expression } ;
-
-multiplicative_expression = unary_expression , { ( "*" | "/" ) , unary_expression } ;
-
-unary_expression = "not" , unary_expression
-                 | atom
-                 ;
-
-atom = integer
-     | string
-     | "null"
-     | "true" | "false"
-     | call
-     | field
-     | "(" , expression , ")"
-     ;
-
-call = name , "(" , [ expression , { "," , expression } ] , ")" ;
-
-field = name ; (* a bare identifier not followed by "(" *)
+literal                 = integer_literal | floating_point_literal | string_literal | "true" | "false" | "null" ;
+field_reference         = identifier | system_identifier ;
+identifier              = unquoted_identifier | quoted_identifier ;
+unquoted_identifier     = ? non-reserved or contextual [A-Za-z_][A-Za-z0-9_]* ? ;
+quoted_identifier       = "`", ? [A-Za-z_][A-Za-z0-9_]* ?, "`" ;
+system_identifier       = ? @[A-Za-z_][A-Za-z0-9_]* ? ;
+signed_integer_literal  = [ "-" ], integer_literal ;
+signed_numeric_literal  = [ "-" ], ( integer_literal | floating_point_literal ) ;
+integer_literal         = ? unsigned decimal integer in [0, 18446744073709551615] ? ;
+floating_point_literal  = ? unsigned JSON number containing a fraction or exponent and producing finite binary64 ? ;
+positive_integer        = ? non-zero unsigned decimal integer ? ;
+string_literal          = ? JSON string literal ? ;
+comparison_operator     = "==" | "!=" | ">" | ">=" | "<" | "<=" ;
+aggregate_name          = "count" | "sum" | "min" | "max" | "avg" ;
+integer_type            = "int32" | "int64" | "uint32" | "uint64" ;
+floating_type           = "float32" | "float64" ;
+logical_type            = "bool" | "int32" | "int64" | "uint32" | "uint64" | "float32" | "float64" | "utf8" | "datetime" | "eid" | "json" ;

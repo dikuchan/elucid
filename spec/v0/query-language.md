@@ -50,12 +50,12 @@ time_unit             = "s" | "m" | "h" | "d" ;
 stage                 = filter | project | sort | take | summarize ;
 filter                = "filter", expression ;
 project               = "project", projection, { ",", projection } ;
-projection            = [ identifier, "=" ], expression ;
+projection            = field_reference | identifier, "=", expression ;
 sort                   = "sort", [ "by" ], sort_item, { ",", sort_item } ;
 sort_item              = [ "+" | "-" ], field_reference ;
 take                   = "take", signed_integer_literal ;
 summarize              = "summarize", measure, { ",", measure }, [ "by", field_reference, { ",", field_reference } ] ;
-measure                = [ identifier, "=" ], aggregate_call ;
+measure                = identifier, "=", aggregate_call ;
 aggregate_call         = aggregate_name, "(", [ field_reference ], ")" ;
 expression             = logical_or ;
 logical_or             = logical_and, { "or", logical_and } ;
@@ -65,7 +65,10 @@ additive               = multiplicative, { ( "+" | "-" ), multiplicative } ;
 multiplicative         = unary, { ( "*" | "/" ), unary } ;
 unary                  = [ "not" | "-" ], primary ;
 primary                = literal | field_reference | constructor | cast_expression | remainder_expression | "(", expression, ")" ;
-constructor            = datetime_constructor | eid_constructor ;
+constructor            = numeric_constructor | datetime_constructor | eid_constructor ;
+numeric_constructor    = integer_constructor | floating_constructor ;
+integer_constructor    = integer_type, "(", signed_integer_literal, ")" ;
+floating_constructor   = floating_type, "(", signed_numeric_literal, ")" ;
 datetime_constructor   = "datetime", "(", string_literal, ")" ;
 eid_constructor        = "eid", "(", string_literal, ")" ;
 cast_expression        = ( "cast" | "try_cast" ), "(", expression, "as", logical_type, ")" ;
@@ -77,18 +80,27 @@ unquoted_identifier    = ? non-reserved or contextual [A-Za-z_][A-Za-z0-9_]* ? ;
 quoted_identifier      = "`", ? [A-Za-z_][A-Za-z0-9_]* ?, "`" ;
 system_identifier      = ? @[A-Za-z_][A-Za-z0-9_]* ? ;
 signed_integer_literal = [ "-" ], integer_literal ;
+signed_numeric_literal = [ "-" ], ( integer_literal | floating_point_literal ) ;
 integer_literal        = ? unsigned decimal integer in [0, 18446744073709551615] ? ;
 floating_point_literal = ? unsigned JSON number containing a fraction or exponent and producing finite binary64 ? ;
 positive_integer       = ? non-zero unsigned decimal integer ? ;
 string_literal         = ? JSON string literal ? ;
 comparison_operator    = "==" | "!=" | ">" | ">=" | "<" | "<=" ;
 aggregate_name         = "count" | "sum" | "min" | "max" | "avg" ;
+integer_type           = "int32" | "int64" | "uint32" | "uint64" ;
+floating_type          = "float32" | "float64" ;
 logical_type           = "bool" | "int32" | "int64" | "uint32" | "uint64" | "float32" | "float64" | "utf8" | "datetime" | "eid" | "json" ;
 ```
 
 An omitted signed-operation magnitude means `1`. `positive_integer` MUST be greater than zero. A repeated, reversed, or duplicate source bound MUST produce `QUERY_SYNTAX_ERROR`.
 
-## 4. Time expressions
+## 4. Constructors
+
+A numeric constructor MUST accept exactly one compile-time numeric literal and MUST NOT accept a field, function, cast, parenthesized expression, or arithmetic expression. `int32` and `int64` MUST accept a signed integer literal. `uint32` and `uint64` MUST accept a signed integer literal and reject a leading minus as `QUERY_LITERAL_INVALID`. `float32` and `float64` MUST accept a signed integer or floating-point literal. Analysis MUST convert the original numeric token directly to the target type without first assigning an intermediate `int64` or `float64` type. Integer overflow and a non-finite floating-point result MUST produce `QUERY_LITERAL_INVALID`. Floating-point construction MUST perform one IEEE 754 round-to-nearest, ties-to-even conversion to the target format. A numeric constructor MUST produce one non-null constant and MUST NOT survive into runtime IR.
+
+`datetime("value")` MUST accept one compile-time RFC 3339 string with `Z` or an explicit numeric offset, normalize it to UTC milliseconds, and reject unrepresentable sub-millisecond precision. `eid("value")` MUST accept exactly 32 lowercase hexadecimal characters and produce one `eid` value. Every constructor's arity and argument constancy are fixed by grammar. A constructor MUST NOT survive into runtime IR.
+
+## 5. Time expressions
 
 The query engine MUST capture one UTC millisecond `query_reference_time` for an execution. Every relative time expression in that execution MUST start from that exact value.
 
@@ -96,13 +108,11 @@ The query engine MUST capture one UTC millisecond `query_reference_time` for an 
 
 Relative operations MUST execute from left to right. A signed operation adds the stated fixed duration; `d` means exactly 24 hours. A truncation operation rounds down in UTC to the named second, minute, hour, or calendar day. Therefore `-1d@h` subtracts 24 hours and then truncates to the hour, while `@h` truncates the reference time without a shift.
 
-`datetime("value")` MUST accept one compile-time RFC 3339 string with `Z` or an explicit numeric offset, normalize it to UTC milliseconds, and reject unrepresentable sub-millisecond precision. `eid("value")` MUST accept exactly 32 lowercase hexadecimal characters and produce one `eid` value. Constructor arity and argument constancy are fixed by grammar.
-
 Each source expression owns its bounds. An explicit `start_inclusive` replaces the execution request's start; an explicit `end_exclusive` replaces the request's end. Each absent bound independently inherits the corresponding request value. The resolved interval denotes `[start_inclusive, end_exclusive)` and MUST satisfy `start_inclusive < end_exclusive`; a violation after applying source bounds MUST produce `QUERY_TIME_RANGE_INVALID`.
 
 AST time values MUST be structured absolute or relative expressions. Typed IR MUST contain structured time operations or resolved UTC instants, never unvalidated strings.
 
-## 5. Field resolution
+## 6. Field resolution
 
 The source relation MUST expose the active schema from the catalog snapshot. System identifiers MUST resolve only to declared system fields; an unknown system identifier MUST produce `QUERY_FIELD_NOT_FOUND`.
 
@@ -119,7 +129,7 @@ Schema-field resolution takes precedence over implicit remainder resolution. Pro
 
 Each stage MUST be analyzed against the preceding stage's output schema. A duplicate output name MUST produce `QUERY_DUPLICATE_OUTPUT_FIELD`.
 
-## 6. Values and nulls
+## 7. Values and nulls
 
 Expressions use catalog logical types plus the polymorphic literal type `null`. Nullability is tracked independently from logical type. A null literal MUST acquire one logical type from context; a null literal without a unique contextual type MUST produce `QUERY_TYPE_MISMATCH`.
 
@@ -133,7 +143,7 @@ Ordered comparisons require compatible numeric operands or two operands of the s
 
 Constant arithmetic overflow and division by zero MUST produce `QUERY_CONSTANT_EVALUATION_FAILED`. Row-dependent overflow or division by zero MUST produce `QUERY_EVALUATION_FAILED` unless the containing operation explicitly defines null-on-failure behavior.
 
-## 7. Casts
+## 8. Casts
 
 `cast(expression as type)` and `try_cast(expression as type)` MUST perform the same conversion. Null input MUST produce null. An invalid non-null conversion MUST terminate execution with `QUERY_CAST_FAILED` for `cast` and MUST produce null for `try_cast`.
 
@@ -153,29 +163,29 @@ Casting from `json` to another type MUST inspect its runtime kind. JSON null pro
 
 Casting to `json` MUST preserve a `json` input and encode a scalar as the corresponding canonical JSON scalar. `datetime` and `eid` MUST become JSON strings using their canonical `utf8` encodings.
 
-## 8. Pipeline stages
+## 9. Pipeline stages
 
-### 8.1 Filter
+### 9.1 Filter
 
 `filter` MUST require a nullable or non-null `bool` expression and MUST preserve the input schema.
 
-### 8.2 Project
+### 9.2 Project
 
 A bare field projection MUST retain its name, type, nullability, and value. A computed projection MUST use `name = expression`; an unaliased computed expression MUST produce `QUERY_PROJECTION_ALIAS_REQUIRED`.
 
 `project` MUST preserve declaration order, reject duplicate output names, and produce exactly the declared fields. A computed field's type and nullability MUST be inferred from its expression and become available to subsequent stages.
 
-### 8.3 Sort
+### 9.3 Sort
 
 An unsigned or `+` field sorts ascending; `-` sorts descending. Nulls MUST sort last in both directions. User-visible order is guaranteed only by an explicit `sort` stage.
 
 Sorting MUST reject `json`. Boolean order is `false` before `true`; numeric order is mathematical; `utf8` order is binary lexicographic order over valid UTF-8 bytes; `datetime` order is chronological; and `eid` order is unsigned lexicographic order over its 16 bytes.
 
-### 8.4 Take
+### 9.4 Take
 
 `take` MUST accept a non-negative signed 64-bit integer literal and limit the relation at its pipeline position. `take 0` MUST produce a typed empty relation. The value MUST NOT be compared with HTTP output-row limits because later stages can reduce the relation further.
 
-### 8.5 Summarize
+### 9.5 Summarize
 
 Every aggregate measure MUST use `alias = function(argument)`. An unaliased aggregate MUST produce `QUERY_AGGREGATE_ALIAS_REQUIRED`. Measure aliases MUST be unique and MUST NOT collide with group keys.
 
@@ -199,7 +209,7 @@ Group keys MUST reject `json`. Their equality semantics MUST match language equa
 
 Only `sort` and `take` MAY follow `summarize`. Their field references MUST resolve against the aggregation output schema.
 
-## 9. Diagnostics
+## 10. Diagnostics
 
 The top-level failure code MUST be `QUERY_SYNTAX_ERROR` when parsing fails and `QUERY_SEMANTIC_ERROR` when semantic analysis, including source resolution, fails. Every diagnostic MUST contain stable severity, stable code, message, and the original UTF-8 byte span when it refers to query text. Successful analysis MAY contain warning diagnostics.
 

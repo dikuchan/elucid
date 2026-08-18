@@ -1,376 +1,77 @@
-use super::error::SemanticError;
 use crate::ast::Query;
 use crate::ir;
 
-use super::command::convert_command;
+use super::command::convert_stage;
+use super::error::SemanticError;
 use super::validate::validate_pipeline;
 
-/// Converts a parsed [`Query`] AST into an [`ir::Pipeline`].
-///
-/// This is the top-level entry point for semantic analysis. It extracts the
-/// dataset name, validates the source, and converts each command into a
-/// pipeline stage.
-///
-/// # Errors
-///
-/// Returns a `Vec<SemanticError>` if:
-/// - The dataset name is empty or whitespace-only.
-/// - Any command fails structural validation (see [`convert_command`]).
 pub(crate) fn convert_query(query: &Query) -> Result<ir::Pipeline, Vec<SemanticError>> {
-    if query.source().trim().is_empty() {
+    if query.source().start_inclusive().is_some() || query.source().end_exclusive().is_some() {
         return Err(vec![SemanticError::ConversionError(
-            "dataset name must not be empty".to_owned(),
+            "source bounds are not supported by semantic analysis".to_owned(),
         )]);
     }
 
-    let source = ir::SourceSpec::new(query.source().to_owned());
-    let time_range = ir::TimeRange::default();
-
-    let mut errors: Vec<SemanticError> = Vec::new();
-    let mut stages: Vec<ir::PipelineStage> = Vec::with_capacity(query.commands().len());
-    for cmd in query.commands().iter().cloned() {
-        match convert_command(cmd) {
+    let source = ir::SourceSpec::new(query.source().name().as_str().to_owned());
+    let mut errors = Vec::new();
+    let mut stages = Vec::with_capacity(query.stages().len());
+    for stage in query.stages() {
+        match convert_stage(stage) {
             Ok(stage) => stages.push(stage),
-            Err(e) => errors.push(e),
+            Err(error) => errors.push(error),
         }
     }
     if !errors.is_empty() {
         return Err(errors);
     }
 
-    let pipeline = ir::Pipeline::new(source, time_range, stages);
+    let pipeline = ir::Pipeline::new(source, ir::TimeRange::default(), stages);
     validate_pipeline(&pipeline)?;
-
     Ok(pipeline)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::ast::Command;
-    use crate::ir;
-    use crate::parser;
-
-    /// Test helper: parse a query string and convert it to an [`ir::Pipeline`].
-    ///
-    /// Panics if parsing fails.
-    fn parse_and_convert(input: &str) -> Result<ir::Pipeline, Vec<SemanticError>> {
-        let query = parser::parse(input).unwrap_or_else(|e| {
-            e.eprint(input).unwrap();
-            panic!("parse failed for input: '{input}'");
-        });
-        convert_query(&query)
-    }
-
-    #[test]
-    fn source_only_no_stages() {
-        let pipeline = parse_and_convert("source test").expect("should convert");
-        assert_eq!(pipeline.source().dataset(), "test");
-        assert!(pipeline.stages().is_empty());
-    }
-
-    #[test]
-    fn single_filter_stage() {
-        let pipeline =
-            parse_and_convert("source test | filter status == 200").expect("should convert");
-        assert_eq!(pipeline.source().dataset(), "test");
-        assert_eq!(pipeline.stages().len(), 1);
-        assert_eq!(
-            &pipeline.stages()[0],
-            &ir::PipelineStage::Filter(ir::Expression::Binary(
-                ir::BinaryOperator::Equal,
-                Box::new(ir::Expression::Field(ir::FieldRef::new(
-                    "status".to_owned()
-                ))),
-                Box::new(ir::Expression::Literal(ir::Literal::Number(200.0))),
-            ))
-        );
-    }
-
-    #[test]
-    fn single_sort_stage() {
-        let pipeline = parse_and_convert("source test | sort by -count, +status, time")
-            .expect("should convert");
-        assert_eq!(pipeline.stages().len(), 1);
-
-        let ir::PipelineStage::Sort(specs) = &pipeline.stages()[0] else {
-            panic!("expected Sort stage");
-        };
-        assert_eq!(specs.len(), 3);
-
-        // -count → descending
-        assert_eq!(specs[0].order(), ir::SortOrder::Descending);
-        // +status → ascending
-        assert_eq!(specs[1].order(), ir::SortOrder::Ascending);
-        // time (no prefix) → ascending
-        assert_eq!(specs[2].order(), ir::SortOrder::Ascending);
-    }
-
-    #[test]
-    fn single_limit_stage() {
-        let pipeline = parse_and_convert("source test | take 10").expect("should convert");
-        assert_eq!(pipeline.stages().len(), 1);
-        assert_eq!(&pipeline.stages()[0], &ir::PipelineStage::Limit(10));
-    }
-
-    #[test]
-    fn single_project_stage() {
-        let pipeline =
-            parse_and_convert("source test | project name, age, active").expect("should convert");
-        assert_eq!(pipeline.stages().len(), 1);
-
-        let ir::PipelineStage::Project(fields) = &pipeline.stages()[0] else {
-            panic!("expected Project stage");
-        };
-        assert_eq!(fields.len(), 3);
-        assert_eq!(fields[0].as_str(), "name");
-        assert_eq!(fields[1].as_str(), "age");
-        assert_eq!(fields[2].as_str(), "active");
-    }
-
-    #[test]
-    fn single_aggregate_stage() {
-        let pipeline =
-            parse_and_convert("source test | summarize total = sum(bytes), count() by method")
-                .expect("should convert");
-        assert_eq!(pipeline.stages().len(), 1);
-
-        let ir::PipelineStage::Aggregate { measures, group_by } = &pipeline.stages()[0] else {
-            panic!("expected Aggregate stage");
-        };
-        assert_eq!(measures.len(), 2);
-        assert_eq!(measures[0].function(), "sum");
-        assert_eq!(measures[0].alias(), Some("total"));
-        assert_eq!(measures[1].function(), "count");
-        assert_eq!(group_by.len(), 1);
-        assert_eq!(group_by[0].as_str(), "method");
-    }
-
-    #[test]
-    fn multi_stage_pipeline() {
-        let pipeline =
-            parse_and_convert("source test | filter status == 200 | sort by -count | take 5")
-                .expect("should convert");
-
-        assert_eq!(pipeline.source().dataset(), "test");
-        assert_eq!(pipeline.stages().len(), 3);
-
-        // Stage 0: Filter
-        assert!(matches!(
-            &pipeline.stages()[0],
-            ir::PipelineStage::Filter(_)
-        ));
-
-        // Stage 1: Sort
-        let ir::PipelineStage::Sort(specs) = &pipeline.stages()[1] else {
-            panic!("expected Sort stage at index 1");
-        };
-        assert_eq!(specs.len(), 1);
-        assert_eq!(specs[0].order(), ir::SortOrder::Descending);
-
-        // Stage 2: Limit
-        assert_eq!(&pipeline.stages()[2], &ir::PipelineStage::Limit(5));
-    }
-
-    // Error cases.
-
-    #[test]
-    fn empty_source_returns_error() {
-        // Construct a Query with an empty source directly, since the parser
-        // would reject it.
-        let query = Query::new(String::new(), vec![]);
-        let result = convert_query(&query);
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(
-            &errors[0],
-            SemanticError::ConversionError(msg) if msg.contains("dataset name must not be empty")
-        ));
-    }
-
-    #[test]
-    fn whitespace_only_source_returns_error() {
-        let query = Query::new("   ".to_owned(), vec![]);
-        let result = convert_query(&query);
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
-        assert!(matches!(
-            &errors[0],
-            SemanticError::ConversionError(msg) if msg.contains("dataset name must not be empty")
-        ));
-    }
-
-    #[test]
-    fn multiple_invalid_commands_collect_all_errors() {
-        let query = Query::new(
-            "test".to_owned(),
-            vec![
-                Command::Take(0),         // InvalidLimitValue
-                Command::Project(vec![]), // EmptyFieldList
-            ],
-        );
-        let result = convert_query(&query);
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(
-            errors.len(),
-            2,
-            "should collect both errors, got {errors:?}"
-        );
-    }
-
-    #[test]
-    fn snapshot_multi_stage_pipeline() {
-        let pipeline =
-            parse_and_convert("source test | filter status == 200 | sort by -count | take 5")
-                .expect("should convert");
-        insta::assert_debug_snapshot!("multi_stage_pipeline", pipeline);
-    }
-
-    #[test]
-    fn snapshot_aggregate_pipeline() {
-        let pipeline =
-            parse_and_convert("source test | summarize total = sum(bytes), count() by method")
-                .expect("should convert");
-        insta::assert_debug_snapshot!("aggregate_pipeline", pipeline);
-    }
-
-    #[test]
-    fn validation_rejects_two_summarize_commands() {
-        let result = parse_and_convert("source logs | summarize count() | summarize sum(count)");
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0], SemanticError::MultipleAggregates);
-    }
-
-    #[test]
-    fn validation_rejects_filter_after_summarize() {
-        let result = parse_and_convert("source logs | summarize count() | filter x > 1");
-        assert!(result.is_err());
-        let errors = result.unwrap_err();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0], SemanticError::AggregateAfterAggregate);
-    }
-
-    #[test]
-    fn validation_allows_sort_take_after_summarize() {
-        let result =
-            parse_and_convert("source logs | summarize count() by host | sort -count | take 10");
-        assert!(result.is_ok());
-        let pipeline = result.expect("should convert");
-        assert_eq!(pipeline.stages().len(), 3);
-        assert!(matches!(
-            &pipeline.stages()[0],
-            ir::PipelineStage::Aggregate { .. }
-        ));
-        assert!(matches!(&pipeline.stages()[1], ir::PipelineStage::Sort(_)));
-        assert!(matches!(&pipeline.stages()[2], ir::PipelineStage::Limit(_)));
-    }
-
-    // Public API integration tests.
-
     use crate::analyze;
-    use crate::semantic::error::AnalyzeError;
 
     #[test]
-    fn analyze_snapshot_filter() {
-        let pipeline = analyze("source test | filter status == 200").expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_filter", pipeline);
+    fn canonical_filter_project_sort_take_ir() {
+        let pipeline = analyze(
+            r#"source logs | filter status >= 400 and source == "nginx" | project source, status | sort by -status | take 5"#,
+        )
+        .expect("canonical query is valid");
+
+        insta::assert_debug_snapshot!(pipeline);
     }
 
     #[test]
-    fn analyze_snapshot_summarize_sort_take() {
-        let pipeline =
-            analyze("source test | summarize count() by method | sort by -count | take 10")
-                .expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_summarize_sort_take", pipeline);
+    fn canonical_aggregate_sort_take_ir() {
+        let pipeline = analyze(
+            "source logs | summarize event_count = count(), total = sum(status) by source | sort by -event_count | take 10",
+        )
+        .expect("canonical query is valid");
+
+        insta::assert_debug_snapshot!(pipeline);
     }
 
     #[test]
-    fn analyze_snapshot_project_sort_take() {
-        let pipeline = analyze("source test | project name, age | sort by name | take 5")
-            .expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_project_sort_take", pipeline);
-    }
-
-    #[test]
-    fn analyze_snapshot_multiple_filters() {
-        let pipeline = analyze("source test | filter a > 1 | filter b < 2 | sort by a")
-            .expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_multiple_filters", pipeline);
-    }
-
-    #[test]
-    fn analyze_snapshot_source_only() {
-        let pipeline = analyze("source test").expect("should analyze");
-        insta::assert_debug_snapshot!("analyze_source_only", pipeline);
-    }
-
-    #[test]
-    fn analyze_error_multiple_aggregates() {
-        let result = analyze("source logs | summarize count() | summarize sum(count)");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        match &err {
-            AnalyzeError::Semantic(errors) => {
-                assert_eq!(errors.len(), 1);
-                assert_eq!(errors[0], SemanticError::MultipleAggregates);
-            }
-            other => panic!("expected AnalyzeError::Semantic, got {other:?}"),
+    fn take_accepts_zero_with_or_without_a_minus_sign() {
+        for query in ["source logs | take 0", "source logs | take -0"] {
+            let pipeline = analyze(query).expect("zero is a valid take value");
+            assert!(matches!(
+                pipeline.stages(),
+                [crate::ir::PipelineStage::Limit(0)]
+            ));
         }
-        insta::assert_snapshot!("analyze_error_multiple_aggregates", err.to_string());
     }
 
     #[test]
-    fn analyze_error_aggregate_after_aggregate() {
-        let result = analyze("source logs | summarize count() | filter x > 1");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        match &err {
-            AnalyzeError::Semantic(errors) => {
-                assert_eq!(errors.len(), 1);
-                assert_eq!(errors[0], SemanticError::AggregateAfterAggregate);
-            }
-            other => panic!("expected AnalyzeError::Semantic, got {other:?}"),
-        }
-        insta::assert_snapshot!("analyze_error_aggregate_after_aggregate", err.to_string());
-    }
-
-    #[test]
-    fn analyze_error_invalid_limit() {
-        let result = analyze("source logs | take 0");
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        match &err {
-            AnalyzeError::Semantic(errors) => {
-                assert_eq!(errors.len(), 1);
-                assert_eq!(errors[0], SemanticError::InvalidLimitValue { value: 0 });
-            }
-            other => panic!("expected AnalyzeError::Semantic, got {other:?}"),
-        }
-        insta::assert_snapshot!("analyze_error_invalid_limit", err.to_string());
-    }
-
-    #[test]
-    fn analyze_error_parse_failure_empty_input() {
-        let result = analyze("");
-        assert!(result.is_err(), "empty input should fail");
-        assert!(
-            matches!(result.unwrap_err(), AnalyzeError::Parse(_)),
-            "empty input should produce a Parse error"
-        );
-    }
-
-    #[test]
-    fn analyze_error_parse_failure_no_source() {
-        let result = analyze("| filter x > 1");
-        assert!(result.is_err(), "missing source should fail");
-        assert!(
-            matches!(result.unwrap_err(), AnalyzeError::Parse(_)),
-            "missing source should produce a Parse error"
-        );
+    fn take_rejects_a_negative_value() {
+        let error = analyze("source logs | take -1").expect_err("negative take must be rejected");
+        assert!(matches!(
+            error,
+            crate::AnalyzeError::Semantic(errors)
+                if errors == vec![crate::SemanticError::InvalidLimitValue { value: -1 }]
+        ));
     }
 }

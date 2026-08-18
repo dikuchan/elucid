@@ -73,10 +73,14 @@ mod tests {
         )
     }
 
-    /// Helper: a minimal Aggregate stage with `count()`, no group-by.
+    /// Helper: a minimal Aggregate stage with an aliased `count()`, no group-by.
     fn aggregate_stage() -> ir::PipelineStage {
         ir::PipelineStage::Aggregate {
-            measures: vec![ir::AggregateExpr::new("count".to_owned(), None, None)],
+            measures: vec![ir::AggregateExpr::new(
+                "count".to_owned(),
+                None,
+                Some("event_count".to_owned()),
+            )],
             group_by: vec![],
         }
     }
@@ -125,7 +129,7 @@ mod tests {
 
     #[test]
     fn filter_after_aggregate_produces_error() {
-        // summarize count() by host | filter x > 5
+        // summarize event_count = count() by host | filter x > 5
         let pipeline = make_pipeline(vec![aggregate_stage(), filter_stage()]);
         let errors = validate_pipeline(&pipeline).expect_err("should fail");
         assert_eq!(errors.len(), 1);
@@ -134,14 +138,14 @@ mod tests {
 
     #[test]
     fn sort_and_limit_after_aggregate_is_valid() {
-        // summarize count() by host | sort -count | take 10
+        // summarize event_count = count() by host | sort -event_count | take 10
         let pipeline = make_pipeline(vec![aggregate_stage(), sort_stage(), limit_stage(10)]);
         assert!(validate_pipeline(&pipeline).is_ok());
     }
 
     #[test]
     fn sort_limit_then_filter_after_aggregate_produces_error() {
-        // summarize count() by host | sort -count | take 10 | filter x > 5
+        // summarize event_count = count() by host | sort -event_count | take 10 | filter x > 5
         let pipeline = make_pipeline(vec![
             aggregate_stage(),
             sort_stage(),

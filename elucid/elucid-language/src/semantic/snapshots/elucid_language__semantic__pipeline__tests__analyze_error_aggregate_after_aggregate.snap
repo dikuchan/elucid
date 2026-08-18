@@ -1,5 +1,0 @@
----
-source: elucid-language/src/semantic/pipeline.rs
-expression: err.to_string()
----
-only 'sort' and 'take' commands may follow a 'summarize' command
