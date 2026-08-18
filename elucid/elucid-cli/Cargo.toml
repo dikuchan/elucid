@@ -3,14 +3,17 @@ name = "elucid-cli"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 nu-ansi-term = { workspace = true }
-object_store = "0.12"
+object_store = { workspace = true }
 reedline = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
-url = "2"
+url = { workspace = true }
 uuid = { workspace = true }
 
 elucid-engine = { workspace = true }

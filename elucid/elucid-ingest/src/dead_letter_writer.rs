@@ -50,7 +50,7 @@ impl<W: tokio::io::AsyncWrite + Unpin> DeadLetterWriter<W> {
             "@error": error.to_string(),
             "@context": context.to_json(),
         });
-        let mut line = serde_json::to_string(&value).map_err(|e| io::Error::other(e))?;
+        let mut line = serde_json::to_string(&value).map_err(io::Error::other)?;
         line.push('\n');
         self.inner.write_all(line.as_bytes()).await?;
         self.count += 1;

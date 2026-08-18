@@ -53,9 +53,7 @@ impl chumsky::span::Span for Span {
         Self::new(range)
     }
 
-    fn context(&self) -> Self::Context {
-        ()
-    }
+    fn context(&self) -> Self::Context {}
 
     fn start(&self) -> Self::Offset {
         self.start

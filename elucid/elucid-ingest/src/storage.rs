@@ -41,11 +41,9 @@ impl StorageConfig {
     /// Returns [`StageError::Write`] if the URL scheme is not supported by
     /// `object_store`.
     pub fn from_url(url: Url) -> Result<Self, StageError> {
-        let (store, _) = object_store::parse_url_opts(
-            &url,
-            std::collections::HashMap::<String, String>::new(),
-        )
-        .map_err(|e| StageError::Write(format!("Failed to parse storage URL: {e}")))?;
+        let (store, _) =
+            object_store::parse_url_opts(&url, std::collections::HashMap::<String, String>::new())
+                .map_err(|e| StageError::Write(format!("Failed to parse storage URL: {e}")))?;
         let prefix = url.path().trim_matches('/').to_owned();
         Ok(Self::ObjectStore {
             store: Arc::from(store),

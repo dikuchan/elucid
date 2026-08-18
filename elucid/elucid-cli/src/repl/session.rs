@@ -1,8 +1,8 @@
 use elucid_engine::Context;
 use reedline::{DefaultPrompt, DefaultPromptSegment, Emacs, Reedline, Signal};
 
-use self::super::highlighter::QueryHighlighter;
-use self::super::validator::QueryValidator;
+use super::highlighter::QueryHighlighter;
+use super::validator::QueryValidator;
 
 pub async fn start(context: &Context) -> anyhow::Result<()> {
     let mut line_editor = Reedline::create()

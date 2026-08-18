@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{Context as _, anyhow};
 use clap::Parser;
 
 use crate::command::Command;
@@ -108,8 +108,7 @@ impl Command for IngestCommand {
                 summary
             }
             DataDirConfig::ObjectStore { store, prefix, .. } => {
-                let object_prefix =
-                    object_store::path::Path::from(prefix.as_str());
+                let object_prefix = object_store::path::Path::from(prefix.as_str());
                 let mut sink = elucid_ingest::ObjectStoreSink::new(
                     store.clone(),
                     object_prefix,

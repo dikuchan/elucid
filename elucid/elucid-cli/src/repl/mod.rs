@@ -1,5 +1,5 @@
 mod highlighter;
-mod repl;
+mod session;
 mod validator;
 
-pub use repl::start;
+pub use session::start;

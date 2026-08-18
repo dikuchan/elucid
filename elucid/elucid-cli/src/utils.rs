@@ -51,7 +51,9 @@ pub(crate) fn resolve_data_dir(input: Option<String>) -> anyhow::Result<DataDirC
 ///
 /// For local paths, verifies the directory exists before constructing
 /// the context.
-pub(crate) fn build_engine_context(config: &DataDirConfig) -> anyhow::Result<elucid_engine::Context> {
+pub(crate) fn build_engine_context(
+    config: &DataDirConfig,
+) -> anyhow::Result<elucid_engine::Context> {
     match config {
         DataDirConfig::Local(path) => {
             if !path.exists() {
@@ -106,8 +108,8 @@ mod tests {
 
     #[test]
     fn memory_url_is_object_store() {
-        let config = resolve_data_dir(Some("memory:///data/prefix".to_owned()))
-            .expect("should resolve");
+        let config =
+            resolve_data_dir(Some("memory:///data/prefix".to_owned())).expect("should resolve");
         match config {
             DataDirConfig::ObjectStore { prefix, .. } => assert_eq!(prefix, "data/prefix"),
             _ => panic!("expected ObjectStore variant"),
@@ -116,8 +118,7 @@ mod tests {
 
     #[test]
     fn memory_url_empty_prefix() {
-        let config =
-            resolve_data_dir(Some("memory:///".to_owned())).expect("should resolve");
+        let config = resolve_data_dir(Some("memory:///".to_owned())).expect("should resolve");
         match config {
             DataDirConfig::ObjectStore { prefix, .. } => assert_eq!(prefix, ""),
             _ => panic!("expected ObjectStore variant"),

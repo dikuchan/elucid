@@ -3,18 +3,21 @@ name = "elucid-tests"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 arrow = { workspace = true }
 datafusion = { workspace = true }
 elucid-engine = { workspace = true }
 elucid-ingest = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
-tempfile = "3"
+tempfile = { workspace = true }
 
 [dev-dependencies]
-bytes = "1"
-futures = "0.3"
-object_store = { version = "0.12", features = ["aws"] }
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
-testcontainers-modules = { version = "0.15", features = ["localstack"] }
-url = "2"
+bytes = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true, features = ["aws"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+testcontainers-modules = { workspace = true, features = ["localstack"] }
+url = { workspace = true }

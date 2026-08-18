@@ -12,11 +12,11 @@ use elucid_engine::{Context, StorageConfig};
 use elucid_ingest::{
     DeadLetterWriter, LineSource, NoopWal, ObjectStoreSink, SchemaConfig, TableName, ingest,
 };
+use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
-use object_store::ObjectStore;
 use testcontainers_modules::localstack::LocalStack;
-use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
+use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
 use url::Url;
 
 const TEST_DATA: &str = r#"{"timestamp":"2025-01-15T10:00:00Z","source":"nginx","status":200,"path":"/home"}
@@ -141,10 +141,7 @@ async fn s3_ingest_then_query_all_rows() {
         .expect("failed to start LocalStack");
 
     let host_ip = container.get_host().await.expect("host ip");
-    let host_port = container
-        .get_host_port_ipv4(4566)
-        .await
-        .expect("host port");
+    let host_port = container.get_host_port_ipv4(4566).await.expect("host port");
     let endpoint = format!("http://{host_ip}:{host_port}");
     let bucket = "elucid-test";
 
@@ -182,10 +179,7 @@ async fn s3_ingest_then_query_filter() {
         .expect("failed to start LocalStack");
 
     let host_ip = container.get_host().await.expect("host ip");
-    let host_port = container
-        .get_host_port_ipv4(4566)
-        .await
-        .expect("host port");
+    let host_port = container.get_host_port_ipv4(4566).await.expect("host port");
     let endpoint = format!("http://{host_ip}:{host_port}");
     let bucket = "elucid-test";
 
@@ -222,10 +216,7 @@ async fn s3_ingest_then_query_count() {
         .expect("failed to start LocalStack");
 
     let host_ip = container.get_host().await.expect("host ip");
-    let host_port = container
-        .get_host_port_ipv4(4566)
-        .await
-        .expect("host port");
+    let host_port = container.get_host_port_ipv4(4566).await.expect("host port");
     let endpoint = format!("http://{host_ip}:{host_port}");
     let bucket = "elucid-test";
 
@@ -278,10 +269,7 @@ async fn s3_ingest_multiple_batches_then_query() {
         .expect("failed to start LocalStack");
 
     let host_ip = container.get_host().await.expect("host ip");
-    let host_port = container
-        .get_host_port_ipv4(4566)
-        .await
-        .expect("host port");
+    let host_port = container.get_host_port_ipv4(4566).await.expect("host port");
     let endpoint = format!("http://{host_ip}:{host_port}");
     let bucket = "elucid-test";
 
@@ -329,5 +317,8 @@ async fn s3_ingest_multiple_batches_then_query() {
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
-    assert_eq!(rows, 5, "should return all 5 rows across multiple Parquet files");
+    assert_eq!(
+        rows, 5,
+        "should return all 5 rows across multiple Parquet files"
+    );
 }

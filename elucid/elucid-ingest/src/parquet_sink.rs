@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use arrow::record_batch::RecordBatch;
+use futures::future::BoxFuture;
 use parquet::arrow::async_writer::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -17,7 +18,7 @@ pub struct ParquetSink {
     data_root: PathBuf,
     table: TableName,
     pending: Option<RecordBatch>,
-    in_flight: Option<Pin<Box<dyn Future<Output = Result<(), StageError>> + Send>>>,
+    in_flight: Option<BoxFuture<'static, Result<(), StageError>>>,
     written_file_count: u64,
 }
 

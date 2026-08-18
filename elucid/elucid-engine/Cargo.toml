@@ -3,16 +3,19 @@ name = "elucid-engine"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 datafusion = { workspace = true }
-object_store = "0.12"
-url = "2"
+object_store = { workspace = true }
+url = { workspace = true }
 
 elucid-language = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true }
-bytes = "1"
+bytes = { workspace = true }
 parquet = { workspace = true, features = ["arrow"] }
-tempfile = "3"
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

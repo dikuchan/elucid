@@ -6,9 +6,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::record_batch::RecordBatch;
+use futures::future::BoxFuture;
+use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path as ObjectPath;
-use object_store::ObjectStore;
 use parquet::arrow::async_writer::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -25,17 +26,13 @@ pub struct ObjectStoreSink {
     prefix: ObjectPath,
     table: TableName,
     pending: Option<RecordBatch>,
-    in_flight: Option<Pin<Box<dyn Future<Output = Result<(), StageError>> + Send>>>,
+    in_flight: Option<BoxFuture<'static, Result<(), StageError>>>,
     written_file_count: u64,
 }
 
 impl ObjectStoreSink {
     /// Create a new sink that writes Parquet objects under `<prefix>/<table>/`.
-    pub fn new(
-        store: Arc<dyn ObjectStore>,
-        prefix: ObjectPath,
-        table: TableName,
-    ) -> Self {
+    pub fn new(store: Arc<dyn ObjectStore>, prefix: ObjectPath, table: TableName) -> Self {
         Self {
             store,
             prefix,

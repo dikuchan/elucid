@@ -328,7 +328,7 @@ mod tests {
         let schema = all_types_schema();
         let normalization = Normalizer::new(&schema).expect("normalizer");
 
-        let raw = r#"{"ts":"2025-01-01T00:00:00Z","s":"hello","i64":42,"i32":7,"u64":99,"u32":5,"f64":3.14,"f32":2.5,"b":true}"#;
+        let raw = r#"{"ts":"2025-01-01T00:00:00Z","s":"hello","i64":42,"i32":7,"u64":99,"u32":5,"f64":3.125,"f32":2.5,"b":true}"#;
         let event = normalization
             .normalize(raw, TestContext)
             .expect("normalize");
@@ -347,7 +347,7 @@ mod tests {
         // u32 (index 5). Stored as UInt64, narrowing happens in batch.
         assert_eq!(v[5], EventValue::UInt64(5));
         // f64 (index 6).
-        assert!(matches!(v[6], EventValue::Float64(n) if (n - 3.14).abs() < f64::EPSILON));
+        assert!(matches!(v[6], EventValue::Float64(n) if (n - 3.125).abs() < f64::EPSILON));
         // f32 (index 7). Stored as Float64, narrowing happens in batch.
         assert!(matches!(v[7], EventValue::Float64(n) if (n - 2.5).abs() < f64::EPSILON));
         // b (index 8).

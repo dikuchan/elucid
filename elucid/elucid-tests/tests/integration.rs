@@ -95,10 +95,7 @@ async fn ingest_then_query_all_rows() {
     setup_and_ingest(dir.path()).await;
 
     let ctx = Context::new(dir.path());
-    let df = ctx
-        .execute("source test_logs")
-        .await
-        .expect("query failed");
+    let df = ctx.execute("source test_logs").await.expect("query failed");
     let rows = count_rows(df).await;
 
     assert_eq!(rows, 5, "unfiltered query should return all 5 rows");

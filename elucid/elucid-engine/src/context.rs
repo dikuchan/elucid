@@ -62,9 +62,12 @@ impl Context {
                     .register_parquet(table_name, table_path_str, options)
                     .await?;
             }
-            StorageConfig::ObjectStore { store, url, prefix: _ } => {
-                self.context
-                    .register_object_store(url, store.clone());
+            StorageConfig::ObjectStore {
+                store,
+                url,
+                prefix: _,
+            } => {
+                self.context.register_object_store(url, store.clone());
 
                 // DataFusion resolves object-store paths by URL scheme.
                 // Build the full URL (with trailing slash) so `register_parquet`

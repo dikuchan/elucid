@@ -332,7 +332,7 @@ mod tests {
             EventValue::Int64(7),
             EventValue::UInt64(99),
             EventValue::UInt64(5),
-            EventValue::Float64(3.14),
+            EventValue::Float64(3.125),
             EventValue::Float64(2.5),
             EventValue::Bool(true),
             EventValue::Null, // @rest.
@@ -395,7 +395,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .expect("f64");
-        assert!((f64v.value(0) - 3.14).abs() < f64::EPSILON);
+        assert!((f64v.value(0) - 3.125).abs() < f64::EPSILON);
 
         // f32 (index 7).
         let f32v = batch
