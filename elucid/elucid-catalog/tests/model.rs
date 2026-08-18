@@ -4,7 +4,7 @@ use arrow::datatypes::{DataType, TimeUnit};
 use elucid_catalog::{
     CatalogModelError, ConversionPolicy, DeclarationDigest, DefinitionDigests, EventTimeFormat,
     EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestProfile, IngestProfileRevision,
-    IngestProfileRevisionId, Input, InputEncoding, InputId, InputKind, JsonPointer,
+    IngestProfileRevisionId, Input, InputEncoding, InputId, InputKind, InputName, JsonPointer,
     LineBoundaryPolicy, LogicalType, MaterializedDigest, MaximumRecordBytes, Nullability,
     ParserKind, ProfileRevision, Schema, SchemaId, SchemaVersion, Source, SourceId, SourceName,
     UnknownFieldPolicy, UserField, UserFieldName, UserLogicalType,
@@ -452,8 +452,8 @@ fn user_field_name(name: &str) -> UserFieldName {
     UserFieldName::try_from(name).expect("the user field name is valid")
 }
 
-fn input_name(name: &str) -> elucid_catalog::InputName {
-    elucid_catalog::InputName::try_from(name).expect("the input name is valid")
+fn input_name(name: &str) -> InputName {
+    InputName::try_from(name).expect("the input name is valid")
 }
 
 fn schema_version(version: u64) -> SchemaVersion {

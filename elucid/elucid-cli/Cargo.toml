@@ -3,19 +3,25 @@ name = "elucid-cli"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "elucid"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-nu-ansi-term = { workspace = true }
-object_store = { workspace = true }
-reedline = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-std"] }
+reqwest = { workspace = true, features = ["rustls-tls", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "rt-multi-thread"] }
+tokio-util = { workspace = true, features = ["io"] }
 url = { workspace = true }
-uuid = { workspace = true }
 
-elucid-engine = { workspace = true }
-elucid-ingest = { workspace = true }
-elucid-language = { workspace = true }
+elucid-catalog = { workspace = true }
+elucid-service = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
