@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "elucid-catalog",
     "elucid-cli",
     "elucid-engine",
     "elucid-ingest",
@@ -44,6 +45,7 @@ tokio-stream = "0.1.18"
 url = "2.5.7"
 uuid = "1.19.0"
 
+elucid-catalog = { path = "elucid-catalog" }
 elucid-engine = { path = "elucid-engine" }
 elucid-ingest = { path = "elucid-ingest" }
 elucid-language = { path = "elucid-language" }

@@ -1,0 +1,12 @@
+[package]
+name = "elucid-catalog"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
