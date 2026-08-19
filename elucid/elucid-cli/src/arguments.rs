@@ -30,7 +30,7 @@ impl Arguments {
     pub(crate) fn into_action(self) -> Result<Action, String> {
         match (self.version, self.command) {
             (true, None) => Ok(Action::Version(self.output.unwrap_or(VersionOutput::Human))),
-            (false, Some(command)) => Ok(Action::Command(command)),
+            (false, Some(command)) => Ok(Action::Command(Box::new(command))),
             (true, Some(_)) => Err("--version cannot be combined with a command".to_owned()),
             (false, None) => Err("a command or --version is required".to_owned()),
         }
@@ -40,7 +40,7 @@ impl Arguments {
 #[derive(Debug)]
 pub(crate) enum Action {
     Version(VersionOutput),
-    Command(RootCommand),
+    Command(Box<RootCommand>),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -274,7 +274,7 @@ impl FromStr for ProductEndpoint {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct EnvironmentVariableName(Box<str>);
+pub(crate) struct EnvironmentVariableName(String);
 
 impl EnvironmentVariableName {
     pub(crate) fn as_str(&self) -> &str {
@@ -294,12 +294,12 @@ impl FromStr for EnvironmentVariableName {
         if !valid {
             return Err("environment variable name must match [A-Za-z_][A-Za-z0-9_]*".to_owned());
         }
-        Ok(Self(value.to_owned().into_boxed_str()))
+        Ok(Self(value.to_owned()))
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct IdempotencyKey(Box<str>);
+pub(crate) struct IdempotencyKey(String);
 
 impl IdempotencyKey {
     pub(crate) fn as_str(&self) -> &str {
@@ -318,7 +318,7 @@ impl FromStr for IdempotencyKey {
                 "idempotency key must contain 1 through 128 visible ASCII bytes".to_owned(),
             );
         }
-        Ok(Self(value.to_owned().into_boxed_str()))
+        Ok(Self(value.to_owned()))
     }
 }
 

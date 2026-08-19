@@ -38,7 +38,7 @@ impl Display for CatalogErrorCode {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
-pub struct CatalogPath(Box<str>);
+pub struct CatalogPath(String);
 
 impl CatalogPath {
     #[must_use]
@@ -64,7 +64,7 @@ pub enum SchemaIncompatibility {
     #[error("active non-null field {field_name:?} ({field_id}) is absent")]
     RequiredFieldAbsent {
         field_id: FieldId,
-        field_name: Box<str>,
+        field_name: String,
     },
 
     #[error(
@@ -72,7 +72,7 @@ pub enum SchemaIncompatibility {
     )]
     LogicalType {
         field_id: FieldId,
-        field_name: Box<str>,
+        field_name: String,
         stored_type: LogicalType,
         active_type: LogicalType,
     },
@@ -82,7 +82,7 @@ pub enum SchemaIncompatibility {
     )]
     Nullability {
         field_id: FieldId,
-        field_name: Box<str>,
+        field_name: String,
         stored_nullability: Nullability,
         active_nullability: Nullability,
     },
@@ -90,7 +90,7 @@ pub enum SchemaIncompatibility {
     #[error("field {field_name:?} ({field_id}) changed role")]
     Role {
         field_id: FieldId,
-        field_name: Box<str>,
+        field_name: String,
     },
 }
 
@@ -119,10 +119,7 @@ pub enum CatalogApplicationError {
     },
 
     #[error("catalog manifest is invalid at {path}: {message}")]
-    ManifestInvalid {
-        path: CatalogPath,
-        message: Box<str>,
-    },
+    ManifestInvalid { path: CatalogPath, message: String },
 
     #[error("catalog manifest is invalid at {path}: {source}")]
     ManifestModelInvalid {
@@ -135,16 +132,10 @@ pub enum CatalogApplicationError {
     DefinitionConflict { path: CatalogPath },
 
     #[error("catalog history diverged at {path}: {message}")]
-    HistoryDiverged {
-        path: CatalogPath,
-        message: Box<str>,
-    },
+    HistoryDiverged { path: CatalogPath, message: String },
 
     #[error("ingestion profile target is invalid at {path}: {message}")]
-    ProfileTargetMismatch {
-        path: CatalogPath,
-        message: Box<str>,
-    },
+    ProfileTargetMismatch { path: CatalogPath, message: String },
 
     #[error(
         "schema {stored_schema_version} cannot adapt to active schema {active_schema_version} at {path}: {reason}"
@@ -157,10 +148,7 @@ pub enum CatalogApplicationError {
     },
 
     #[error("catalog state is corrupt at {path}: {message}")]
-    Corruption {
-        path: CatalogPath,
-        message: Box<str>,
-    },
+    Corruption { path: CatalogPath, message: String },
 
     #[error("catalog canonical JSON encoding failed at {path}: {source}")]
     CanonicalJsonEncoding {
@@ -206,7 +194,7 @@ impl CatalogApplicationError {
         }
     }
 
-    pub(crate) fn manifest(path: impl AsRef<str>, message: impl Into<Box<str>>) -> Self {
+    pub(crate) fn manifest(path: impl AsRef<str>, message: impl Into<String>) -> Self {
         Self::ManifestInvalid {
             path: CatalogPath::new(path),
             message: message.into(),
@@ -220,14 +208,14 @@ impl CatalogApplicationError {
         }
     }
 
-    pub(crate) fn profile_target(path: impl AsRef<str>, message: impl Into<Box<str>>) -> Self {
+    pub(crate) fn profile_target(path: impl AsRef<str>, message: impl Into<String>) -> Self {
         Self::ProfileTargetMismatch {
             path: CatalogPath::new(path),
             message: message.into(),
         }
     }
 
-    pub(crate) fn corruption(path: impl AsRef<str>, message: impl Into<Box<str>>) -> Self {
+    pub(crate) fn corruption(path: impl AsRef<str>, message: impl Into<String>) -> Self {
         Self::Corruption {
             path: CatalogPath::new(path),
             message: message.into(),

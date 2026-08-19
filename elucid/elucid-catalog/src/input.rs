@@ -179,7 +179,7 @@ impl EventTimeMapping {
 pub struct IngestionProfile {
     maximum_record_bytes: MaximumRecordBytes,
     event_time_mapping: EventTimeMapping,
-    mappings: Box<[FieldMapping]>,
+    mappings: Vec<FieldMapping>,
 }
 
 impl IngestionProfile {
@@ -199,7 +199,7 @@ impl IngestionProfile {
         Ok(Self {
             maximum_record_bytes,
             event_time_mapping,
-            mappings: mappings.into_boxed_slice(),
+            mappings,
         })
     }
 
@@ -319,7 +319,7 @@ pub struct Input {
     name: InputName,
     kind: InputKind,
     digests: DefinitionDigests,
-    profile_revisions: Box<[IngestionProfileRevision]>,
+    profile_revisions: Vec<IngestionProfileRevision>,
     active_profile_revision_index: usize,
 }
 
@@ -377,7 +377,7 @@ impl Input {
             name,
             kind,
             digests,
-            profile_revisions: profile_revisions.into_boxed_slice(),
+            profile_revisions,
             active_profile_revision_index,
         })
     }

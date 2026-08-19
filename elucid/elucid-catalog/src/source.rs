@@ -10,18 +10,18 @@ use crate::{
 pub struct Source {
     id: SourceId,
     name: SourceName,
-    display_name: Box<str>,
+    display_name: String,
     declaration_digest: DeclarationDigest,
-    schemas: Box<[Schema]>,
+    schemas: Vec<Schema>,
     active_schema_index: usize,
-    inputs: Box<[Input]>,
+    inputs: Vec<Input>,
 }
 
 impl Source {
     pub fn new(
         id: SourceId,
         name: SourceName,
-        display_name: impl Into<Box<str>>,
+        display_name: impl Into<String>,
         declaration_digest: DeclarationDigest,
         active_schema_id: SchemaId,
         schemas: Vec<Schema>,
@@ -40,9 +40,9 @@ impl Source {
             name,
             display_name: display_name.into(),
             declaration_digest,
-            schemas: schemas.into_boxed_slice(),
+            schemas,
             active_schema_index,
-            inputs: inputs.into_boxed_slice(),
+            inputs,
         })
     }
 

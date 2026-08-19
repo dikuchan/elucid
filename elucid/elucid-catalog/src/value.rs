@@ -8,7 +8,7 @@ macro_rules! catalog_name {
     ($name:ident, $kind:ident) => {
         #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
         #[non_exhaustive]
-        pub struct $name(Box<str>);
+        pub struct $name(String);
 
         impl $name {
             #[must_use]
@@ -35,7 +35,7 @@ macro_rules! catalog_name {
                         value,
                     });
                 }
-                Ok(Self(value.into_boxed_str()))
+                Ok(Self(value))
             }
         }
 

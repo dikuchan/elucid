@@ -78,7 +78,7 @@ impl std::fmt::Display for NodeService {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct EnabledServices(Box<[NodeService]>);
+pub struct EnabledServices(Vec<NodeService>);
 
 impl EnabledServices {
     pub(super) fn from_configuration(
@@ -107,7 +107,7 @@ impl EnabledServices {
     }
 
     #[must_use]
-    pub const fn as_slice(&self) -> &[NodeService] {
+    pub fn as_slice(&self) -> &[NodeService] {
         &self.0
     }
 }
@@ -150,7 +150,7 @@ pub enum LogLevel {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct SecretReference(Box<str>);
+pub struct SecretReference(String);
 
 impl SecretReference {
     pub(super) fn from_configuration(
@@ -163,7 +163,7 @@ impl SecretReference {
                 reason: InvalidValueReason::InvalidEnvironmentVariableName,
             });
         }
-        Ok(Self(value.into_boxed_str()))
+        Ok(Self(value))
     }
 
     #[must_use]
@@ -174,11 +174,11 @@ impl SecretReference {
 
 #[derive(Clone)]
 #[non_exhaustive]
-pub struct SecretString(Box<str>);
+pub struct SecretString(String);
 
 impl SecretString {
     pub(super) fn new(value: String) -> Self {
-        Self(value.into_boxed_str())
+        Self(value)
     }
 
     #[must_use]
@@ -201,11 +201,11 @@ impl std::fmt::Display for SecretString {
 
 #[derive(Clone)]
 #[non_exhaustive]
-pub struct SecretBytes(Box<[u8]>);
+pub struct SecretBytes(Vec<u8>);
 
 impl SecretBytes {
     pub(super) fn new(value: Vec<u8>) -> Self {
-        Self(value.into_boxed_slice())
+        Self(value)
     }
 
     #[must_use]
@@ -492,12 +492,12 @@ impl CatalogConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ObjectStoreConfiguration {
-    pub(super) alias: Box<str>,
-    pub(super) authority: Box<str>,
+    pub(super) alias: String,
+    pub(super) authority: String,
     pub(super) endpoint: Url,
-    pub(super) region: Box<str>,
-    pub(super) bucket: Box<str>,
-    pub(super) root_prefix: Box<str>,
+    pub(super) region: String,
+    pub(super) bucket: String,
+    pub(super) root_prefix: String,
     pub(super) addressing_style: AddressingStyle,
     pub(super) access_key_id_environment_variable: SecretReference,
     pub(super) secret_access_key_environment_variable: SecretReference,
@@ -998,7 +998,7 @@ impl QueryConfiguration {
 pub struct TelemetryConfiguration {
     pub(super) log_format: LogFormat,
     pub(super) log_level: LogLevel,
-    pub(super) metrics_path: Box<str>,
+    pub(super) metrics_path: String,
 }
 
 impl TelemetryConfiguration {
@@ -1018,17 +1018,17 @@ impl TelemetryConfiguration {
     }
 }
 
-pub(super) fn non_empty_boxed_str(
+pub(super) fn non_empty_string(
     value: String,
     field: ConfigurationField,
-) -> Result<Box<str>, ConfigurationError> {
+) -> Result<String, ConfigurationError> {
     if value.is_empty() {
         return Err(ConfigurationError::ValueInvalid {
             field,
             reason: InvalidValueReason::Empty,
         });
     }
-    Ok(value.into_boxed_str())
+    Ok(value)
 }
 
 fn is_portable_environment_variable_name(value: &str) -> bool {

@@ -5,12 +5,12 @@ use crate::span::Span;
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct Identifier {
-    value: Box<str>,
+    value: String,
     span: Span,
 }
 
 impl Identifier {
-    pub(crate) fn new(value: impl Into<Box<str>>, span: Span) -> Self {
+    pub(crate) fn new(value: impl Into<String>, span: Span) -> Self {
         Self {
             value: value.into(),
             span,
@@ -31,12 +31,12 @@ impl Identifier {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct SystemIdentifier {
-    value: Box<str>,
+    value: String,
     span: Span,
 }
 
 impl SystemIdentifier {
-    pub(crate) fn new(value: impl Into<Box<str>>, span: Span) -> Self {
+    pub(crate) fn new(value: impl Into<String>, span: Span) -> Self {
         Self {
             value: value.into(),
             span,
@@ -82,12 +82,12 @@ impl FieldReference {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct StringLiteral {
-    value: Box<str>,
+    value: String,
     span: Span,
 }
 
 impl StringLiteral {
-    pub(crate) fn new(value: impl Into<Box<str>>, span: Span) -> Self {
+    pub(crate) fn new(value: impl Into<String>, span: Span) -> Self {
         Self {
             value: value.into(),
             span,
@@ -111,8 +111,8 @@ pub enum LiteralKind {
     Null,
     Boolean(bool),
     Integer(u64),
-    FloatingPoint(Box<str>),
-    String(Box<str>),
+    FloatingPoint(String),
+    String(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -160,7 +160,7 @@ pub enum NumericSign {
 #[non_exhaustive]
 pub enum NumericLiteralKind {
     Integer(u64),
-    FloatingPoint(Box<str>),
+    FloatingPoint(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -504,7 +504,7 @@ impl TimeOperation {
 pub enum TimeExpressionKind {
     Datetime(StringLiteral),
     Now,
-    Relative(Box<[TimeOperation]>),
+    Relative(Vec<TimeOperation>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -762,12 +762,12 @@ impl Measure {
 #[non_exhaustive]
 pub enum StageKind {
     Filter(Expression),
-    Project(Box<[Projection]>),
-    Sort(Box<[SortItem]>),
+    Project(Vec<Projection>),
+    Sort(Vec<SortItem>),
     Take(SignedIntegerLiteral),
     Summarize {
-        measures: Box<[Measure]>,
-        group_by: Box<[FieldReference]>,
+        measures: Vec<Measure>,
+        group_by: Vec<FieldReference>,
     },
 }
 
@@ -798,12 +798,12 @@ impl Stage {
 #[non_exhaustive]
 pub struct Query {
     source: SourceExpression,
-    stages: Box<[Stage]>,
+    stages: Vec<Stage>,
     span: Span,
 }
 
 impl Query {
-    pub(crate) const fn new(source: SourceExpression, stages: Box<[Stage]>, span: Span) -> Self {
+    pub(crate) const fn new(source: SourceExpression, stages: Vec<Stage>, span: Span) -> Self {
         Self {
             source,
             stages,
@@ -817,7 +817,7 @@ impl Query {
     }
 
     #[must_use]
-    pub const fn stages(&self) -> &[Stage] {
+    pub fn stages(&self) -> &[Stage] {
         &self.stages
     }
 

@@ -38,14 +38,14 @@ pub enum BinaryOperator {
 pub enum FieldOrigin {
     Schema { field_id: FieldId },
     System { field_id: FieldId },
-    Remainder { key: Box<str> },
+    Remainder { key: String },
     Derived { declaration_span: Span },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct Field {
-    name: Box<str>,
+    name: String,
     logical_type: LogicalType,
     nullability: Nullability,
     origin: FieldOrigin,
@@ -53,7 +53,7 @@ pub struct Field {
 
 impl Field {
     pub(crate) fn new(
-        name: impl Into<Box<str>>,
+        name: impl Into<String>,
         logical_type: LogicalType,
         nullability: Nullability,
         origin: FieldOrigin,
@@ -124,14 +124,14 @@ pub enum Expression {
 #[non_exhaustive]
 pub struct Source {
     source_id: SourceId,
-    name: Box<str>,
+    name: String,
     active_schema_id: SchemaId,
 }
 
 impl Source {
     pub(crate) fn new(
         source_id: SourceId,
-        name: impl Into<Box<str>>,
+        name: impl Into<String>,
         active_schema_id: SchemaId,
     ) -> Self {
         Self {
@@ -166,8 +166,8 @@ impl fmt::Display for Source {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct TimeRange {
-    start_inclusive: Option<Box<str>>,
-    end_exclusive: Option<Box<str>>,
+    start_inclusive: Option<String>,
+    end_exclusive: Option<String>,
 }
 
 impl TimeRange {

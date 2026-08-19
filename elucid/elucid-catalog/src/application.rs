@@ -16,11 +16,11 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct CanonicalJson(Box<str>);
+pub struct CanonicalJson(String);
 
 impl CanonicalJson {
     #[must_use]
-    pub(crate) const fn new(value: Box<str>) -> Self {
+    pub(crate) const fn new(value: String) -> Self {
         Self(value)
     }
 
@@ -247,9 +247,9 @@ pub struct CatalogApplicationPlan {
     outcome: CatalogApplicationOutcome,
     source: Source,
     source_definition: PlannedSourceDefinition,
-    schema_definitions: Box<[PlannedSchemaDefinition]>,
-    input_definitions: Box<[PlannedInputDefinition]>,
-    ingestion_profile_definitions: Box<[PlannedIngestionProfileDefinition]>,
+    schema_definitions: Vec<PlannedSchemaDefinition>,
+    input_definitions: Vec<PlannedInputDefinition>,
+    ingestion_profile_definitions: Vec<PlannedIngestionProfileDefinition>,
 }
 
 impl CatalogApplicationPlan {
@@ -327,7 +327,7 @@ pub fn plan_catalog_application(
     } = plan_inputs(manifest, current, source_id, &schemas, identities)?;
 
     let mutable_change = current.is_some_and(|source| {
-        source.display_name() != manifest.source.display_name.as_ref()
+        source.display_name() != manifest.source.display_name.as_str()
             || source.active_schema().id() != active_schema_id
             || active_profile_pointer_changed(source, &inputs)
     });
@@ -370,9 +370,9 @@ pub fn plan_catalog_application(
             declaration: source_declaration.json,
             declaration_digest: source_declaration.digest,
         },
-        schema_definitions: schema_definitions.into_boxed_slice(),
-        input_definitions: input_definitions.into_boxed_slice(),
-        ingestion_profile_definitions: ingestion_profile_definitions.into_boxed_slice(),
+        schema_definitions,
+        input_definitions,
+        ingestion_profile_definitions,
     })
 }
 
@@ -390,8 +390,7 @@ fn plan_schemas(
                 "manifest declares {} schema versions but persisted history contains {}",
                 manifest.source.schemas.len(),
                 current_schemas.len()
-            )
-            .into_boxed_str(),
+            ),
         });
     }
 
@@ -510,8 +509,7 @@ fn plan_inputs(
     {
         return Err(CatalogApplicationError::HistoryDiverged {
             path: CatalogPath::new("source.inputs"),
-            message: format!("persisted input {:?} is omitted", omitted.name().as_str())
-                .into_boxed_str(),
+            message: format!("persisted input {:?} is omitted", omitted.name().as_str()),
         });
     }
     let current_by_name = current_inputs
@@ -635,8 +633,7 @@ fn plan_profiles(
                 "manifest declares {} revisions but persisted history contains {}",
                 declared_input.ingestion_profile_revisions.len(),
                 stored_revisions.len()
-            )
-            .into_boxed_str(),
+            ),
         });
     }
 

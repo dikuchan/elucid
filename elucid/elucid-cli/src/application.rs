@@ -27,7 +27,7 @@ async fn execute(arguments: Arguments) -> Result<Vec<u8>, Failure> {
     })?;
     match action {
         Action::Version(output) => crate::version::render(output),
-        Action::Command(command) => execute_command(command).await,
+        Action::Command(command) => execute_command(*command).await,
     }
 }
 

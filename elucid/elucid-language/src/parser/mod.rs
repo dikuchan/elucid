@@ -34,7 +34,7 @@ where
         Token::KeywordHour => "h".into(),
         Token::KeywordDay => "d".into(),
     }
-    .map_with(|value: Box<str>, extra| Identifier::new(value, extra.span()))
+    .map_with(|value: String, extra| Identifier::new(value, extra.span()))
     .labelled("identifier")
 }
 
@@ -69,12 +69,11 @@ where
 }
 
 fn floating_point_literal<'tokens, 'source: 'tokens, I>()
--> impl Parser<'tokens, I, Box<str>, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
+-> impl Parser<'tokens, I, String, extra::Err<Rich<'tokens, Token<'source>, Span>>> + Clone
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    select! { Token::FloatingPoint(value) => Box::<str>::from(value) }
-        .labelled("floating-point literal")
+    select! { Token::FloatingPoint(value) => value.to_owned() }.labelled("floating-point literal")
 }
 
 fn logical_type<'tokens, 'source: 'tokens, I>()

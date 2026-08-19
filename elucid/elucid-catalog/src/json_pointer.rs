@@ -5,11 +5,11 @@ use crate::CatalogModelError;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
-pub struct JsonPointerToken(Box<str>);
+pub struct JsonPointerToken(String);
 
 impl JsonPointerToken {
     #[must_use]
-    pub fn new(value: impl Into<Box<str>>) -> Self {
+    pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
@@ -22,7 +22,7 @@ impl JsonPointerToken {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub struct JsonPointer {
-    tokens: Box<[JsonPointerToken]>,
+    tokens: Vec<JsonPointerToken>,
 }
 
 impl JsonPointer {
@@ -43,9 +43,7 @@ impl JsonPointer {
 
     #[must_use]
     pub fn from_tokens(tokens: Vec<JsonPointerToken>) -> Self {
-        Self {
-            tokens: tokens.into_boxed_slice(),
-        }
+        Self { tokens }
     }
 
     #[must_use]
@@ -102,5 +100,5 @@ fn decode_token(encoded: &str, token_index: usize) -> Result<JsonPointerToken, C
             }
         }
     }
-    Ok(JsonPointerToken::new(decoded.into_boxed_str()))
+    Ok(JsonPointerToken::new(decoded))
 }

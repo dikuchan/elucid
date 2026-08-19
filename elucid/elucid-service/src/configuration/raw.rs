@@ -20,7 +20,7 @@ use super::model::{
     NodeService, ObjectStoreConfiguration, Objects, Queries, QueryConfiguration, Requests,
     Reservations, RetentionConfiguration, Roots, Rows, Runs, RuntimeConfiguration, Seconds,
     SecretBytes, SecretReference, SecretString, Secrets, Segments, ServerConfiguration, Stages,
-    TelemetryConfiguration, non_empty_boxed_str,
+    TelemetryConfiguration, non_empty_string,
 };
 use super::validation;
 
@@ -263,12 +263,12 @@ impl RawObjectStoreConfiguration {
             });
         }
         Ok(ObjectStoreConfiguration {
-            alias: non_empty_boxed_str(self.alias, field("object_store.alias"))?,
-            authority: non_empty_boxed_str(self.authority, field("object_store.authority"))?,
+            alias: non_empty_string(self.alias, field("object_store.alias"))?,
+            authority: non_empty_string(self.authority, field("object_store.authority"))?,
             endpoint,
-            region: non_empty_boxed_str(self.region, field("object_store.region"))?,
-            bucket: non_empty_boxed_str(self.bucket, field("object_store.bucket"))?,
-            root_prefix: non_empty_boxed_str(self.root_prefix, field("object_store.root_prefix"))?,
+            region: non_empty_string(self.region, field("object_store.region"))?,
+            bucket: non_empty_string(self.bucket, field("object_store.bucket"))?,
+            root_prefix: non_empty_string(self.root_prefix, field("object_store.root_prefix"))?,
             addressing_style: self.addressing_style,
             access_key_id_environment_variable: SecretReference::from_configuration(
                 self.access_key_id_environment_variable,
@@ -696,7 +696,7 @@ impl RawTelemetryConfiguration {
         Ok(TelemetryConfiguration {
             log_format: self.log_format,
             log_level: self.log_level,
-            metrics_path: self.metrics_path.into_boxed_str(),
+            metrics_path: self.metrics_path,
         })
     }
 }

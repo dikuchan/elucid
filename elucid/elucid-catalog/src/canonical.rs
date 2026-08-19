@@ -548,7 +548,7 @@ fn encode_canonical_json(
     path: &str,
 ) -> Result<CanonicalJson, CatalogApplicationError> {
     serde_json::to_string(&sort_objects(value))
-        .map(|json| CanonicalJson::new(json.into_boxed_str()))
+        .map(CanonicalJson::new)
         .map_err(|source| CatalogApplicationError::CanonicalJsonEncoding {
             path: CatalogPath::new(path),
             source,

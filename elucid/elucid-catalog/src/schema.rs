@@ -18,7 +18,7 @@ pub struct UserField {
     name: UserFieldName,
     logical_type: UserLogicalType,
     nullability: Nullability,
-    description: Option<Box<str>>,
+    description: Option<String>,
 }
 
 impl UserField {
@@ -41,7 +41,7 @@ impl UserField {
     }
 
     #[must_use]
-    pub fn with_description(mut self, description: impl Into<Box<str>>) -> Self {
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
@@ -76,12 +76,12 @@ impl UserField {
 #[non_exhaustive]
 pub struct Field {
     id: FieldId,
-    name: Box<str>,
+    name: String,
     logical_type: LogicalType,
     nullability: Nullability,
     role: FieldRole,
     ordinal: FieldOrdinal,
-    description: Option<Box<str>>,
+    description: Option<String>,
 }
 
 impl Field {
@@ -173,13 +173,13 @@ pub struct Schema {
     source_id: SourceId,
     version: SchemaVersion,
     digests: DefinitionDigests,
-    fields: Box<[Field]>,
+    fields: Vec<Field>,
     arrow_schema: ArrowSchema,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct SchemaMaterialization {
-    fields: Box<[Field]>,
+    fields: Vec<Field>,
     arrow_schema: ArrowSchema,
 }
 
@@ -261,7 +261,7 @@ impl Schema {
         let arrow_fields = fields.iter().map(Field::to_arrow).collect::<Vec<_>>();
         let arrow_schema = ArrowSchema::new(arrow_fields);
         Ok(SchemaMaterialization {
-            fields: fields.into_boxed_slice(),
+            fields,
             arrow_schema,
         })
     }

@@ -44,12 +44,7 @@ where
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
-        .map_with(|projections, extra| {
-            Stage::new(
-                StageKind::Project(projections.into_boxed_slice()),
-                extra.span(),
-            )
-        })
+        .map_with(|projections, extra| Stage::new(StageKind::Project(projections), extra.span()))
         .labelled("project stage")
 }
 
@@ -80,9 +75,7 @@ where
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
-        .map_with(|items, extra| {
-            Stage::new(StageKind::Sort(items.into_boxed_slice()), extra.span())
-        })
+        .map_with(|items, extra| Stage::new(StageKind::Sort(items), extra.span()))
         .labelled("sort stage")
 }
 
@@ -154,13 +147,7 @@ where
         .ignore_then(measures)
         .then(group_by)
         .map_with(|(measures, group_by), extra| {
-            Stage::new(
-                StageKind::Summarize {
-                    measures: measures.into_boxed_slice(),
-                    group_by: group_by.into_boxed_slice(),
-                },
-                extra.span(),
-            )
+            Stage::new(StageKind::Summarize { measures, group_by }, extra.span())
         })
         .labelled("summarize stage")
 }

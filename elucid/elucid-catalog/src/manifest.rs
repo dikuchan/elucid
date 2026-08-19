@@ -50,16 +50,16 @@ impl CatalogManifest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManifestSource {
     pub(crate) name: SourceName,
-    pub(crate) display_name: Box<str>,
+    pub(crate) display_name: String,
     pub(crate) active_schema_version: SchemaVersion,
-    pub(crate) schemas: Box<[ManifestSchema]>,
-    pub(crate) inputs: Box<[ManifestInput]>,
+    pub(crate) schemas: Vec<ManifestSchema>,
+    pub(crate) inputs: Vec<ManifestInput>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManifestSchema {
     pub(crate) version: SchemaVersion,
-    pub(crate) fields: Box<[ManifestUserField]>,
+    pub(crate) fields: Vec<ManifestUserField>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,7 +67,7 @@ pub(crate) struct ManifestUserField {
     pub(crate) name: UserFieldName,
     pub(crate) logical_type: UserLogicalType,
     pub(crate) nullability: Nullability,
-    pub(crate) description: Option<Box<str>>,
+    pub(crate) description: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,7 +75,7 @@ pub(crate) struct ManifestInput {
     pub(crate) name: InputName,
     pub(crate) kind: InputKind,
     pub(crate) active_ingestion_profile_revision: ProfileRevision,
-    pub(crate) ingestion_profile_revisions: Box<[ManifestIngestionProfileRevision]>,
+    pub(crate) ingestion_profile_revisions: Vec<ManifestIngestionProfileRevision>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -89,7 +89,7 @@ pub(crate) struct ManifestIngestionProfileRevision {
     pub(crate) conversion_policy: ConversionPolicy,
     pub(crate) unknown_field_policy: UnknownFieldPolicy,
     pub(crate) event_time_mapping: ManifestEventTimeMapping,
-    pub(crate) mappings: Box<[ManifestFieldMapping]>,
+    pub(crate) mappings: Vec<ManifestFieldMapping>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,14 +107,14 @@ pub(crate) struct ManifestFieldMapping {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManifestDeclarations {
     pub(crate) source: DeclarationDocument,
-    pub(crate) schemas: Box<[DeclarationDocument]>,
-    pub(crate) inputs: Box<[ManifestInputDeclarations]>,
+    pub(crate) schemas: Vec<DeclarationDocument>,
+    pub(crate) inputs: Vec<ManifestInputDeclarations>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManifestInputDeclarations {
     pub(crate) input: DeclarationDocument,
-    pub(crate) ingestion_profiles: Box<[DeclarationDocument]>,
+    pub(crate) ingestion_profiles: Vec<DeclarationDocument>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,14 +316,14 @@ impl ManifestDeclarations {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ManifestInputDeclarations {
                     input: input_declaration,
-                    ingestion_profiles: ingestion_profiles.into_boxed_slice(),
+                    ingestion_profiles,
                 })
             })
             .collect::<Result<Vec<_>, CatalogApplicationError>>()?;
         Ok(Self {
             source: source_declaration,
-            schemas: schemas.into_boxed_slice(),
-            inputs: inputs.into_boxed_slice(),
+            schemas,
+            inputs,
         })
     }
 }
@@ -383,10 +383,10 @@ impl TryFrom<RawSource> for ManifestSource {
 
         Ok(Self {
             name,
-            display_name: raw.display_name.into_boxed_str(),
+            display_name: raw.display_name,
             active_schema_version,
-            schemas: schemas.into_boxed_slice(),
-            inputs: inputs.into_boxed_slice(),
+            schemas,
+            inputs,
         })
     }
 }
@@ -428,14 +428,11 @@ impl ManifestSchema {
                     name,
                     logical_type: field.logical_type.into(),
                     nullability: field.nullability.into(),
-                    description: field.description.map(String::into_boxed_str),
+                    description: field.description,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self {
-            version,
-            fields: fields.into_boxed_slice(),
-        })
+        Ok(Self { version, fields })
     }
 }
 
@@ -491,7 +488,7 @@ impl ManifestInput {
             name,
             kind: raw.kind.into(),
             active_ingestion_profile_revision,
-            ingestion_profile_revisions: revisions.into_boxed_slice(),
+            ingestion_profile_revisions: revisions,
         })
     }
 }
@@ -629,7 +626,7 @@ impl ManifestIngestionProfileRevision {
             conversion_policy: raw.conversion_policy.into(),
             unknown_field_policy: raw.unknown_field_policy.into(),
             event_time_mapping,
-            mappings: mappings.into_boxed_slice(),
+            mappings,
         })
     }
 }

@@ -87,10 +87,7 @@ where
         .at_least(1)
         .collect::<Vec<_>>()
         .map_with(|operations, extra| {
-            TimeExpression::new(
-                TimeExpressionKind::Relative(operations.into_boxed_slice()),
-                extra.span(),
-            )
+            TimeExpression::new(TimeExpressionKind::Relative(operations), extra.span())
         });
     choice((datetime, now, relative)).labelled("time expression")
 }
@@ -130,8 +127,6 @@ where
                 .collect::<Vec<_>>(),
         )
         .then_ignore(end())
-        .map_with(|(source, stages), extra| {
-            Query::new(source, stages.into_boxed_slice(), extra.span())
-        })
+        .map_with(|(source, stages), extra| Query::new(source, stages, extra.span()))
         .labelled("query")
 }
