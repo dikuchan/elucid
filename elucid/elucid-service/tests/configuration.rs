@@ -11,9 +11,9 @@ const OBJECT_STORE_ACCESS_KEY_ID: &str = "elucid-access-key";
 const OBJECT_STORE_SECRET_ACCESS_KEY: &str = "elucid-object-store-secret";
 
 #[test]
-fn acceptance_profile_materializes_the_exact_v0_surface_and_redacts_secrets() {
+fn acceptance_profile_materializes_the_exact_surface_and_redacts_secrets() {
     let configuration = RuntimeConfiguration::from_toml(ACCEPTANCE_PROFILE, &environment())
-        .expect("the V0 acceptance profile is valid");
+        .expect("the acceptance profile is valid");
 
     assert_eq!(
         configuration.server().listen_address(),

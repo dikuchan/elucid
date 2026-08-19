@@ -21,6 +21,7 @@ tokio-util = { workspace = true, features = ["io"] }
 url = { workspace = true }
 
 elucid-catalog = { workspace = true }
+elucid-metastore = { workspace = true }
 elucid-service = { workspace = true }
 
 [dev-dependencies]

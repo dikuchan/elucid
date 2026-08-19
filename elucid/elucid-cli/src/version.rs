@@ -1,11 +1,11 @@
 use serde::Serialize;
 
+use elucid_metastore::{MAXIMUM_SUPPORTED_MIGRATION_VERSION, MINIMUM_SUPPORTED_MIGRATION_VERSION};
+
 use crate::arguments::VersionOutput;
 use crate::error::{CliErrorCode, Failure};
 
 const STORAGE_FORMAT_VERSION: u32 = 1;
-const MINIMUM_METASTORE_MIGRATION_VERSION: u64 = 0;
-const MAXIMUM_METASTORE_MIGRATION_VERSION: u64 = 0;
 
 #[derive(Debug, Serialize)]
 struct VersionInformation {
@@ -51,8 +51,8 @@ impl VersionInformation {
             frontend_asset_revision: option_env!("ELUCID_FRONTEND_ASSET_REVISION"),
             storage_format_version: STORAGE_FORMAT_VERSION,
             supported_metastore_migration_range: MetastoreMigrationRange {
-                minimum_version: MINIMUM_METASTORE_MIGRATION_VERSION,
-                maximum_version: MAXIMUM_METASTORE_MIGRATION_VERSION,
+                minimum_version: MINIMUM_SUPPORTED_MIGRATION_VERSION,
+                maximum_version: MAXIMUM_SUPPORTED_MIGRATION_VERSION,
             },
         }
     }
