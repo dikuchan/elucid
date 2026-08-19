@@ -1,106 +1,70 @@
 # Elucid v0 Query Engine Specification
 
-- Status: `DRAFT`
-- Depends on: [Catalog](catalog.md), [Query Language](query-language.md), [Storage](storage.md), [Metastore](metastore.md)
+This document owns catalog snapshots, segment selection, stored-to-active schema adaptation, DataFusion planning, execution limits, cancellation, and result integrity.
 
-## 1. Terminology
+## 1. Planning snapshot
 
-| Term | Definition |
-|---|---|
-| Query execution | One bounded evaluation identified by `query_id`. |
-| Query reference time | The immutable UTC millisecond instant from which every relative time expression in one execution is evaluated. |
-| Stored schema | The schema identified by a selected segment's `schema_id` and used to encode its Parquet object. |
-| Schema adapter | A checked transformation from one stored schema to the captured active schema. |
-| Query snapshot | An immutable in-memory value containing the catalog state and exact stored objects selected under one PostgreSQL snapshot. |
-| Query snapshot lifetime | The interval from establishment of the PostgreSQL snapshot until every query-local object descriptor, reader, stream, and task derived from it has been released. |
+One `REPEATABLE READ`, read-only PostgreSQL transaction:
 
-## 2. Planning
+1. resolves the source and captures its active schema;
+2. analyzes the query into typed IR using that schema and one captured query reference time;
+3. selects `ACTIVE` segments whose event-time bounds overlap the resolved query range;
+4. joins each segment to its exact `PUBLISHED` Parquet object descriptor;
+5. loads every distinct stored schema required by the selected segments;
+6. validates the required stored-to-active adapters;
+7. commits after materializing this immutable execution snapshot.
 
-The engine MUST allocate a UUIDv7 `query_id`, capture `query_reference_time`, and parse the query before opening a metastore transaction. The request MUST supply default `start_inclusive` and `end_exclusive` UTC millisecond bounds. Language source bounds MUST resolve according to the [time-expression contract](query-language.md#4-time-expressions).
+The captured query reference time is PostgreSQL transaction time. Planning never lists an object-store prefix and never refreshes catalog or segment metadata during execution. Segment selection orders descriptors deterministically by event day, segment identity, and object identity.
 
-Planning MUST use one PostgreSQL `REPEATABLE READ READ ONLY` transaction and perform these operations in order:
+The query range is half-open `[start_inclusive, end_exclusive)`. PostgreSQL bounds prune segments, and the same row predicate is always applied during execution.
 
-1. Resolve the parsed source name and capture its source identity and active schema.
-2. Analyze the query into typed IR using that active schema and the query reference time.
-3. Resolve the source interval and require `start_inclusive < end_exclusive`.
-4. Select every matching `ACTIVE` segment and its directly referenced `PUBLISHED` `PARQUET_DATA` stored object.
-5. Load every distinct stored schema required by the selection.
-6. Build and validate every stored-to-active schema adapter.
-7. Enforce configured selected-segment and selected-object-byte limits.
-8. Copy all selected state into an owned query snapshot and close the transaction.
+## 2. Snapshot safety
 
-The planning transaction MUST perform only bounded metastore reads and deterministic in-memory analysis. It MUST NOT perform object-store, local-file, or DataFusion work.
+A compaction or expiration transaction may retire segments after planning. Their objects remain readable until `reclaim_after`, which is later than the maximum query lifetime. Therefore a query may finish from the exact snapshot it captured without holding a PostgreSQL transaction during object-store reads.
 
-The v0 maximum query snapshot lifetime MUST be 30 seconds. The execution deadline MUST begin before the planning transaction establishes its PostgreSQL snapshot, and configured execution timeout MUST NOT exceed this maximum. Success, failure, timeout, client disconnect, and shutdown MUST release the complete query snapshot before its lifetime expires.
-
-Segment selection MUST constrain `source_id` and use this PostgreSQL range predicate:
-
-```sql
-tstzrange(minimum_event_time, maximum_event_time, '[]') && tstzrange(start_inclusive, end_exclusive, '[)')
-```
-
-For ordered non-null bounds, the predicate is equivalent to `minimum_event_time < end_exclusive AND maximum_event_time >= start_inclusive`. Selection MUST order metadata by event-time bucket start, segment identity, and object identity.
-
-A query snapshot MUST contain query identity, reference time, resolved source interval, source and active-schema identities, active-schema definition, every stored-schema definition, every adapter, segment identities, origins, direct producer identities, and statistics, object identities, authorities, aliases, buckets, exact keys, nullable remote version identities, expected sizes, and digests. It MUST contain no live database row, transaction, connection, or mutable catalog reference.
-
-One planning transaction MUST observe either the input side or the output side of a committed compaction replacement. A query snapshot MUST NOT combine superseded inputs with their compaction outputs. Every selected object MUST remain readable until the query snapshot lifetime ends under the [object-reclamation contract](storage.md#7-garbage-collection).
-
-Selected segment count and the checked sum of expected object bytes MUST be compared with `maximum_selected_segments` and `maximum_selected_object_bytes`. Overflow or a bound violation MUST produce `QUERY_RESOURCE_LIMIT_EXCEEDED` before a DataFusion plan is created. Planning MUST NOT discover input through S3 prefix listing.
+A planning snapshot observes either all compaction inputs or all outputs because publication changes their states in one transaction.
 
 ## 3. Schema adaptation
 
-The engine MUST validate a selected Parquet object against its stored schema before adaptation. Every field MUST match stored ordinal, physical name, Arrow type, nullability, logical metadata, and `field_id`.
+Before yielding rows, the reader validates Parquet schema, field identities, segment identity, source, stored schema, row count, and object digest metadata against the snapshot.
 
-For each active-schema field, the adapter MUST:
+For each active-schema field:
 
-1. Read the stored field with the same `field_id` when present.
-2. Require equal role and either equal type or one catalog lossless widening edge.
-3. Apply the widening conversion and expose the active field's name, ordinal, type, metadata, and nullability.
-4. Inject a typed null array when the field is absent and the active field is `NULLABLE`.
-5. Reject the adapter as incompatible when the field is absent and `NON_NULL`, its role or type is incompatible, or stored nullability cannot satisfy active `NON_NULL` semantics.
+1. If the stored schema contains the same `field_id`, read it and require identical logical type and nullability compatible with the active field.
+2. If the field is absent and declares `historical_remainder_pointer`, extract that pointer from stored `@rest` and apply the declared JSON conversion; absence, JSON null, or conversion failure yields typed null.
+3. If the field is absent without a historical adapter, produce typed null.
+4. Reject the adapter if the missing active field is non-null or catalog identities/types contradict the validated history.
 
-Stored user fields absent from the active schema MUST NOT appear in the logical relation. System fields MUST have their reserved identities and exact types in every stored schema.
+Historical conversion failures increment a bounded metric by target logical type. Logs may identify the source and field but never the event value. These failures do not make arbitrary unknown query identifiers valid.
 
-Schema activation uses the same adapter validation over every declared schema. Planning MUST treat an adapter failure after successful catalog activation as `CATALOG_CORRUPTION` or `PUBLISHED_OBJECT_CORRUPT`, according to whether the persisted definition or object bytes violate the captured metadata.
+Stored fields absent from the active schema are not exposed. System fields retain their reserved identities and exact types in every schema.
 
-## 4. DataFusion plan
+## 4. DataFusion execution
 
-The logical source scan MUST be constructed from the query snapshot's explicit object descriptors. The table provider MUST NOT enumerate an object-store prefix or refresh the metastore during execution.
+The Elucid table provider is created from the snapshot's explicit Parquet descriptors and active schema. It applies:
 
-The table provider MUST read and validate every selected Parquet footer before yielding rows from that object. Projection pushdown MAY avoid decoding unused stored columns but MUST NOT bypass footer, schema-digest, or field-identity validation.
+- projection pushdown for required stored columns;
+- Parquet row-group and page pruning where valid statistics are available;
+- the mandatory event-time row predicate;
+- stored-to-active schema adaptation;
+- the typed user pipeline.
 
-The logical plan MUST apply `@event_time >= start_inclusive AND @event_time < end_exclusive` to the source scan before user pipeline stages. Metadata pruning and the row predicate MUST use the same resolved bounds.
+V0 performs no distributed execution, join, external index lookup, or Tantivy planning. One server process executes a query locally through DataFusion.
 
-When the source scan selects no segments, the table provider MUST expose the captured active schema over an empty input. Global `count()` over that relation MUST return one row containing zero.
+The engine does not rely on implicit object ordering. A deterministic result order requires an explicit `sort` stage.
 
-Typed IR casts, operators, projections, sorts, limits, and aggregates MUST lower without changing the [language semantics](query-language.md). An optimizer rewrite MAY reduce physical work but MUST preserve pipeline order where reordering changes results.
+## 5. Bounds
 
-A remainder-origin `Field` and `rest` expression MUST lower to exact top-level extraction from `@rest` and return logical `json`; absent keys and null remainder values MUST return null. `rest_exists` MUST lower to exact top-level membership testing and return non-null `bool`.
+Before execution, planning rejects a snapshot exceeding the reported implementation segment-count limit or configured total Parquet bytes. Execution enforces query timeout, cancellation, memory pool, scratch capacity, output rows, output bytes, and a reported maximum encoded row size.
 
-## 5. Execution bounds
+Arithmetic over counts and bytes is checked. A limit violation returns `QUERY_RESOURCE_LIMIT_EXCEEDED`; reaching an output row or byte limit returns a successful truncated result with the exact limiting reason.
 
-Execution MUST use a bounded DataFusion memory pool, bounded spill capacity, finite deadline within the maximum query snapshot lifetime, and configured maximum concurrent query count. Query-local spill paths MUST remain below the configured spill directory after canonicalization and MUST be removed after success, failure, cancellation, and startup recovery.
+The physical pipeline streams bounded Arrow batches internally. The synchronous HTTP handler MAY buffer the bounded result so it returns either one complete success document or one error document; buffered output counts against the query memory and output-byte limits.
 
-The engine MUST stream `RecordBatch` values. It MUST NOT collect an unbounded batch vector or result set in memory.
+## 6. Cancellation and integrity failures
 
-The HTTP output-row guard MUST be a physical `output_rows + 1` limit placed after the complete user pipeline. The sentinel row MUST be removed before serialization. Its presence means `TRUNCATED` with reason `ROW_LIMIT`; its absence means the logical result fits the row bound. A user `take` stage MUST NOT be reinterpreted as the output guard.
+Client disconnect, server shutdown, or query timeout cancels DataFusion work and object-store reads. Cancellation never changes catalog, segment, or object state.
 
-The result encoder MUST add only complete rows and enforce `maximum_result_bytes` over the compact UTF-8 encoding of the complete `rows` array. Exceeding the bound before another complete row produces `TRUNCATED` with reason `BYTE_LIMIT`. One row larger than the bound MUST produce `QUERY_RESULT_ROW_TOO_LARGE`; partial JSON and partial rows MUST NOT be emitted.
+A missing or corrupt published object, mismatched Parquet footer, impossible schema adapter, or row-count contradiction fails the complete query. The engine never silently skips a selected segment or returns a partial result as complete.
 
-The encoder MUST reject non-finite floating-point output as `QUERY_RESULT_ENCODING_FAILED`. Row and byte counts MUST describe the serialized response, not upstream DataFusion batches.
-
-After the final selected-object read and complete bounded result encoding, the engine MUST release every snapshot-derived descriptor, reader, stream, and task before handing the owned response bytes to the HTTP transport. Network transmission of those bytes MUST NOT extend the query snapshot lifetime.
-
-## 6. Cancellation
-
-Deadline expiry MUST cancel the DataFusion task tree and produce `QUERY_TIMEOUT`. Client disconnect and shutdown MUST trigger cooperative cancellation. Cancellation MUST stop object reads and release memory reservations, spill files, streams, and query-local object references before the maximum query snapshot lifetime expires and MUST NOT change catalog, ingestion, compaction, or storage state.
-
-Queue wait time MUST count toward the execution deadline. Admission failure at the configured queue bound MUST produce `CAPACITY_EXHAUSTED` with a bounded retry delay.
-
-## 7. Integrity failures
-
-An absent selected object MUST produce `PUBLISHED_OBJECT_MISSING`. A size, footer, schema, field identity, or required metadata mismatch MUST produce `PUBLISHED_OBJECT_CORRUPT`. An adapter incompatibility among valid persisted definitions MUST produce `CATALOG_CORRUPTION`. Each integrity failure MUST terminate the complete query before a successful response is emitted.
-
-An unclassified DataFusion planning or execution failure MUST produce `QUERY_EXECUTION_FAILED`. Data-dependent failures defined by the language MUST retain their language error code and MUST NOT be reclassified as internal execution failures.
-
-Query logs MUST identify `request_id`, `query_id`, resolved source identity, phase, outcome, elapsed milliseconds, output rows, selected segments, and selected bytes. Query text and result rows MUST NOT appear in default logs.
+Stable errors are `QUERY_RESOURCE_LIMIT_EXCEEDED`, `QUERY_TIMEOUT`, `QUERY_CANCELLED`, `QUERY_EXECUTION_FAILED`, `PUBLISHED_OBJECT_MISSING`, `PUBLISHED_OBJECT_CORRUPT`, and `CATALOG_CORRUPT`.

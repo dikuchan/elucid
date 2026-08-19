@@ -9,7 +9,7 @@ A query is a source expression followed by an ordered pipeline. Each stage consu
 
 A parsed field occurrence is a `FieldReference` containing an identifier and source span. Semantic analysis MUST replace every `FieldReference` with a `Field` containing resolved identity, output name, logical type, nullability, and origin. Typed IR MUST contain no unresolved field reference.
 
-Field origin MUST be a closed variant: schema field, system field, remainder field, or derived field. It MUST NOT be represented by independent boolean flags.
+Field origin MUST be a closed variant: schema field, system field, or derived field. It MUST NOT be represented by independent boolean flags.
 
 ## 2. Lexical grammar
 
@@ -18,7 +18,7 @@ Source and user-field names MUST match `[A-Za-z_][A-Za-z0-9_]*`. An unquoted ide
 Quoted identifiers are never keywords. Unquoted keywords have these classifications:
 
 | Classification | Words |
-|---|---|
+| --- | --- |
 | Contextual commands | `source`, `filter`, `project`, `sort`, `take`, `summarize` |
 | Contextual time units | `s`, `m`, `h`, `d` |
 | Reserved operators and literals | `and`, `or`, `not`, `true`, `false`, `null`, `now` |
@@ -116,16 +116,11 @@ AST time values MUST be structured absolute or relative expressions. Typed IR MU
 
 The source relation MUST expose the active schema from the catalog snapshot. System identifiers MUST resolve only to declared system fields; an unknown system identifier MUST produce `QUERY_FIELD_NOT_FOUND`.
 
-A user identifier MUST resolve in this order:
+A user identifier MUST resolve to a field in the current relation schema. An unknown identifier MUST produce `QUERY_FIELD_NOT_FOUND`; it MUST NOT fall back to `@rest`.
 
-1. A field in the current relation schema.
-2. A top-level key read from the current relation's `@rest` field.
+`rest("key")` MUST read the exact top-level key from the current relation's `@rest`, return nullable `json`, and preserve the distinction between an absent key and a present JSON-null value when paired with `rest_exists`. `rest_exists("key")` MUST return non-null `bool`, return `true` when the key is present including with JSON null, and return `false` when the key is absent or `@rest` is null. Both functions require one compile-time JSON string and an `@rest` field in the current relation. Their argument MAY contain any Unicode scalar sequence representable by a JSON string.
 
-A remainder field MUST have logical type `json`, MUST be nullable, and MUST evaluate to logical null when the key is absent or `@rest` is null. A present key containing JSON null remains a non-absent `json` value. Resolution MUST use the identifier as the exact top-level JSON object key and emit `QUERY_FIELD_RESOLVED_FROM_REMAINDER` with severity `WARNING` for each implicitly resolved field occurrence. A projection that omits `@rest` removes remainder resolution from its output relation; an already projected remainder field remains available under its output name.
-
-`rest("key")` MUST read the exact top-level key from the current relation's `@rest`, return nullable `json`, and preserve the same absent and JSON-null distinction without emitting an implicit-resolution diagnostic. `rest_exists("key")` MUST return non-null `bool`, return `true` when the key is present including with JSON null, and return `false` when the key is absent or `@rest` is null. Both functions MUST require one compile-time JSON string and an `@rest` field in the current relation. Their string argument MAY contain any Unicode scalar sequence representable by a JSON string.
-
-Schema-field resolution takes precedence over implicit remainder resolution. Promoting a remainder key to a schema field therefore changes a bare reference from nullable `json` to the schema field's declared type and removes the warning. Explicit `rest("key")` continues to address the remainder value.
+A projection that omits `@rest` removes access through `rest` and `rest_exists` from its output relation. A value already projected from `@rest` remains available under its declared output name.
 
 Each stage MUST be analyzed against the preceding stage's output schema. A duplicate output name MUST produce `QUERY_DUPLICATE_OUTPUT_FIELD`.
 
@@ -159,7 +154,7 @@ Scalar conversions MUST obey these rules:
 - `utf8` to `eid` MUST require exactly 32 lowercase hexadecimal characters.
 - Scalar-to-`utf8` conversion MUST use the canonical JSON spelling for numbers and booleans, RFC 3339 UTC with millisecond precision for `datetime`, and lowercase hexadecimal for `eid`.
 
-Casting from `json` to another type MUST inspect its runtime kind. JSON null produces logical null. A boolean or string MUST unwrap to the corresponding scalar and then use the scalar rules above. A number cast to a numeric type MUST parse its preserved JSON token directly into the target type; cast to `utf8` MUST return that exact token. An array or object MUST fail conversion to every non-`json` type.
+Casting from `json` to another type MUST inspect its runtime kind. JSON null produces logical null. A boolean or string MUST unwrap to the corresponding scalar and then use the scalar rules above. A number MUST cast only to a numeric type and MUST be converted without routing through a narrower intermediate numeric type. An array or object MUST fail conversion to every non-`json` type.
 
 Casting to `json` MUST preserve a `json` input and encode a scalar as the corresponding canonical JSON scalar. `datetime` and `eid` MUST become JSON strings using their canonical `utf8` encodings.
 
@@ -192,7 +187,7 @@ Every aggregate measure MUST use `alias = function(argument)`. An unaliased aggr
 Aggregate typing MUST follow this table:
 
 | Function | Argument | Result | Null behavior |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `count()` | None | Non-null `int64` | Counts rows |
 | `count(field)` | Any | Non-null `int64` | Counts non-null values |
 | `sum(field)` | `int32`, `int64` | Nullable `int64` | Ignores nulls; checked overflow |
@@ -211,17 +206,17 @@ Only `sort` and `take` MAY follow `summarize`. Their field references MUST resol
 
 ## 10. Diagnostics
 
-The top-level failure code MUST be `QUERY_SYNTAX_ERROR` when parsing fails and `QUERY_SEMANTIC_ERROR` when semantic analysis, including source resolution, fails. Every diagnostic MUST contain stable severity, stable code, message, and the original UTF-8 byte span when it refers to query text. Successful analysis MAY contain warning diagnostics.
+The top-level failure code MUST be `QUERY_SYNTAX_ERROR` when parsing fails and `QUERY_SEMANTIC_ERROR` when semantic analysis, including source resolution, fails. Every diagnostic MUST contain severity `ERROR`, stable code, message, and the original UTF-8 byte span when it refers to query text.
 
 Spans MUST use zero-based half-open byte offsets. Display coordinates MUST use one-based line and Unicode-scalar columns. API-supplied values MUST be identified by their request field path and MUST NOT receive invented query spans.
 
 The diagnostic registry is closed:
 
 | Code | Severity | Condition |
-|---|---|---|
+| --- | --- | --- |
 | `QUERY_SYNTAX_ERROR` | `ERROR` | Tokenization or grammar failure |
 | `QUERY_SOURCE_NOT_FOUND` | `ERROR` | Source name is absent from the catalog snapshot |
-| `QUERY_FIELD_NOT_FOUND` | `ERROR` | System field is unknown, or a user field is absent when remainder resolution is unavailable |
+| `QUERY_FIELD_NOT_FOUND` | `ERROR` | Field is absent from the current relation schema |
 | `QUERY_TIME_EXPRESSION_INVALID` | `ERROR` | Relative or absolute time expression is invalid or unrepresentable |
 | `QUERY_TIME_BOUND_UNRESOLVED` | `ERROR` | A required source bound cannot inherit or resolve a value |
 | `QUERY_TIME_RANGE_INVALID` | `ERROR` | Resolved `start_inclusive` is not before `end_exclusive` |
@@ -236,8 +231,7 @@ The diagnostic registry is closed:
 | `QUERY_TAKE_INVALID` | `ERROR` | `take` value is negative or outside signed 64-bit range |
 | `QUERY_TYPE_MISMATCH` | `ERROR` | Operator operands, null context, or expression result type is incompatible |
 | `QUERY_CONSTANT_EVALUATION_FAILED` | `ERROR` | Compile-time arithmetic overflows or divides by zero |
-| `QUERY_FIELD_RESOLVED_FROM_REMAINDER` | `WARNING` | Bare user identifier resolves implicitly from `@rest` |
 
-An implementation MUST NOT emit another query diagnostic code under v0. Multiple diagnostics MAY describe independent occurrences and MUST be ordered by start byte, end byte, severity with `ERROR` before `WARNING`, and code.
+An implementation MUST NOT emit another query diagnostic code under v0. Multiple diagnostics MAY describe independent occurrences and MUST be ordered by start byte, end byte, and code.
 
 The closed registry governs syntax and semantic diagnostics. `QUERY_CAST_FAILED` and `QUERY_EVALUATION_FAILED` are runtime execution error codes carried by the service error envelope and MUST NOT appear as diagnostics.

@@ -1,9 +1,11 @@
 # Elucid v0
 
 - Status: `DRAFT`
-- Last updated: 2026-08-18
+- Last updated: 2026-08-19
 
 Elucid v0 is the product contract formed by [Catalog](catalog.md), [Query Language](query-language.md), [Query Engine](query-engine.md), [Storage](storage.md), [Metastore](metastore.md), [Ingestion](ingestion.md), [Compaction](compaction.md), [Retention](retention.md), and [Service](service.md). [Showcase](showcase.md) is its executable delivery profile.
+
+V0 is a local, stateful prototype: Vector-compatible HTTP NDJSON is durably acknowledged into a persistent local spool, processed asynchronously into immutable Parquet in S3-compatible storage, published through PostgreSQL, and queried locally through DataFusion. Automatic single-owner compaction is included after the ingestion-query-UI golden path. Replication, active-active services, authentication, distributed execution, and Tantivy are outside this version.
 
 Each shared concept has one owning document. Another document MAY add constraints at its own boundary, MUST reference the owning contract for shared semantics, and MUST NOT redefine or weaken that contract. If two requirements conflict, the requirement in the owning document prevails.
 

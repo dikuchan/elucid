@@ -1,345 +1,151 @@
 # Elucid v0 Service Specification
 
-- Status: `DRAFT`
-- Depends on: [Catalog](catalog.md), [Query Engine](query-engine.md), [Ingestion](ingestion.md), [Compaction](compaction.md), [Retention](retention.md), [Metastore](metastore.md)
+This document owns the executable, configuration, startup and shutdown, HTTP API, embedded UI delivery, limits, errors, and telemetry.
 
-## 1. Executable
+## 1. Executable and topology
 
-The product MUST build one executable named `elucid`. Its HTTP runtime MUST use Tokio, Axum, Tower, Tower HTTP, Tokio Util cancellation primitives, Utoipa with Utoipa Axum, and Rust Embed.
+V0 ships one Rust executable, `elucid`. `elucid server` runs HTTP ingestion, catalog, query execution, the embedded web application, the local ingestion worker, and maintenance loops in one process.
 
-`elucid server run --config <path>` MUST start HTTP health and metrics endpoints, apply metastore migrations, verify object-store capabilities, recover durable work owned by the enabled node services, initialize every enabled node service, and admit only the traffic and work owned by those services.
+PostgreSQL, one S3-compatible object store, and one persistent local volume are external dependencies. V0 does not require or promise active-active instances, service-role routing, request affinity, leader election, distributed query execution, or replicated ingestion.
 
-`elucid catalog apply --endpoint <base-url> --file <path-or-dash> [--operator-bearer-token-environment-variable <name>] [--timeout-seconds <seconds>]` MUST send the exact file or standard-input bytes to `POST /api/v1/catalog-applications`. Timeout MUST default to 120 seconds; expiry MUST stop only local waiting, return exit code `7`, and leave the server outcome indeterminate. Repeating the command with the exact same manifest MUST be safe: it MUST NOT duplicate immutable history or partially mutate catalog state, and its outcome MUST be derived from the current durable catalog.
-
-`elucid ingestion submit --endpoint <base-url> --source <source-name> --input <input-name> --file <path-or-dash> --idempotency-key <key> [--operator-bearer-token-environment-variable <name>] [--timeout-seconds <seconds>]` MUST send the exact file or standard-input bytes to the HTTP ingestion endpoint. Timeout MUST default to 120 seconds, stop only local waiting, and return exit code `7` on expiry.
-
-When the token option is present, a client command MUST read the token from the named environment variable and send it through `Authorization: Bearer`; the token MUST NOT appear in process arguments, output, or logs. Client commands MUST NOT access PostgreSQL or S3 directly.
-
-Process exit codes MUST be `0` success, `1` uncategorized internal failure, `2` command or document validation failure, `3` configuration failure, `4` remote service availability or dependency readiness failure, `5` catalog conflict, `6` terminal ingestion failure, and `7` local client timeout.
+The server has no authentication or network-trust modes. The UI and API share one origin and the server emits no cross-origin access policy. Documentation MUST state that V0 is a local or trusted-environment prototype and MUST NOT be exposed directly to an untrusted network.
 
 ## 2. Configuration
 
-The service MUST read one optional UTF-8 TOML file and then apply `ELUCID_*` environment overrides. An absent optional file, unreadable supplied file, and malformed supplied file MUST have distinct outcomes.
+The server reads one optional TOML file and `ELUCID_*` environment overrides. Configuration is decoded once into typed domain values before dependency access. Unknown fields, invalid units, missing required secrets, zero or negative required limits, and inconsistent capacity relationships fail startup.
 
-Secrets MUST come from named environment variables or direct secret overrides. Effective configuration, logs, API responses, and diagnostics MUST redact PostgreSQL passwords, S3 secret keys, bearer tokens, session tokens, cursor keys, and every value marked secret.
+Configuration covers only:
 
-The literal values below define the bounded acceptance profile. Mode-specific optional fields are specified after the profile and are not implicit service defaults:
+- listen address, request timeout, and shutdown timeout;
+- PostgreSQL URL secret and bounded pool size;
+- object-store endpoint, bucket, root prefix, credentials, and request timeout;
+- durable spool path and capacity, scratch path and capacity, and maximum HTTP batch bytes;
+- ingestion and query concurrency, query timeout, scan-byte, memory, result-row, and result-byte limits;
+- maintenance mode `AUTOMATIC` or `DISABLED` and event and dead-letter retention durations;
+- log format `PRETTY` or `JSON`.
 
-```toml
-[server]
-bind = "127.0.0.1:8080"
-browser_origin = "http://127.0.0.1:8080"
-network_trust = "LOOPBACK_ONLY"
-enabled_services = ["INGESTION", "QUERY", "MAINTENANCE"]
-maximum_json_request_body_bytes = 1048576
-maximum_request_header_bytes = 32768
-request_timeout_seconds = 60
-header_timeout_seconds = 5
-idle_timeout_seconds = 30
-shutdown_timeout_seconds = 15
-default_page_items = 50
-maximum_page_items = 200
-cursor_hmac_key_environment_variable = "ELUCID_CURSOR_HMAC_KEY"
+Spool capacity is reserved independently from replaceable Parquet staging, compaction staging, query spill, and caches. Cross-field validation ensures each configured operation can fit inside its corresponding local capacity.
 
-[metastore]
-postgresql_dsn_environment_variable = "ELUCID_POSTGRES_DSN"
-maximum_connections = 10
-connection_timeout_seconds = 5
-migration_lock_timeout_seconds = 30
-statement_timeout_seconds = 30
+Lower-level builder targets, row-group sizes, retry intervals, orphan grace, maintenance scan cadence, and upload, deletion, and compaction concurrency are bounded implementation constants in V0 rather than public configuration.
 
-[catalog]
-maximum_manifest_bytes = 1048576
-maximum_concurrent_applications = 2
+## 3. Startup, readiness, and shutdown
 
-[object_store]
-alias = "default"
-authority = "showcase-minio"
-endpoint = "http://minio:9000"
-region = "us-east-1"
-bucket = "elucid"
-root_prefix = "showcase"
-addressing_style = "PATH"
-access_key_id_environment_variable = "ELUCID_S3_ACCESS_KEY_ID"
-secret_access_key_environment_variable = "ELUCID_S3_SECRET_ACCESS_KEY"
-request_timeout_seconds = 30
-maximum_request_attempts = 3
+Startup performs these phases in order:
 
-[ingestion]
-staging_directory = "/var/lib/elucid/staging"
-staging_capacity_bytes = 2147483648
-maximum_request_body_bytes = 16777216
-maximum_record_bytes = 10485760
-dead_letter_complete_raw_maximum_bytes = 65536
-dead_letter_raw_prefix_bytes = 4096
-maximum_dead_letter_page_bytes = 4194304
-target_segment_rows = 500
-target_segment_uncompressed_bytes = 16777216
-maximum_parquet_row_group_rows = 250
-maximum_open_event_time_buckets = 8
-maximum_concurrent_requests = 4
-attempt_heartbeat_interval_seconds = 5
-attempt_stale_after_seconds = 30
-attempt_timeout_seconds = 900
+1. Decode and validate configuration.
+2. Bind health endpoints.
+3. Connect to PostgreSQL and run embedded SQLx migrations.
+4. Load and validate the complete active catalog.
+5. Initialize the object-store client and establish access to the configured bucket.
+6. Open and recover the durable local spool.
+7. Acquire the maintenance advisory lock when maintenance mode is `AUTOMATIC`.
+8. Initialize HTTP, ingestion, query, and maintenance work.
+9. Become ready.
 
-[compaction]
-scan_interval_seconds = 10
-working_directory = "/var/lib/elucid/compaction"
-working_capacity_bytes = 2147483648
-memory_pool_bytes = 268435456
-minimum_input_segments = 2
-maximum_input_segments = 32
-maximum_input_rows = 16000000
-maximum_input_uncompressed_bytes = 4294967296
-maximum_input_parquet_bytes = 1073741824
-target_output_segment_uncompressed_bytes = 268435456
-maximum_output_segment_rows = 1000000
-maximum_parquet_row_group_rows = 250
-maximum_output_segments = 16
-maximum_output_parquet_object_bytes = 536870912
-maximum_output_parquet_bytes = 2147483648
-maximum_concurrent_runs = 1
-maximum_cluster_concurrent_runs = 4
-maximum_recovery_batch_runs = 100
-run_heartbeat_interval_seconds = 5
-run_stale_after_seconds = 30
-run_timeout_seconds = 900
+`GET /health/live` reports whether the process runtime can make progress. `GET /health/ready` returns `200` only after startup and while the latest bounded health checks for PostgreSQL and the configured object store have succeeded, the active catalog is internally valid, the ingestion worker is operational, and the spool can durably accept at least one maximum-size request. Otherwise it returns `503 SERVER_NOT_READY` with bounded `Retry-After`. Its bounded body reports PostgreSQL, object-store, spool, ingestion-worker, query, and maintenance status as `UP`, `DEGRADED`, or `DOWN`.
 
-[garbage_collection]
-orphan_grace_period_seconds = 3600
-retired_object_grace_period_seconds = 60
-scan_interval_seconds = 300
-maximum_batch_objects = 100
-maximum_concurrent_object_deletions = 4
+A transient PostgreSQL or object-store outage prevents or removes readiness. While the readiness gate is closed, new ingestion and query admission return `503 SERVER_NOT_READY` with bounded `Retry-After`; ingestion rejects the request before reading its body or beginning a spool append. Operations that require an unavailable dependency fail with the owning typed error. Liveness, metrics, the embedded application, and `GET /api/v1/status` remain available for diagnosis.
 
-[retention]
-idempotency_retention_seconds = 86400
-event_data_retention_seconds = 2592000
-dead_letter_retention_seconds = 604800
-ingestion_provenance_retention_seconds = 2592000
-compaction_provenance_retention_seconds = 2592000
-scan_interval_seconds = 60
-maximum_task_duration_seconds = 30
-maximum_expiration_batch_segments = 100
-maximum_retry_expiration_batch_requests = 100
-maximum_idempotency_expiration_batch_reservations = 100
-maximum_provenance_roots_per_batch = 100
+The readiness decision is neither a per-request dependency probe nor a transaction with PostgreSQL or the object store. Once an ingestion request passes the admission gate, a later or not-yet-observed dependency failure does not turn it into a late `503`: if the body and local durable append succeed, Elucid returns `202` and keeps the batch in the spool until publication can resume. Publication of already accepted batches waits and retries with bounded backoff.
 
-[query]
-default_output_rows = 1000
-maximum_output_rows = 10000
-maximum_result_bytes = 16777216
-maximum_query_bytes = 65536
-maximum_pipeline_stages = 100
-maximum_expression_depth = 128
-maximum_selected_segments = 10000
-maximum_selected_object_bytes = 107374182400
-execution_timeout_seconds = 30
-memory_pool_bytes = 536870912
-spill_directory = "/var/lib/elucid/spill"
-spill_capacity_bytes = 2147483648
-maximum_concurrent_queries = 2
-maximum_queued_queries = 16
+A failed critical supervised task terminates the process instead of leaving it falsely ready. A dependency outage is degraded external state, not a crashed supervised task.
 
-[telemetry]
-log_format = "JSON"
-log_level = "info"
-metrics_path = "/metrics"
-```
-
-Every size, count, duration, and capacity MUST be parsed into a unit-bearing domain type and validated before dependency access. Required positive values MUST reject zero. Cross-field validation MUST reject an empty or duplicate enabled-service set, a default above its maximum, an owner-stale threshold less than three times its heartbeat interval, a browser origin without `http` or `https`, a page default above its maximum, a record maximum above the ingestion request-body maximum, a dead-letter page maximum not greater than the complete raw capture maximum, `execution_timeout_seconds` above the v0 maximum query snapshot lifetime, `retired_object_grace_period_seconds` not greater than that lifetime, `orphan_grace_period_seconds` not greater than `run_timeout_seconds + object_store.request_timeout_seconds * object_store.maximum_request_attempts`, `minimum_input_segments` below two or above `maximum_input_segments`, `maximum_output_segments` greater than or equal to `maximum_input_segments`, `maximum_output_parquet_object_bytes` above `maximum_output_parquet_bytes`, `maximum_concurrent_runs` above `maximum_cluster_concurrent_runs`, `retention.maximum_task_duration_seconds` greater than or equal to `retention.scan_interval_seconds`, `ingestion.attempt_timeout_seconds` greater than or equal to `retention.idempotency_retention_seconds`, `idempotency_retention_seconds` not greater than `attempt_stale_after_seconds`, `idempotency_retention_seconds` above `ingestion_provenance_retention_seconds`, `event_data_retention_seconds` above `ingestion_provenance_retention_seconds`, `dead_letter_retention_seconds` above `ingestion_provenance_retention_seconds`, or a local capacity below one corresponding maximum request, object, result, or compaction-output allocation. Every arithmetic expression MUST be checked. Compaction working capacity MUST be at least `maximum_concurrent_runs * maximum_output_parquet_bytes`.
-
-Cross-field validation MUST reject `maximum_input_rows` above the checked product of `maximum_output_segments` and `maximum_output_segment_rows` or `maximum_input_uncompressed_bytes` above the checked product of `maximum_output_segments` and `target_output_segment_uncompressed_bytes`.
-
-`server.request_timeout_seconds` bounds HTTP waiting, while `ingestion.attempt_timeout_seconds` bounds durable post-claim execution. Their values are independent because expiry of the former MUST NOT cancel the latter.
-
-Concurrency and local-capacity limits MUST apply independently to each server process. Catalog-application admission, PostgreSQL constraints, and fencing, not an unbounded process-local queue, MUST preserve cluster correctness and overload behavior. Compaction input byte limits apply to registered Parquet bytes and MUST NOT be inferred from object-store listing.
-
-The ingestion `maximum_record_bytes` value is a service-wide safety ceiling. Catalog application MUST reject an ingestion-profile revision whose `maximum_record_bytes` exceeds it.
-
-An enabled node service MUST be `INGESTION`, `QUERY`, or `MAINTENANCE`; `network_trust` MUST be `LOOPBACK_ONLY`, `LOCAL_CONTAINER`, or `TRUSTED_NETWORK`; `addressing_style` MUST be `PATH` or `VIRTUAL_HOSTED`; `log_format` MUST be `JSON` or `PRETTY`. `operator_bearer_token_environment_variable` is an optional server field and MUST be present exactly under `TRUSTED_NETWORK`. Every present field ending in `_environment_variable` names a required variable. Missing and invalid values MUST produce `CONFIGURATION_SECRET_MISSING` and `CONFIGURATION_SECRET_INVALID`; the decoded cursor HMAC key MUST contain at least 32 bytes. `TRUSTED_NETWORK` MUST require an operator bearer token containing at least 32 visible ASCII bytes and an `https` browser origin.
-
-`ELUCID_<SECTION>__<FIELD>` MUST override the corresponding file value before typed decoding. `ELUCID_SERVER__ENABLED_SERVICES` MUST contain a TOML-compatible array such as `["INGESTION", "QUERY"]`. Service selection is immutable for the process lifetime; changing it requires process replacement.
-
-The `INGESTION` service owns the event-submission and ingestion-inspection APIs, HTTP body staging, ingestion attempt execution, and ingestion publication. The `QUERY` service owns catalog application, source inspection, query execution, OpenAPI and version endpoints, and the embedded web application. The `MAINTENANCE` service owns periodic stale-owner recovery, compaction, retention, garbage collection, and provenance pruning. Every instance MUST serve health and metrics endpoints and MAY enable any non-empty service combination. A conforming deployment MUST run at least one instance of each service.
-
-The effective managed-object root is `s3://{bucket}/{root_prefix}/`. Object-store alias is deployment-facing; authority identifies namespace continuity.
-
-## 3. Lifecycle
-
-Startup phases MUST be `CONFIGURATION`, `HEALTH`, `METASTORE`, `MIGRATIONS`, `OBJECT_STORE`, `RECOVERY`, `RUNTIME`, and `READY`. A phase failure MUST terminate with a stable code and non-zero exit.
-
-During `HEALTH`, the server MUST bind the listener and install health handlers before dependency access. During `MIGRATIONS`, it MUST apply the [Metastore migration protocol](metastore.md#2-migrations) before initializing mutating routes or service work. Concurrent compatible servers MUST serialize migration under the advisory lock.
-
-Every server process MUST allocate one UUIDv7 `instance_id`. Concurrent recovery on multiple maintenance instances MUST use the [Ingestion recovery contract](ingestion.md#11-recovery) and [Compaction recovery contract](compaction.md#7-ownership-failure-and-recovery) and MUST NOT require a leader.
-
-Compatible instances of each service sharing one metastore and object-store authority MUST support active-active operation. An external proxy MUST route ingestion-owned paths only to ready `INGESTION` instances and query-owned paths only to ready `QUERY` instances; one public origin MAY route both path sets. A product route owned by a disabled service MUST remain unregistered and produce `ROUTE_NOT_FOUND`; an instance MUST NOT forward it internally. Request affinity MUST NOT be required; an ingestion retry MAY reach any `INGESTION` instance and MUST converge through persisted ingestion-request state, and a query request MAY reach any `QUERY` instance. Any `MAINTENANCE` instance MAY claim eligible recovery, compaction, retention, garbage-collection, or provenance-pruning work, and no maintenance task may require instance affinity.
-
-`GET /health/live` is the process-restart signal. From listener binding until listener close, it MUST perform only a constant-time in-process scheduling check and return `200 {"status":"LIVE"}` while the supervisor and HTTP executor can run the handler. Dependency state, readiness, draining, migration progress, queue saturation, and product-route admission MUST NOT affect it. A critical supervised-task failure that prevents progress MUST terminate the process.
-
-`GET /health/ready` is the enabled-service traffic signal. It MUST return `200 {"status":"READY"}` only when PostgreSQL responds within its deadline, migration history exactly matches the embedded manifest, the bucket is addressable, create-only output behavior has been proven, enabled-service recovery is complete, and every enabled service is initialized. `INGESTION` readiness additionally requires ingestion and object registries plus writable staging capacity. `QUERY` readiness additionally requires catalog, query, and object registries plus usable memory and spill capacity. `MAINTENANCE` readiness additionally requires compaction, retention, garbage-collection, and provenance-pruning registries plus writable compaction capacity. Otherwise it MUST return `503` with `status = "NOT_READY"` and bounded named checks.
-
-Create-only proof MUST run under a product advisory lock against a fresh UUIDv7 key below `{root_prefix}/.elucid/probes/create-only/`: conditionally create one nonce payload, capture any returned version identity, read and compare the complete payload through a newly constructed object-store client, read and compare one strict non-empty byte range, require a precondition failure when conditionally creating different bytes at the same key, read and compare the first payload again, delete the exact returned version when present or the exact unversioned key otherwise, and prove that the deleted object or version is absent. Inability to address or delete a returned version identity MUST produce `OBJECT_STORE_CAPABILITY_MISSING`. A successful proof MAY be reused by periodic readiness checks.
-
-SIGINT and SIGTERM MUST remove readiness before draining. An enabled `INGESTION` service MUST reject new ingestion requests with `SERVER_DRAINING`, allow active ingestion publication transactions to resolve, and fence unfinished attempts. An enabled `QUERY` service MUST stop query admission and cancel active queries. An enabled `MAINTENANCE` service MUST stop new recovery, compaction, retention, garbage-collection, and provenance-pruning claims; cancel compaction construction and upload work; resolve active publication and expiration transactions; and fence unfinished runs. The process MUST close listeners and exit within the shutdown deadline. Liveness MUST remain available until listener close.
+Shutdown first removes readiness and stops new ingestion and query admission. It then finishes any in-progress spool append, cancels query work, stops claiming maintenance work, resolves any PostgreSQL publication transaction, persists local ingestion state, and exits within the configured deadline. Restart performs ordinary recovery.
 
 ## 4. HTTP conventions
 
-Product endpoints MUST use `/api/v1`. Health, metrics, and static assets use their unversioned paths.
+Product endpoints use `/api/v1`. JSON responses use UTF-8. UUID-backed resource identities use lowercase UUID strings and timestamps use RFC 3339 UTC with millisecond precision.
 
-The HTTP boundary MUST authorize every admitted client as one operator principal. `LOOPBACK_ONLY` MUST reject a bind address containing any non-loopback interface during configuration validation. `LOCAL_CONTAINER` MAY bind another interface, MUST require an `http` browser origin whose host is loopback, and MUST treat every peer that can reach the listener through a container network as trusted. Both local modes MUST admit product and metrics requests without authentication. `TRUSTED_NETWORK` MAY bind another interface and MUST require the configured bearer token on every `/api/v1` and metrics request before reading its body or resolving a product resource. Missing, malformed, or unequal credentials MUST return `401 AUTHENTICATION_REQUIRED` with `WWW-Authenticate: Bearer` and indistinguishable bounded details. Token comparison MUST be constant-time over exact bytes. Health and static-asset requests MUST remain unauthenticated.
-
-A `LOCAL_CONTAINER` deployment MUST restrict listener-reachable container-network membership to trusted workloads and publish the container port only to a host loopback address. Host loopback publication MUST NOT be treated as isolation from peers on that container network. A `TRUSTED_NETWORK` deployment MUST expose product and metrics traffic only through TLS termination and restrict the plaintext bind address to the trusted terminator network. Either non-loopback bind mode MUST emit a startup warning containing the resolved bind addresses, browser origin, and network-trust mode without containing credentials. Origin validation is a browser boundary and MUST NOT be represented as client authentication.
-
-The documented Prometheus scrape configuration for `TRUSTED_NETWORK` MUST use HTTPS and set `authorization.type` to `Bearer` and `authorization.credentials_file` to a mounted secret whose credential matches the configured operator token. It MUST NOT inline the credential in the scrape configuration. Reloading either side with a different credential MAY temporarily fail scrapes with `AUTHENTICATION_REQUIRED` and MUST NOT weaken authorization.
-
-The repository MUST contain a deterministic OpenAPI 3.1 document for every product operation, schema, enum, status, error envelope, and bearer security scheme. Utoipa generation MUST reproduce it exactly in CI. `GET /api/v1/openapi.json` MUST serve the checked-in bytes embedded in the executable.
-
-JSON responses MUST use UTF-8 and `Content-Type: application/json; charset=utf-8`. Requests with media type `application/json` MUST reject duplicate keys, non-finite numbers, trailing non-whitespace bytes, and bodies above `maximum_json_request_body_bytes`. Body limits MUST apply before complete buffering. A validated JSON request MUST be decoded exactly once into a typed transport value.
-
-HTTP ingestion bodies MUST follow Section 7 and the [Ingestion body contract](ingestion.md#3-http-body-staging). They MUST NOT be buffered as JSON transport values.
-
-When `Origin` is present, it MUST equal the configured browser origin; otherwise the service MUST return `403 ORIGIN_NOT_ALLOWED`. Wildcard CORS MUST NOT be emitted.
-
-Timestamps MUST be RFC 3339 UTC strings with exactly three fractional digits. Persistent IDs MUST be lowercase hyphenated UUID strings. Persistent positions, byte sizes, and event counts MUST be non-negative decimal strings. Bounded page counts, row counts, schema versions, and millisecond durations MUST be JSON integers within JavaScript exact range.
-
-A measurement-bearing field MUST spell its English unit in full. Durations and elapsed times MUST include a unit. Examples are `elapsed_milliseconds`, `timeout_seconds`, `selected_bytes`, and `output_rows`.
-
-Every response MUST contain `X-Request-Id`. A valid caller UUID MUST be preserved; otherwise the server MUST generate UUIDv7. Every request log MUST use that identity.
-
-## 5. Ingestion idempotency and pagination
-
-Every HTTP ingestion request MUST require `Idempotency-Key` containing 1 through 128 visible ASCII bytes. The key digest MUST be BLAKE3 over `elucid:http-idempotency-key:v1\0`, the unsigned 32-bit big-endian key-byte length, and the exact key bytes. The digest MUST be scoped by resolved input identity and persisted only in the active `ingestion_idempotency_keys` reservation; the raw key MUST NOT be persisted.
-
-While its reservation remains active, the same input, key, body digest, and body byte count MUST converge on one ingestion-request identity. A committed match MUST return its result with `Idempotency-Replayed: true`. A terminal failed match MUST replay its failure. A non-stale processing match MUST return `INGESTION_REQUEST_IN_PROGRESS` with ingestion-request identity and bounded `Retry-After`. Another body under the same input and key MUST return `IDEMPOTENCY_KEY_REUSED`. After reservation expiry, the same key MUST create a new ingestion request according to the [Retention contract](retention.md#3-idempotency-and-retry-expiration).
-
-`POST /api/v1/query-executions` MUST reject `Idempotency-Key` as `INVALID_REQUEST` without reading or writing ingestion state.
-
-List endpoints MUST accept optional `page_items` and `cursor` query parameters. On an initial page, `page_items` MUST default to `default_page_items` and fit `[1, maximum_page_items]`. On a continuation page, absent `page_items` MUST use the cursor's page size and a supplied value MUST equal it. Responses MUST use `{"items":[...],"next_cursor":null|string}` with stable ordering. A cursor MUST contain version, endpoint kind, canonical filter digest, page size, and final ordering key, authenticate those bytes with HMAC-SHA256, and use unpadded base64url. Decode, version, endpoint, filter, page-size, and authentication failures MUST return `INVALID_CURSOR`.
-
-## 6. Catalog application and source API
-
-`POST /api/v1/catalog-applications` MUST require `Content-Type: application/yaml`, absent or `identity` `Content-Encoding`, and no `Idempotency-Key`. Another media type MUST return `415 UNSUPPORTED_MEDIA_TYPE`; another content coding MUST return `415 UNSUPPORTED_CONTENT_ENCODING`; an `Idempotency-Key` MUST return `400 INVALID_REQUEST`. The request body MUST be the exact UTF-8 YAML catalog manifest and MUST NOT be rewritten by the client or transport.
-
-The endpoint MUST acquire one process-local catalog-application permit before reading the body. Exhausted admission MUST return `429 CAPACITY_EXHAUSTED` without reading the body. A declared or observed body size above `catalog.maximum_manifest_bytes` MUST return `413 REQUEST_TOO_LARGE`; otherwise the server MUST buffer the complete bounded body, decode it exactly once, and validate and canonicalize it according to the [Catalog](catalog.md#6-manifest).
-
-After document validation, the server MUST execute the [catalog-application transaction](catalog.md#7-catalog-application) through one semantic metastore operation. Any `QUERY` instance MAY handle the request; request affinity MUST NOT be required, and the source-name PostgreSQL advisory lock MUST serialize concurrent applications for the same source across the cluster.
-
-A `CREATED` result MUST return `201`; `UPDATED` and `UNCHANGED` MUST return `200`. Every successful response MUST contain the catalog result defined by the Catalog specification and `Location: /api/v1/sources/{source_id}`. If the client cannot determine the response after submitting the complete body, resubmitting the exact manifest MUST preserve committed identities and return the outcome or conflict implied by the current durable catalog.
-
-`GET /api/v1/sources` MUST order sources by name and source identity. Each item MUST contain source identity, name, display name, active schema identity and version, input count, active segment count, event count, and minimum and maximum event time. Empty time bounds MUST be null. The service MUST select the requested source page before computing exact counts and bounds for those sources through grouped reads from catalog rows and `ACTIVE` segments in the same read-only transaction under the configured statement timeout. It MUST NOT update or read a mutable per-source statistics row or issue one query per source.
-
-`GET /api/v1/sources/{source_id}` MUST add every schema-version summary, the complete active schema, and every input summary. A schema summary MUST contain identity, version, `ACTIVE` or `HISTORICAL` status, field count, and creation time. A field MUST contain identity, name, logical type, nullability, role, and description.
-
-An input summary MUST contain identity, name, kind, active ingestion-profile revision identity and number, and retained processing, retryable, committed, and failed ingestion-request counts. The service MUST compute exact counts for all returned inputs in one grouped query under the configured statement timeout using the metastore access path; it MUST NOT issue one query per input.
-
-## 7. Ingestion API
-
-`POST /api/v1/sources/{source_name}/inputs/{input_name}/events` MUST require `Content-Type: application/x-ndjson`, absent or `identity` `Content-Encoding`, and `Idempotency-Key`. Another content coding MUST return `415 UNSUPPORTED_CONTENT_ENCODING` before reading the body. The request body MUST be the complete ingestion input. Source and input names MUST resolve to one active input before body admission. After complete staging, the endpoint MUST claim the ingestion request, pin the current profile and schema, and execute the [Ingestion attempt protocol](ingestion.md#10-attempt-protocol).
-
-Successful `CLAIMED_NEW` processing MUST return `201`. Successful `CLAIMED_RETRY` processing MUST return `200`. A `REPLAY_COMMITTED` result MUST return `200` with `Idempotency-Replayed: true`. A response with rejected records remains successful because their dead-letter object is part of the same commit.
-
-The ingestion operation is synchronous with respect to success: a successful response MUST follow complete object upload, verification, and atomic publication. After claim, execution belongs to a supervised attempt task and is independent of the HTTP waiter's lifetime. If `server.request_timeout_seconds` expires while the transport remains writable, the endpoint MUST return `408 REQUEST_TIMEOUT` with the ingestion-request identity in error details and MUST NOT cancel that task. A same-key retry MUST converge through the persisted claim outcomes.
-
-A successful response MUST contain ingestion-request, ingestion-commit, source, input, pinned profile, and pinned schema identities; `ingestion_time`; body byte count; accepted, rejected, and ignored-blank record counts; segment, Parquet-object, and dead-letter-object counts; nullable minimum and maximum event time; elapsed milliseconds; state `COMMITTED`; and self link.
-
-`GET /api/v1/ingestion-requests/{ingestion_request_id}` MUST return immutable identity, body digest, body byte count, pins, state, committed counters, event-time bounds, ingestion time, retry expiry, nullable provenance expiry, a nullable active-attempt summary containing identity, state, deadline, and creation time, terminal failure when present, and lifecycle timestamps. The body digest MUST be lowercase hexadecimal. Raw idempotency keys and their digests MUST NOT appear.
-
-`GET /api/v1/ingestion-requests?input_id={id}&state={state}` MUST filter by optional input and state and order by creation time and ingestion-request identity.
-
-An ingestion-request response MUST include a weak ETag derived from ingestion-request update version, active attempt identity, and attempt update version. Heartbeat time MUST NOT appear in the response or participate in that ETag. `If-None-Match` MUST return `304` when unchanged.
-
-`GET /api/v1/ingestion-requests/{ingestion_request_id}/dead-letter-entries` MUST return the committed request's dead-letter entries in input-position order using the common list envelope. A committed request without a dead-letter object MUST return an empty list. A non-terminal request MUST return `INGESTION_REQUEST_NOT_COMMITTED`; a failed request MUST replay `INGESTION_REQUEST_FAILED`.
-
-The endpoint MUST read only the directly referenced `PUBLISHED` dead-letter object and MUST NOT expose its bucket, key, or credentials. A `DELETE_PENDING` or `DELETED` object MUST produce `DEAD_LETTER_EXPIRED`. Each item MUST contain the complete entry defined by the [dead-letter contract](ingestion.md#8-dead-letters). Its cursor MUST additionally bind the ingestion-request identity, object identity, object digest, and next entry byte offset. The implementation MUST resume at that authenticated line boundary, stream a bounded exact-key range, and stop before exceeding either `page_items` or `maximum_dead_letter_page_bytes`. An entry that cannot fit an otherwise empty page or invalid NDJSON produced by Elucid MUST produce `PUBLISHED_OBJECT_CORRUPT`.
-
-The server MUST apply backpressure before reading a body. Exhausted ingestion concurrency or staging capacity MUST return `429 CAPACITY_EXHAUSTED` with bounded `Retry-After`.
-
-## 8. Query API
-
-`POST /api/v1/query-executions` MUST accept:
+Every response includes `X-Request-Id`; a valid caller-supplied UUID is preserved, otherwise the server creates one. This identity is for tracing only and never controls ingestion batch identity or deduplication. Errors use:
 
 ```json
 {
-  "query": "source demo_logs | filter status >= 400 | project @event_time, service, status | sort by -@event_time | take 100",
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "Request body is invalid",
+    "details": {}
+  }
+}
+```
+
+Error messages and details are bounded and never contain credentials, stack traces, complete request bodies, event values, or object-store secrets.
+
+## 5. Catalog, source, and status API
+
+`POST /api/v1/catalog-applications` accepts one `application/yaml` catalog document and applies [Catalog](catalog.md#6-catalog-application). Success returns the source identity, active schema version, active input-profile revisions, and whether durable state changed.
+
+`GET /api/v1/sources` returns a bounded list of source identity, name, display name, and active schema version. It does not compute event counts, time bounds, object bytes, or mutable source statistics.
+
+`GET /api/v1/sources/{source_id}` adds the active schema, immutable schema-version summaries, inputs, and active profile summaries.
+
+`GET /api/v1/segments?source_id={uuid}&state={state}` returns a bounded operational list of segment identity, state, origin, schema version, event day, row count, Parquet bytes, bounds, and publication or retirement time. It is intended for the V0 UI and showcase, not for unbounded inventory export.
+
+`GET /api/v1/status` returns a bounded operational summary for the UI: component health, effective hard limits, spool usage and oldest queued age, publication backlog, maintenance ownership, and current or recent compaction summaries. It remains available from local and cached state during a dependency outage; unavailable subparts are explicitly marked `DOWN`. It does not scan event objects or materialize per-source statistics.
+
+## 6. Ingestion and dead-letter API
+
+`POST /api/v1/sources/{source_name}/inputs/{input_name}/events` implements [Ingestion](ingestion.md#2-admission-and-acknowledgement). It requires `application/x-ndjson` and returns `202` only after durable local spooling:
+
+```json
+{
+  "batch_id": "019d...",
+  "state": "DURABLY_QUEUED",
+  "ingestion_time": "2026-08-19T12:00:00.000Z",
+  "body_bytes": 12345
+}
+```
+
+The endpoint has no `Idempotency-Key`, replay response, committed counters, or synchronous record-validation result.
+
+For this endpoint, `202` means ownership accepted; `400`, `404`, `413`, and `415` are permanent request or configuration errors; `429` and `503` are retryable admission failures that occur before ownership. A connection failure or `500` response is ambiguous and MAY occur after the batch became durable, so retry can duplicate events.
+
+`GET /api/v1/dead-letters?source_id={uuid}` returns a bounded list of published dead-letter object summaries. `GET /api/v1/dead-letters/{object_id}` returns entries up to the reported response limit and explicitly reports truncation. V0 provides no dead-letter pagination or bulk export API.
+
+## 7. Query API
+
+`POST /api/v1/query-executions` synchronously executes one query:
+
+```json
+{
+  "query": "source demo_logs | filter status >= 400 | project @event_time, message, status | sort by -@event_time | take 100",
   "time_range": {
-    "start_inclusive": "2026-08-01T00:00:00.000Z",
-    "end_exclusive": "2026-08-02T00:00:00.000Z"
+    "start_inclusive": "2026-08-18T00:00:00.000Z",
+    "end_exclusive": "2026-08-20T00:00:00.000Z"
   },
   "output_rows": 1000
 }
 ```
 
-Query text and both request bounds are required. Output rows MUST default to the configured default and fit `[1, maximum_output_rows]`. Request bounds MUST be valid UTC millisecond instants with start before end. Language source bounds MAY replace either request bound according to the [language contract](query-language.md#4-time-expressions).
+The success response contains query identity, resolved source and schema identities, effective range, selected segments and bytes, typed columns, rows, completion `COMPLETE` or `TRUNCATED`, truncation reason, output rows and bytes, and elapsed milliseconds. Syntax and semantic failures use the ordinary error envelope and carry the ordered query diagnostics in `error.details.diagnostics`.
 
-The response MUST contain query identity, resolved source and active-schema identities, effective time range, query reference time, snapshot segment count, object count, stored-schema count, selected bytes, typed columns, rows, diagnostics, completion, truncation, output rows, output bytes, and elapsed milliseconds. Successful diagnostics MUST contain only warnings from the [query diagnostic registry](query-language.md#9-diagnostics).
+Rows are arrays aligned with columns. `int64` and `uint64` use decimal strings, `eid` uses 32 lowercase hexadecimal characters, other finite scalar values use their natural JSON representation, `datetime` uses an RFC 3339 UTC string with millisecond precision, and `json` returns parsed JSON.
 
-Completion MUST be `COMPLETE` or `TRUNCATED`. Truncation MUST be null for complete results or contain `reason = ROW_LIMIT` with `limit_rows` or `reason = BYTE_LIMIT` with `limit_bytes`.
+There is no PostgreSQL query-execution table, asynchronous queue, polling endpoint, or durable query state. Disconnect, timeout, or shutdown cancels the in-process query.
 
-Rows MUST be arrays aligned with columns and encode values as follows:
+## 8. Embedded web application
 
-| Logical type | JSON value |
-|---|---|
-| `null` | Null |
-| `bool` | Boolean |
-| `int32`, `uint32` | Number |
-| `int64`, `uint64` | Decimal string |
-| `float32`, `float64` | Finite number |
-| `utf8` | String |
-| `datetime` | RFC 3339 UTC string with millisecond precision |
-| `eid` | 32 lowercase hexadecimal characters |
-| `json` | Parsed JSON value |
+The server embeds production UI assets and serves the single-page application from the same listener as the API. Unknown non-API browser routes fall back to the application entry point; API and health routes never do.
 
-A logical null and a JSON null in a `json`-typed column both encode as JSON `null`. A query that must preserve their distinction MUST project an existence expression such as `rest_exists("key")` alongside the value.
+The V0 UI provides:
 
-Every response MUST include `X-Elucid-Query-Id`. Every query error MUST include the query identity in error details.
+- source selection and active-schema inspection;
+- a query editor with an explicit time range;
+- typed result columns, rows, diagnostics, truncation, elapsed time, and scanned segments/bytes;
+- bounded segment inspection showing ingestion and compaction changes;
+- ingestion spool, publication, dead-letter, and compaction status from bounded API data and metrics.
 
-## 9. Errors
+The UI stores no credentials because V0 has no authentication. It does not require a separate web server or development runtime in the release image.
 
-Every non-success API response MUST use:
+## 9. Limits and backpressure
 
-```json
-{
-  "error": {
-    "code": "QUERY_SEMANTIC_ERROR",
-    "message": "The query is invalid.",
-    "request_id": "0198f0d3-34b2-7a01-8c01-000000000001",
-    "details": {},
-    "diagnostics": []
-  }
-}
-```
+The service bounds HTTP headers and bodies, spool bytes, record bytes, concurrent requests, open builders, staging bytes, uploads, selected query segments and bytes, query memory and spill, output rows and bytes, dead-letter responses, compaction inputs and outputs, maintenance batches, and object-store concurrency.
 
-Code is stable; message is human-readable; details is an object; diagnostics is an array. A query diagnostic MUST contain severity, stable code, message, and optional span with start and end byte, line, and column values.
+Capacity rejection occurs before accepting ownership of data. Ingestion and query admission return `429 CAPACITY_EXHAUSTED`; dependency or readiness rejection returns `503 SERVER_NOT_READY` with bounded `Retry-After`; a running query exceeding its own bound returns its named query error or a successful configured truncation.
 
-HTTP mapping MUST follow this table:
+## 10. Telemetry and errors
 
-| Status | Codes |
-|---|---|
-| `400` | `INVALID_REQUEST`, `INVALID_CURSOR`, `INVALID_TIME_RANGE`, `CATALOG_MANIFEST_INVALID`, `QUERY_SYNTAX_ERROR`, `QUERY_SEMANTIC_ERROR`, `QUERY_RESOURCE_LIMIT_EXCEEDED` |
-| `401` | `AUTHENTICATION_REQUIRED` |
-| `403` | `ORIGIN_NOT_ALLOWED` |
-| `404` | `SOURCE_NOT_FOUND`, `INPUT_NOT_FOUND`, `INGESTION_REQUEST_NOT_FOUND`, `ROUTE_NOT_FOUND` |
-| `408` | `REQUEST_TIMEOUT`, `QUERY_TIMEOUT` |
-| `409` | `CATALOG_DEFINITION_CONFLICT`, `CATALOG_HISTORY_DIVERGED`, `INGESTION_REQUEST_IN_PROGRESS`, `INGESTION_REQUEST_NOT_COMMITTED`, `IDEMPOTENCY_KEY_REUSED` |
-| `410` | `DEAD_LETTER_EXPIRED` |
-| `413` | `REQUEST_TOO_LARGE` |
-| `415` | `UNSUPPORTED_MEDIA_TYPE`, `UNSUPPORTED_CONTENT_ENCODING` |
-| `422` | `CATALOG_PROFILE_TARGET_MISMATCH`, `CATALOG_SCHEMA_INCOMPATIBLE`, `INGESTION_REQUEST_FAILED`, `QUERY_CAST_FAILED`, `QUERY_EVALUATION_FAILED`, `QUERY_RESULT_ROW_TOO_LARGE` |
-| `429` | `CAPACITY_EXHAUSTED` |
-| `500` | `CATALOG_CORRUPTION`, `QUERY_EXECUTION_FAILED`, `QUERY_RESULT_ENCODING_FAILED`, `PUBLISHED_OBJECT_MISSING`, `PUBLISHED_OBJECT_CORRUPT`, `INTERNAL_ERROR` |
-| `503` | `METASTORE_UNAVAILABLE`, `OBJECT_STORE_UNAVAILABLE`, `SERVER_DRAINING` |
+`GET /metrics` exposes Prometheus text format. Structured logs and metrics cover startup, HTTP, spool durability, ingestion processing, Parquet construction, object upload/publication/deletion, catalog application, query planning/execution, compaction, retention, recovery, and shutdown.
 
-`SOURCE_NOT_FOUND` reports failure to resolve an HTTP path resource. `QUERY_SOURCE_NOT_FOUND` is an analyzer diagnostic returned inside a top-level `QUERY_SEMANTIC_ERROR` response.
+High-cardinality identities, object keys, query text, request bodies, event data, and error messages are excluded from metric labels. Logs may include request, batch, segment, object, query, and compaction identities where needed for bounded operational tracing, but never event payloads by default.
 
-`INGESTION_REQUEST_STATE_CONFLICT` is an internal metastore outcome. The service MUST resolve it by reloading durable state and producing a named claim, replay, or fencing outcome; it MUST NOT appear as an API error code.
-
-A persisted record, attempt, dead-letter-build, or ingestion-publication code MUST reside on its owning ingestion row. A persisted compaction code MUST reside on its owning compaction run. A persisted shared object-upload, fencing, or ambiguous-publication code MUST reside on its owning durable work. These operational codes and migration and garbage-collection codes MAY additionally appear in readiness details or operational telemetry but MUST NOT escape through an unrelated product response. Synchronous dependency failure MUST map to the stable public availability code.
-
-## 10. Limits and telemetry
-
-The server MUST enforce bounded HTTP headers, JSON bodies, catalog manifest bodies, ingestion bodies, dead-letter pages, idle time, HTTP request lifetime, ingestion-attempt lifetime, query text, pipeline stages, expression depth, selected segments, selected bytes, result rows, result bytes, query memory, spill bytes, staging bytes, record bytes, open event-time buckets, concurrent catalog applications, concurrent ingestion requests, concurrent queries, queued queries, compaction inputs, compaction outputs, compaction memory, compaction working bytes, concurrent compaction runs, recovery batches, retry-expiration batches, idempotency-reservation-expiration batches, segment-expiration batches, provenance-pruning batches, garbage-collection batches, and concurrent object deletions.
-
-Structured events MUST cover startup phases, enabled node services, migration operations, HTTP requests, authentication outcomes, catalog application, ingestion-request claims, ingestion state transitions, compaction claims and state transitions, object upload, publication, recovery, retention expiration, garbage collection, provenance pruning, query phases, and shutdown. Events MUST use stable phase and outcome names and full unit suffixes.
-
-`GET /metrics` MUST return Prometheus text format with process, HTTP, authentication, catalog, query, ingestion, compaction, publication, storage, retention, garbage-collection, provenance-pruning, dependency, and semaphore metrics. Duration metric names MUST end in `_seconds`; byte metric names MUST end in `_bytes`. Labels MUST use bounded vocabularies and MUST NOT contain persistent identities, object keys, query text, request bodies, record data, idempotency keys, bearer tokens, or error messages.
+The stable HTTP error registry contains only errors named by the owning catalog, ingestion, storage, query, compaction, retention, and metastore contracts plus `INVALID_REQUEST`, `NOT_FOUND`, `CAPACITY_EXHAUSTED`, `SERVER_NOT_READY`, `SERVER_DRAINING`, and `INTERNAL_ERROR`.
