@@ -1,0 +1,736 @@
+---
+source: elucid-language/src/semantic/typing_tests.rs
+expression: analysis
+---
+Analysis {
+    pipeline: Pipeline {
+        source: Source {
+            source_id: SourceId(
+                018f0000-0000-7000-8000-000000000001,
+            ),
+            name: "logs",
+            active_schema_id: SchemaId(
+                018f0000-0000-7000-8000-000000000002,
+            ),
+        },
+        time_range: TimeRange {
+            start_inclusive: UtcInstant(
+                -86400000,
+            ),
+            end_exclusive: UtcInstant(
+                86400000,
+            ),
+        },
+        source_relation: Relation {
+            fields: [
+                Field {
+                    name: "@event_time",
+                    logical_type: Datetime,
+                    nullability: NonNull,
+                    origin: System {
+                        field_id: FieldId(
+                            00000000-0000-7000-8000-000000000001,
+                        ),
+                    },
+                },
+                Field {
+                    name: "@ingestion_time",
+                    logical_type: Datetime,
+                    nullability: NonNull,
+                    origin: System {
+                        field_id: FieldId(
+                            00000000-0000-7000-8000-000000000002,
+                        ),
+                    },
+                },
+                Field {
+                    name: "@event_id",
+                    logical_type: Eid,
+                    nullability: NonNull,
+                    origin: System {
+                        field_id: FieldId(
+                            00000000-0000-7000-8000-000000000003,
+                        ),
+                    },
+                },
+                Field {
+                    name: "service",
+                    logical_type: Utf8,
+                    nullability: NonNull,
+                    origin: Schema {
+                        field_id: FieldId(
+                            018f0000-0000-7000-8000-000000000003,
+                        ),
+                    },
+                },
+                Field {
+                    name: "active",
+                    logical_type: Bool,
+                    nullability: Nullable,
+                    origin: Schema {
+                        field_id: FieldId(
+                            018f0000-0000-7000-8000-000000000004,
+                        ),
+                    },
+                },
+                Field {
+                    name: "status",
+                    logical_type: Int32,
+                    nullability: Nullable,
+                    origin: Schema {
+                        field_id: FieldId(
+                            018f0000-0000-7000-8000-000000000005,
+                        ),
+                    },
+                },
+                Field {
+                    name: "bytes",
+                    logical_type: Int64,
+                    nullability: Nullable,
+                    origin: Schema {
+                        field_id: FieldId(
+                            018f0000-0000-7000-8000-000000000006,
+                        ),
+                    },
+                },
+                Field {
+                    name: "requests",
+                    logical_type: UInt32,
+                    nullability: NonNull,
+                    origin: Schema {
+                        field_id: FieldId(
+                            018f0000-0000-7000-8000-000000000007,
+                        ),
+                    },
+                },
+                Field {
+                    name: "ratio",
+                    logical_type: Float32,
+                    nullability: NonNull,
+                    origin: Schema {
+                        field_id: FieldId(
+                            018f0000-0000-7000-8000-000000000008,
+                        ),
+                    },
+                },
+                Field {
+                    name: "@rest",
+                    logical_type: Json,
+                    nullability: Nullable,
+                    origin: System {
+                        field_id: FieldId(
+                            00000000-0000-7000-8000-000000000004,
+                        ),
+                    },
+                },
+            ],
+        },
+        stages: [
+            Stage {
+                kind: Filter(
+                    Expression {
+                        kind: Binary {
+                            operator: And,
+                            left: Expression {
+                                kind: Binary {
+                                    operator: GreaterThanOrEqual,
+                                    left: Expression {
+                                        kind: Field(
+                                            Field {
+                                                name: "status",
+                                                logical_type: Int32,
+                                                nullability: Nullable,
+                                                origin: Schema {
+                                                    field_id: FieldId(
+                                                        018f0000-0000-7000-8000-000000000005,
+                                                    ),
+                                                },
+                                            },
+                                        ),
+                                        logical_type: Int32,
+                                        nullability: Nullable,
+                                    },
+                                    right: Expression {
+                                        kind: Literal(
+                                            Int32(
+                                                400,
+                                            ),
+                                        ),
+                                        logical_type: Int32,
+                                        nullability: NonNull,
+                                    },
+                                },
+                                logical_type: Bool,
+                                nullability: Nullable,
+                            },
+                            right: Expression {
+                                kind: Field(
+                                    Field {
+                                        name: "active",
+                                        logical_type: Bool,
+                                        nullability: Nullable,
+                                        origin: Schema {
+                                            field_id: FieldId(
+                                                018f0000-0000-7000-8000-000000000004,
+                                            ),
+                                        },
+                                    },
+                                ),
+                                logical_type: Bool,
+                                nullability: Nullable,
+                            },
+                        },
+                        logical_type: Bool,
+                        nullability: Nullable,
+                    },
+                ),
+                output_relation: Relation {
+                    fields: [
+                        Field {
+                            name: "@event_time",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000001,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "@ingestion_time",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000002,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "@event_id",
+                            logical_type: Eid,
+                            nullability: NonNull,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000003,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "service",
+                            logical_type: Utf8,
+                            nullability: NonNull,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000003,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "active",
+                            logical_type: Bool,
+                            nullability: Nullable,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000004,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "status",
+                            logical_type: Int32,
+                            nullability: Nullable,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000005,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "bytes",
+                            logical_type: Int64,
+                            nullability: Nullable,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000006,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "requests",
+                            logical_type: UInt32,
+                            nullability: NonNull,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000007,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "ratio",
+                            logical_type: Float32,
+                            nullability: NonNull,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000008,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "@rest",
+                            logical_type: Json,
+                            nullability: Nullable,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000004,
+                                ),
+                            },
+                        },
+                    ],
+                },
+            },
+            Stage {
+                kind: Project(
+                    [
+                        Projection {
+                            expression: Expression {
+                                kind: Field(
+                                    Field {
+                                        name: "@event_time",
+                                        logical_type: Datetime,
+                                        nullability: NonNull,
+                                        origin: System {
+                                            field_id: FieldId(
+                                                00000000-0000-7000-8000-000000000001,
+                                            ),
+                                        },
+                                    },
+                                ),
+                                logical_type: Datetime,
+                                nullability: NonNull,
+                            },
+                            output_field: Field {
+                                name: "@event_time",
+                                logical_type: Datetime,
+                                nullability: NonNull,
+                                origin: System {
+                                    field_id: FieldId(
+                                        00000000-0000-7000-8000-000000000001,
+                                    ),
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Binary {
+                                    operator: Add,
+                                    left: Expression {
+                                        kind: Cast {
+                                            kind: Lossless,
+                                            expression: Expression {
+                                                kind: Field(
+                                                    Field {
+                                                        name: "status",
+                                                        logical_type: Int32,
+                                                        nullability: Nullable,
+                                                        origin: Schema {
+                                                            field_id: FieldId(
+                                                                018f0000-0000-7000-8000-000000000005,
+                                                            ),
+                                                        },
+                                                    },
+                                                ),
+                                                logical_type: Int32,
+                                                nullability: Nullable,
+                                            },
+                                            target: Float64,
+                                        },
+                                        logical_type: Float64,
+                                        nullability: Nullable,
+                                    },
+                                    right: Expression {
+                                        kind: Cast {
+                                            kind: Lossless,
+                                            expression: Expression {
+                                                kind: Field(
+                                                    Field {
+                                                        name: "ratio",
+                                                        logical_type: Float32,
+                                                        nullability: NonNull,
+                                                        origin: Schema {
+                                                            field_id: FieldId(
+                                                                018f0000-0000-7000-8000-000000000008,
+                                                            ),
+                                                        },
+                                                    },
+                                                ),
+                                                logical_type: Float32,
+                                                nullability: NonNull,
+                                            },
+                                            target: Float64,
+                                        },
+                                        logical_type: Float64,
+                                        nullability: NonNull,
+                                    },
+                                },
+                                logical_type: Float64,
+                                nullability: Nullable,
+                            },
+                            output_field: Field {
+                                name: "widened",
+                                logical_type: Float64,
+                                nullability: Nullable,
+                                origin: Derived {
+                                    declaration_span: 143..150,
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Cast {
+                                    kind: NullOnFailure,
+                                    expression: Expression {
+                                        kind: Field(
+                                            Field {
+                                                name: "experimental_status",
+                                                logical_type: Json,
+                                                nullability: Nullable,
+                                                origin: Remainder {
+                                                    key: "experimental_status",
+                                                },
+                                            },
+                                        ),
+                                        logical_type: Json,
+                                        nullability: Nullable,
+                                    },
+                                    target: Int32,
+                                },
+                                logical_type: Int32,
+                                nullability: Nullable,
+                            },
+                            output_field: Field {
+                                name: "dynamic_status",
+                                logical_type: Int32,
+                                nullability: Nullable,
+                                origin: Derived {
+                                    declaration_span: 169..183,
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Remainder {
+                                    function: Value,
+                                    remainder: Field {
+                                        name: "@rest",
+                                        logical_type: Json,
+                                        nullability: Nullable,
+                                        origin: System {
+                                            field_id: FieldId(
+                                                00000000-0000-7000-8000-000000000004,
+                                            ),
+                                        },
+                                    },
+                                    key: "explicit_null",
+                                },
+                                logical_type: Json,
+                                nullability: Nullable,
+                            },
+                            output_field: Field {
+                                name: "explicit_value",
+                                logical_type: Json,
+                                nullability: Nullable,
+                                origin: Derived {
+                                    declaration_span: 226..240,
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Remainder {
+                                    function: Exists,
+                                    remainder: Field {
+                                        name: "@rest",
+                                        logical_type: Json,
+                                        nullability: Nullable,
+                                        origin: System {
+                                            field_id: FieldId(
+                                                00000000-0000-7000-8000-000000000004,
+                                            ),
+                                        },
+                                    },
+                                    key: "explicit_null",
+                                },
+                                logical_type: Bool,
+                                nullability: NonNull,
+                            },
+                            output_field: Field {
+                                name: "explicit_present",
+                                logical_type: Bool,
+                                nullability: NonNull,
+                                origin: Derived {
+                                    declaration_span: 266..282,
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Literal(
+                                    Datetime(
+                                        UtcInstant(
+                                            123,
+                                        ),
+                                    ),
+                                ),
+                                logical_type: Datetime,
+                                nullability: NonNull,
+                            },
+                            output_field: Field {
+                                name: "stamp",
+                                logical_type: Datetime,
+                                nullability: NonNull,
+                                origin: Derived {
+                                    declaration_span: 315..320,
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Literal(
+                                    Eid(
+                                        [
+                                            0,
+                                            17,
+                                            34,
+                                            51,
+                                            68,
+                                            85,
+                                            102,
+                                            119,
+                                            136,
+                                            153,
+                                            170,
+                                            187,
+                                            204,
+                                            221,
+                                            238,
+                                            255,
+                                        ],
+                                    ),
+                                ),
+                                logical_type: Eid,
+                                nullability: NonNull,
+                            },
+                            output_field: Field {
+                                name: "event",
+                                logical_type: Eid,
+                                nullability: NonNull,
+                                origin: Derived {
+                                    declaration_span: 361..366,
+                                },
+                            },
+                        },
+                        Projection {
+                            expression: Expression {
+                                kind: Literal(
+                                    Int64(
+                                        7,
+                                    ),
+                                ),
+                                logical_type: Int64,
+                                nullability: NonNull,
+                            },
+                            output_field: Field {
+                                name: "constant",
+                                logical_type: Int64,
+                                nullability: NonNull,
+                                origin: Derived {
+                                    declaration_span: 410..418,
+                                },
+                            },
+                        },
+                    ],
+                ),
+                output_relation: Relation {
+                    fields: [
+                        Field {
+                            name: "@event_time",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000001,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "widened",
+                            logical_type: Float64,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 143..150,
+                            },
+                        },
+                        Field {
+                            name: "dynamic_status",
+                            logical_type: Int32,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 169..183,
+                            },
+                        },
+                        Field {
+                            name: "explicit_value",
+                            logical_type: Json,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 226..240,
+                            },
+                        },
+                        Field {
+                            name: "explicit_present",
+                            logical_type: Bool,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 266..282,
+                            },
+                        },
+                        Field {
+                            name: "stamp",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 315..320,
+                            },
+                        },
+                        Field {
+                            name: "event",
+                            logical_type: Eid,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 361..366,
+                            },
+                        },
+                        Field {
+                            name: "constant",
+                            logical_type: Int64,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 410..418,
+                            },
+                        },
+                    ],
+                },
+            },
+            Stage {
+                kind: Sort(
+                    [
+                        SortSpec {
+                            field: Field {
+                                name: "dynamic_status",
+                                logical_type: Int32,
+                                nullability: Nullable,
+                                origin: Derived {
+                                    declaration_span: 169..183,
+                                },
+                            },
+                            order: Descending,
+                        },
+                    ],
+                ),
+                output_relation: Relation {
+                    fields: [
+                        Field {
+                            name: "@event_time",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000001,
+                                ),
+                            },
+                        },
+                        Field {
+                            name: "widened",
+                            logical_type: Float64,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 143..150,
+                            },
+                        },
+                        Field {
+                            name: "dynamic_status",
+                            logical_type: Int32,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 169..183,
+                            },
+                        },
+                        Field {
+                            name: "explicit_value",
+                            logical_type: Json,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 226..240,
+                            },
+                        },
+                        Field {
+                            name: "explicit_present",
+                            logical_type: Bool,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 266..282,
+                            },
+                        },
+                        Field {
+                            name: "stamp",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 315..320,
+                            },
+                        },
+                        Field {
+                            name: "event",
+                            logical_type: Eid,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 361..366,
+                            },
+                        },
+                        Field {
+                            name: "constant",
+                            logical_type: Int64,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 410..418,
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    },
+    diagnostics: [
+        Diagnostic {
+            code: FieldResolvedFromRemainder,
+            severity: Warning,
+            message: "field \"experimental_status\" resolves implicitly from @rest",
+            span: Some(
+                195..214,
+            ),
+            source_range: Some(
+                SourceRange {
+                    start: SourcePosition {
+                        line: 1,
+                        column: 196,
+                    },
+                    end: SourcePosition {
+                        line: 1,
+                        column: 215,
+                    },
+                },
+            ),
+        },
+    ],
+}

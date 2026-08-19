@@ -13,8 +13,12 @@ Pipeline {
         ),
     },
     time_range: TimeRange {
-        start_inclusive: None,
-        end_exclusive: None,
+        start_inclusive: UtcInstant(
+            -86400000,
+        ),
+        end_exclusive: UtcInstant(
+            86400000,
+        ),
     },
     source_relation: Relation {
         fields: [
@@ -93,26 +97,38 @@ Pipeline {
     stages: [
         Stage {
             kind: Filter(
-                Binary(
-                    GreaterThanOrEqual,
-                    Field(
-                        Field {
-                            name: "status",
+                Expression {
+                    kind: Binary {
+                        operator: GreaterThanOrEqual,
+                        left: Expression {
+                            kind: Field(
+                                Field {
+                                    name: "status",
+                                    logical_type: Int32,
+                                    nullability: Nullable,
+                                    origin: Schema {
+                                        field_id: FieldId(
+                                            018f0000-0000-7000-8000-000000000004,
+                                        ),
+                                    },
+                                },
+                            ),
                             logical_type: Int32,
                             nullability: Nullable,
-                            origin: Schema {
-                                field_id: FieldId(
-                                    018f0000-0000-7000-8000-000000000004,
-                                ),
-                            },
                         },
-                    ),
-                    Literal(
-                        Number(
-                            400.0,
-                        ),
-                    ),
-                ),
+                        right: Expression {
+                            kind: Literal(
+                                Int32(
+                                    400,
+                                ),
+                            ),
+                            logical_type: Int32,
+                            nullability: NonNull,
+                        },
+                    },
+                    logical_type: Bool,
+                    nullability: Nullable,
+                },
             ),
             output_relation: Relation {
                 fields: [
@@ -193,18 +209,22 @@ Pipeline {
             kind: Project(
                 [
                     Projection {
-                        expression: Field(
-                            Field {
-                                name: "@event_time",
-                                logical_type: Datetime,
-                                nullability: NonNull,
-                                origin: System {
-                                    field_id: FieldId(
-                                        00000000-0000-7000-8000-000000000001,
-                                    ),
+                        expression: Expression {
+                            kind: Field(
+                                Field {
+                                    name: "@event_time",
+                                    logical_type: Datetime,
+                                    nullability: NonNull,
+                                    origin: System {
+                                        field_id: FieldId(
+                                            00000000-0000-7000-8000-000000000001,
+                                        ),
+                                    },
                                 },
-                            },
-                        ),
+                            ),
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                        },
                         output_field: Field {
                             name: "@event_time",
                             logical_type: Datetime,
@@ -217,18 +237,22 @@ Pipeline {
                         },
                     },
                     Projection {
-                        expression: Field(
-                            Field {
-                                name: "service",
-                                logical_type: Utf8,
-                                nullability: NonNull,
-                                origin: Schema {
-                                    field_id: FieldId(
-                                        018f0000-0000-7000-8000-000000000003,
-                                    ),
+                        expression: Expression {
+                            kind: Field(
+                                Field {
+                                    name: "service",
+                                    logical_type: Utf8,
+                                    nullability: NonNull,
+                                    origin: Schema {
+                                        field_id: FieldId(
+                                            018f0000-0000-7000-8000-000000000003,
+                                        ),
+                                    },
                                 },
-                            },
-                        ),
+                            ),
+                            logical_type: Utf8,
+                            nullability: NonNull,
+                        },
                         output_field: Field {
                             name: "service_name",
                             logical_type: Utf8,
@@ -239,18 +263,22 @@ Pipeline {
                         },
                     },
                     Projection {
-                        expression: Field(
-                            Field {
-                                name: "status",
-                                logical_type: Int32,
-                                nullability: Nullable,
-                                origin: Schema {
-                                    field_id: FieldId(
-                                        018f0000-0000-7000-8000-000000000004,
-                                    ),
+                        expression: Expression {
+                            kind: Field(
+                                Field {
+                                    name: "status",
+                                    logical_type: Int32,
+                                    nullability: Nullable,
+                                    origin: Schema {
+                                        field_id: FieldId(
+                                            018f0000-0000-7000-8000-000000000004,
+                                        ),
+                                    },
                                 },
-                            },
-                        ),
+                            ),
+                            logical_type: Int32,
+                            nullability: Nullable,
+                        },
                         output_field: Field {
                             name: "status",
                             logical_type: Int32,

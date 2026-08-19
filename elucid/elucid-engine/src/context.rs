@@ -33,9 +33,11 @@ impl Context {
         &self,
         query: &str,
         catalog: &elucid_language::CatalogSnapshot<'_>,
+        time_context: &elucid_language::QueryTimeContext,
     ) -> Result<DataFrame> {
-        let pipeline = elucid_language::analyze(query, catalog)
-            .map_err(|e| DataFusionError::Plan(format!("Query analysis error: {e}")))?;
+        let analysis = elucid_language::analyze(query, catalog, time_context)
+            .map_err(|error| DataFusionError::Plan(format!("Query analysis error: {error}")))?;
+        let pipeline = analysis.into_pipeline();
 
         if !self.context.table_exist(pipeline.source().name())? {
             self.register_table(pipeline.source().name()).await?;
@@ -107,7 +109,7 @@ mod tests {
         Schema as CatalogSchema, SchemaId, SchemaVersion, Source, SourceId, SourceName, UserField,
         UserFieldName, UserLogicalType,
     };
-    use elucid_language::CatalogSnapshot;
+    use elucid_language::{CatalogSnapshot, QueryTimeContext, ir};
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
     use object_store::{ObjectStore, PutPayload};
@@ -203,7 +205,11 @@ mod tests {
         let ctx = Context::with_storage_config(config);
         let source = catalog_source("my_table");
         let df = ctx
-            .execute("source my_table", &CatalogSnapshot::new(&source))
+            .execute(
+                "source my_table",
+                &CatalogSnapshot::new(&source),
+                &query_time_context(),
+            )
             .await
             .expect("execute");
 
@@ -227,12 +233,24 @@ mod tests {
         let ctx = Context::new(tmp.path());
         let source = catalog_source("test_table");
         let df = ctx
-            .execute("source test_table", &CatalogSnapshot::new(&source))
+            .execute(
+                "source test_table",
+                &CatalogSnapshot::new(&source),
+                &query_time_context(),
+            )
             .await
             .expect("execute");
 
         let results = df.collect().await.expect("collect");
         let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
+    }
+
+    fn query_time_context() -> QueryTimeContext {
+        QueryTimeContext::new(
+            ir::UtcInstant::UNIX_EPOCH,
+            Some(ir::UtcInstant::from_unix_milliseconds(-86_400_000)),
+            Some(ir::UtcInstant::from_unix_milliseconds(86_400_000)),
+        )
     }
 }

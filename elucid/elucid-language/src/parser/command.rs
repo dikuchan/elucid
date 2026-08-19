@@ -34,8 +34,16 @@ where
         .map_with(|(alias, expression), extra| {
             Projection::Computed(ComputedProjection::new(alias, expression, extra.span()))
         });
-    let field = field_reference().map(Projection::Field);
-    let projection = choice((computed, field)).labelled("projection");
+    let expression = expression_parser().map(|expression| {
+        if let crate::ast::ExpressionKind::Field(field) = expression.kind()
+            && field.span() == expression.span()
+        {
+            Projection::Field(field.clone())
+        } else {
+            Projection::Unaliased(expression)
+        }
+    });
+    let projection = choice((computed, expression)).labelled("projection");
 
     just(Token::KeywordProject)
         .ignore_then(
@@ -125,8 +133,10 @@ fn summarize_stage<'tokens, 'source: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'source>, Span = Span>,
 {
-    let measure = identifier()
+    let alias = identifier()
         .then_ignore(just(Token::OperatorAssign))
+        .or_not();
+    let measure = alias
         .then(aggregate_call())
         .map_with(|(alias, aggregate), extra| Measure::new(alias, aggregate, extra.span()));
     let measures = measure

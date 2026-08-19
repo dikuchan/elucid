@@ -6,7 +6,7 @@ use elucid_engine::Context;
 use elucid_ingestion::{
     DeadLetterWriter, LineSource, NoopWal, ParquetSink, SchemaConfig, TableName, run_ingestion,
 };
-use elucid_language::CatalogSnapshot;
+use elucid_language::{CatalogSnapshot, QueryTimeContext, ir};
 
 mod support;
 
@@ -100,7 +100,11 @@ async fn ingestion_then_query_all_rows() {
     let ctx = Context::new(dir.path());
     let source = support::test_logs_source();
     let df = ctx
-        .execute("source test_logs", &CatalogSnapshot::new(&source))
+        .execute(
+            "source test_logs",
+            &CatalogSnapshot::new(&source),
+            &query_time_context(),
+        )
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -119,6 +123,7 @@ async fn ingestion_then_query_filter_status_gte_400() {
         .execute(
             "source test_logs | filter status >= 400",
             &CatalogSnapshot::new(&source),
+            &query_time_context(),
         )
         .await
         .expect("query failed");
@@ -138,6 +143,7 @@ async fn ingestion_then_query_filter_source_nginx() {
         .execute(
             "source test_logs | filter source == \"nginx\"",
             &CatalogSnapshot::new(&source),
+            &query_time_context(),
         )
         .await
         .expect("query failed");
@@ -157,6 +163,7 @@ async fn ingestion_then_query_count() {
         .execute(
             "source test_logs | summarize event_count = count()",
             &CatalogSnapshot::new(&source),
+            &query_time_context(),
         )
         .await
         .expect("query failed");
@@ -178,4 +185,12 @@ async fn ingestion_then_query_count() {
         })
         .expect("count column should be Int64 or UInt64");
     assert_eq!(count_val, 5, "count(*) of 5 rows should be 5");
+}
+
+fn query_time_context() -> QueryTimeContext {
+    QueryTimeContext::new(
+        ir::UtcInstant::UNIX_EPOCH,
+        Some(ir::UtcInstant::from_unix_milliseconds(-86_400_000)),
+        Some(ir::UtcInstant::from_unix_milliseconds(86_400_000)),
+    )
 }

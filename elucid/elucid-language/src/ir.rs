@@ -1,19 +1,86 @@
-//! Resolved intermediate representation for query pipelines.
+//! Fully resolved and typed intermediate representation for query pipelines.
 
 use std::fmt;
-use std::sync::Arc;
 
 use elucid_catalog::{FieldId, LogicalType, Nullability, SchemaId, SourceId};
 
 use crate::Span;
 
+/// A UTC instant represented exactly as milliseconds since the Unix epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UtcInstant(i64);
+
+impl UtcInstant {
+    pub const UNIX_EPOCH: Self = Self(0);
+
+    #[must_use]
+    pub const fn from_unix_milliseconds(value: i64) -> Self {
+        Self(value)
+    }
+
+    #[must_use]
+    pub const fn unix_milliseconds(self) -> i64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Literal {
-    Null,
+    Null(LogicalType),
     Boolean(bool),
-    Number(f64),
-    String(String),
+    Int32(i32),
+    Int64(i64),
+    UInt32(u32),
+    UInt64(u64),
+    Float32(f32),
+    Float64(f64),
+    Utf8(String),
+    Datetime(UtcInstant),
+    Eid([u8; 16]),
+}
+
+impl Literal {
+    #[must_use]
+    pub const fn logical_type(&self) -> LogicalType {
+        match self {
+            Self::Null(logical_type) => *logical_type,
+            Self::Boolean(_) => LogicalType::Bool,
+            Self::Int32(_) => LogicalType::Int32,
+            Self::Int64(_) => LogicalType::Int64,
+            Self::UInt32(_) => LogicalType::UInt32,
+            Self::UInt64(_) => LogicalType::UInt64,
+            Self::Float32(_) => LogicalType::Float32,
+            Self::Float64(_) => LogicalType::Float64,
+            Self::Utf8(_) => LogicalType::Utf8,
+            Self::Datetime(_) => LogicalType::Datetime,
+            Self::Eid(_) => LogicalType::Eid,
+        }
+    }
+
+    #[must_use]
+    pub const fn nullability(&self) -> Nullability {
+        match self {
+            Self::Null(_) => Nullability::Nullable,
+            Self::Boolean(_)
+            | Self::Int32(_)
+            | Self::Int64(_)
+            | Self::UInt32(_)
+            | Self::UInt64(_)
+            | Self::Float32(_)
+            | Self::Float64(_)
+            | Self::Utf8(_)
+            | Self::Datetime(_)
+            | Self::Eid(_) => Nullability::NonNull,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum UnaryOperator {
+    Not,
+    Negate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -31,6 +98,28 @@ pub enum BinaryOperator {
     LessThanOrEqual,
     And,
     Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CastKind {
+    Lossless,
+    Strict,
+    NullOnFailure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RemainderFunction {
+    Value,
+    Exists,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NullPredicate {
+    IsNull,
+    IsNotNull,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -90,14 +179,12 @@ impl Field {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Relation {
-    fields: Arc<[Field]>,
+    fields: Vec<Field>,
 }
 
 impl Relation {
-    pub(crate) fn new(fields: Vec<Field>) -> Self {
-        Self {
-            fields: fields.into(),
-        }
+    pub(crate) const fn new(fields: Vec<Field>) -> Self {
+        Self { fields }
     }
 
     #[must_use]
@@ -113,11 +200,86 @@ impl Relation {
 
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Expression {
+pub enum ExpressionKind {
     Literal(Literal),
     Field(Field),
-    Binary(BinaryOperator, Box<Expression>, Box<Expression>),
-    Not(Box<Expression>),
+    Unary {
+        operator: UnaryOperator,
+        operand: Box<Expression>,
+    },
+    Binary {
+        operator: BinaryOperator,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Cast {
+        kind: CastKind,
+        expression: Box<Expression>,
+        target: LogicalType,
+    },
+    Remainder {
+        function: RemainderFunction,
+        remainder: Field,
+        key: String,
+    },
+    NullPredicate {
+        expression: Box<Expression>,
+        predicate: NullPredicate,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Expression {
+    kind: ExpressionKind,
+    logical_type: LogicalType,
+    nullability: Nullability,
+}
+
+impl Expression {
+    pub(crate) const fn new(
+        kind: ExpressionKind,
+        logical_type: LogicalType,
+        nullability: Nullability,
+    ) -> Self {
+        Self {
+            kind,
+            logical_type,
+            nullability,
+        }
+    }
+
+    pub(crate) fn literal(literal: Literal) -> Self {
+        let logical_type = literal.logical_type();
+        let nullability = literal.nullability();
+        Self::new(ExpressionKind::Literal(literal), logical_type, nullability)
+    }
+
+    pub(crate) fn field(field: Field) -> Self {
+        let logical_type = field.logical_type();
+        let nullability = field.nullability();
+        Self::new(ExpressionKind::Field(field), logical_type, nullability)
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> &ExpressionKind {
+        &self.kind
+    }
+
+    #[must_use]
+    pub const fn logical_type(&self) -> LogicalType {
+        self.logical_type
+    }
+
+    #[must_use]
+    pub const fn nullability(&self) -> Nullability {
+        self.nullability
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (ExpressionKind, LogicalType, Nullability) {
+        (self.kind, self.logical_type, self.nullability)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -163,22 +325,35 @@ impl fmt::Display for Source {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TimeRange {
-    start_inclusive: Option<String>,
-    end_exclusive: Option<String>,
+    start_inclusive: UtcInstant,
+    end_exclusive: UtcInstant,
 }
 
 impl TimeRange {
-    #[must_use]
-    pub fn start_inclusive(&self) -> Option<&str> {
-        self.start_inclusive.as_deref()
+    pub(crate) const fn new(
+        start_inclusive: UtcInstant,
+        end_exclusive: UtcInstant,
+    ) -> Option<Self> {
+        if start_inclusive.0 >= end_exclusive.0 {
+            return None;
+        }
+        Some(Self {
+            start_inclusive,
+            end_exclusive,
+        })
     }
 
     #[must_use]
-    pub fn end_exclusive(&self) -> Option<&str> {
-        self.end_exclusive.as_deref()
+    pub const fn start_inclusive(self) -> UtcInstant {
+        self.start_inclusive
+    }
+
+    #[must_use]
+    pub const fn end_exclusive(self) -> UtcInstant {
+        self.end_exclusive
     }
 }
 
@@ -339,7 +514,7 @@ pub enum StageKind {
         group_by: Vec<Field>,
     },
     Sort(Vec<SortSpec>),
-    Take(usize),
+    Take(u64),
 }
 
 #[derive(Debug, Clone, PartialEq)]

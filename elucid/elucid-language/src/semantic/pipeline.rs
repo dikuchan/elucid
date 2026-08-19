@@ -1,36 +1,43 @@
 use elucid_catalog::{FieldRole, Schema};
 
-use crate::CatalogSnapshot;
-use crate::ast::{Query, StageKind};
+use crate::ast::{
+    Query, StageKind, TimeDirection, TimeExpression, TimeExpressionKind, TimeOperationKind,
+    TimeUnit,
+};
 use crate::ir;
+use crate::{
+    Analysis, AnalyzeError, CatalogSnapshot, Diagnostic, DiagnosticCode, QueryTimeContext, Span,
+};
 
 use super::command::convert_stage;
-use super::error::SemanticError;
+use super::expression::parse_datetime;
 
 pub(crate) fn convert_query(
     query: &Query,
     catalog: &CatalogSnapshot<'_>,
-) -> Result<ir::Pipeline, Vec<SemanticError>> {
-    if query.source().start_inclusive().is_some() || query.source().end_exclusive().is_some() {
-        return Err(vec![SemanticError::ConversionError(
-            "source bounds are not supported by semantic analysis".to_owned(),
-        )]);
-    }
-
+    time_context: &QueryTimeContext,
+) -> Result<Analysis, AnalyzeError> {
+    let mut diagnostics = Vec::new();
     let source_name = query.source().name();
     let catalog_source = catalog.source(source_name.as_str()).ok_or_else(|| {
-        vec![SemanticError::SourceNotFound {
-            name: source_name.as_str().to_owned(),
-            span: source_name.span(),
-        }]
+        AnalyzeError::semantic(vec![Diagnostic::error(
+            DiagnosticCode::SourceNotFound,
+            format!(
+                "source {:?} was not found in the catalog snapshot",
+                source_name.as_str()
+            ),
+            source_name.span(),
+        )])
     })?;
     let active_schema = catalog_source.active_schema();
-    let source_relation = relation_from_schema(active_schema)?;
+    let source_relation = relation_from_schema(active_schema);
     let source = ir::Source::new(
         catalog_source.id(),
         catalog_source.name().as_str(),
         active_schema.id(),
     );
+    let time_range = resolve_time_range(query, *time_context)
+        .map_err(|error| semantic_failure(diagnostics.clone(), error))?;
 
     let mut position = PipelinePosition::Rows;
     let mut relation = source_relation.clone();
@@ -39,12 +46,18 @@ pub(crate) fn convert_query(
         if position == PipelinePosition::Summarized
             && !matches!(stage.kind(), StageKind::Sort(_) | StageKind::Take(_))
         {
-            return Err(vec![SemanticError::StageOrderInvalid {
-                span: stage.span(),
-            }]);
+            return Err(semantic_failure(
+                diagnostics,
+                Diagnostic::error(
+                    DiagnosticCode::StageOrderInvalid,
+                    "only sort and take may follow summarize",
+                    stage.span(),
+                ),
+            ));
         }
 
-        let converted = convert_stage(stage, &relation).map_err(|error| vec![error])?;
+        let converted = convert_stage(stage, &relation, &mut diagnostics)
+            .map_err(|error| semantic_failure(diagnostics.clone(), error))?;
         relation = converted.output_relation().clone();
         if matches!(stage.kind(), StageKind::Summarize { .. }) {
             position = PipelinePosition::Summarized;
@@ -52,11 +65,9 @@ pub(crate) fn convert_query(
         stages.push(converted);
     }
 
-    Ok(ir::Pipeline::new(
-        source,
-        ir::TimeRange::default(),
-        source_relation,
-        stages,
+    Ok(Analysis::new(
+        ir::Pipeline::new(source, time_range, source_relation, stages),
+        diagnostics,
     ))
 }
 
@@ -66,7 +77,110 @@ enum PipelinePosition {
     Summarized,
 }
 
-fn relation_from_schema(schema: &Schema) -> Result<ir::Relation, Vec<SemanticError>> {
+fn resolve_time_range(
+    query: &Query,
+    context: QueryTimeContext,
+) -> Result<ir::TimeRange, Diagnostic> {
+    let source = query.source();
+    let start_inclusive = match source.start_inclusive() {
+        Some(expression) => evaluate_time_expression(expression, context.reference_time())?,
+        None => context.request_start_inclusive().ok_or_else(|| {
+            Diagnostic::error(
+                DiagnosticCode::TimeBoundUnresolved,
+                "source start_inclusive cannot inherit a request bound",
+                source.span(),
+            )
+        })?,
+    };
+    let end_exclusive = match source.end_exclusive() {
+        Some(expression) => evaluate_time_expression(expression, context.reference_time())?,
+        None => context.request_end_exclusive().ok_or_else(|| {
+            Diagnostic::error(
+                DiagnosticCode::TimeBoundUnresolved,
+                "source end_exclusive cannot inherit a request bound",
+                source.span(),
+            )
+        })?,
+    };
+
+    ir::TimeRange::new(start_inclusive, end_exclusive).ok_or_else(|| {
+        Diagnostic::error(
+            DiagnosticCode::TimeRangeInvalid,
+            "source time range must satisfy start_inclusive < end_exclusive",
+            source.span(),
+        )
+    })
+}
+
+fn evaluate_time_expression(
+    expression: &TimeExpression,
+    reference_time: ir::UtcInstant,
+) -> Result<ir::UtcInstant, Diagnostic> {
+    match expression.kind() {
+        TimeExpressionKind::Datetime(value) => parse_datetime(value.value(), expression.span()),
+        TimeExpressionKind::Now => Ok(reference_time),
+        TimeExpressionKind::Relative(operations) => {
+            let mut value = reference_time.unix_milliseconds();
+            for operation in operations {
+                value = match operation.kind() {
+                    TimeOperationKind::Truncate(unit) => {
+                        truncate_time(value, *unit, expression.span())?
+                    }
+                    TimeOperationKind::Shift {
+                        direction,
+                        magnitude,
+                        unit,
+                    } => shift_time(value, *direction, magnitude.get(), *unit, expression.span())?,
+                };
+            }
+            Ok(ir::UtcInstant::from_unix_milliseconds(value))
+        }
+    }
+}
+
+fn truncate_time(value: i64, unit: TimeUnit, span: Span) -> Result<i64, Diagnostic> {
+    let unit = i128::from(unit_milliseconds(unit));
+    let truncated = i128::from(value).div_euclid(unit) * unit;
+    i64::try_from(truncated).map_err(|_| {
+        Diagnostic::error(
+            DiagnosticCode::TimeExpressionInvalid,
+            "time truncation is outside the UTC millisecond domain",
+            span,
+        )
+    })
+}
+
+fn shift_time(
+    value: i64,
+    direction: TimeDirection,
+    magnitude: u64,
+    unit: TimeUnit,
+    span: Span,
+) -> Result<i64, Diagnostic> {
+    let delta = i128::from(magnitude) * i128::from(unit_milliseconds(unit));
+    let result = match direction {
+        TimeDirection::Forward => i128::from(value) + delta,
+        TimeDirection::Backward => i128::from(value) - delta,
+    };
+    i64::try_from(result).map_err(|_| {
+        Diagnostic::error(
+            DiagnosticCode::TimeExpressionInvalid,
+            "relative time expression is outside the UTC millisecond domain",
+            span,
+        )
+    })
+}
+
+const fn unit_milliseconds(unit: TimeUnit) -> i64 {
+    match unit {
+        TimeUnit::Second => 1_000,
+        TimeUnit::Minute => 60_000,
+        TimeUnit::Hour => 3_600_000,
+        TimeUnit::Day => 86_400_000,
+    }
+}
+
+fn relation_from_schema(schema: &Schema) -> ir::Relation {
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let origin = match field.role() {
@@ -79,12 +193,7 @@ fn relation_from_schema(schema: &Schema) -> Result<ir::Relation, Vec<SemanticErr
             | FieldRole::Remainder => ir::FieldOrigin::System {
                 field_id: field.id(),
             },
-            _ => {
-                return Err(vec![SemanticError::ConversionError(format!(
-                    "catalog field {:?} has an unsupported role",
-                    field.name()
-                ))]);
-            }
+            _ => unreachable!("catalog schema contains an unknown field role"),
         };
         fields.push(ir::Field::new(
             field.name(),
@@ -93,33 +202,10 @@ fn relation_from_schema(schema: &Schema) -> Result<ir::Relation, Vec<SemanticErr
             origin,
         ));
     }
-    Ok(ir::Relation::new(fields))
+    ir::Relation::new(fields)
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::SemanticError;
-
-    use super::super::relation_tests::{analyze_query, semantic_errors};
-
-    #[test]
-    fn take_accepts_zero_with_or_without_a_minus_sign() {
-        for query in ["source logs | take 0", "source logs | take -0"] {
-            let pipeline = analyze_query(query).expect("zero is a valid take value");
-            assert!(matches!(
-                pipeline.stages()[0].kind(),
-                crate::ir::StageKind::Take(0)
-            ));
-        }
-    }
-
-    #[test]
-    fn take_rejects_a_negative_value() {
-        let error =
-            analyze_query("source logs | take -1").expect_err("negative take must be rejected");
-        assert!(matches!(
-            semantic_errors(error).as_slice(),
-            [SemanticError::InvalidLimitValue { value: -1 }]
-        ));
-    }
+fn semantic_failure(mut diagnostics: Vec<Diagnostic>, error: Diagnostic) -> AnalyzeError {
+    diagnostics.push(error);
+    AnalyzeError::semantic(diagnostics)
 }

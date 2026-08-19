@@ -613,6 +613,7 @@ impl ComputedProjection {
 pub enum Projection {
     Field(FieldReference),
     Computed(ComputedProjection),
+    Unaliased(Expression),
 }
 
 impl Projection {
@@ -621,6 +622,7 @@ impl Projection {
         match self {
             Self::Field(field) => field.span(),
             Self::Computed(projection) => projection.span(),
+            Self::Unaliased(expression) => expression.span(),
         }
     }
 }
@@ -728,13 +730,17 @@ impl AggregateCall {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Measure {
-    alias: Identifier,
+    alias: Option<Identifier>,
     aggregate: AggregateCall,
     span: Span,
 }
 
 impl Measure {
-    pub(crate) const fn new(alias: Identifier, aggregate: AggregateCall, span: Span) -> Self {
+    pub(crate) const fn new(
+        alias: Option<Identifier>,
+        aggregate: AggregateCall,
+        span: Span,
+    ) -> Self {
         Self {
             alias,
             aggregate,
@@ -743,8 +749,8 @@ impl Measure {
     }
 
     #[must_use]
-    pub const fn alias(&self) -> &Identifier {
-        &self.alias
+    pub const fn alias(&self) -> Option<&Identifier> {
+        self.alias.as_ref()
     }
 
     #[must_use]

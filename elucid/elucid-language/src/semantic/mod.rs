@@ -9,9 +9,14 @@ mod pipeline;
 
 #[cfg(test)]
 mod relation_tests;
+#[cfg(test)]
+mod typing_tests;
 
 pub(crate) mod error;
 
-pub use error::{AnalyzeError, ParseError, SemanticError};
+pub use error::{
+    Analysis, AnalyzeError, AnalyzeErrorCode, Diagnostic, DiagnosticCode, DiagnosticSeverity,
+    SourcePosition, SourceRange,
+};
 
 pub(crate) use pipeline::convert_query;

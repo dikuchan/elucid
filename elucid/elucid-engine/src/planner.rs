@@ -62,7 +62,12 @@ impl<'a> QueryPlanner<'a> {
                     .collect::<Result<_>>()?;
                 builder.sort(sort_exprs)
             }
-            ir::StageKind::Take(n) => builder.limit(0, Some(n)),
+            ir::StageKind::Take(n) => {
+                let limit = usize::try_from(n).map_err(|_| {
+                    DataFusionError::Plan("take value exceeds the platform limit".to_owned())
+                })?;
+                builder.limit(0, Some(limit))
+            }
             ir::StageKind::Project(projections) => {
                 let exprs = projections
                     .into_iter()
@@ -117,19 +122,34 @@ impl<'a> QueryPlanner<'a> {
     }
 
     fn map_expression(&self, expression: ir::Expression) -> Result<Expr> {
-        match expression {
-            ir::Expression::Literal(value) => match value {
-                ir::Literal::Null => Ok(lit(Null)),
+        let (kind, _logical_type, _nullability) = expression.into_parts();
+        match kind {
+            ir::ExpressionKind::Literal(value) => match value {
+                ir::Literal::Null(_) => Ok(lit(Null)),
                 ir::Literal::Boolean(v) => Ok(lit(v)),
-                ir::Literal::Number(v) => Ok(lit(v)),
-                ir::Literal::String(v) => Ok(lit(v)),
+                ir::Literal::Int32(v) => Ok(lit(v)),
+                ir::Literal::Int64(v) => Ok(lit(v)),
+                ir::Literal::UInt32(v) => Ok(lit(v)),
+                ir::Literal::UInt64(v) => Ok(lit(v)),
+                ir::Literal::Float32(v) => Ok(lit(v)),
+                ir::Literal::Float64(v) => Ok(lit(v)),
+                ir::Literal::Utf8(v) => Ok(lit(v)),
                 _ => Err(DataFusionError::Plan(format!(
                     "unsupported literal: {:?}",
                     value
                 ))),
             },
-            ir::Expression::Field(field) => Ok(col(field.name())),
-            ir::Expression::Binary(op, left, right) => {
+            ir::ExpressionKind::Field(field) => match field.origin() {
+                ir::FieldOrigin::Remainder { .. } => Err(DataFusionError::Plan(
+                    "remainder fields are lowered in the snapshot query milestone".to_owned(),
+                )),
+                _ => Ok(col(field.name())),
+            },
+            ir::ExpressionKind::Binary {
+                operator: op,
+                left,
+                right,
+            } => {
                 let left = self.map_expression(*left)?;
                 let right = self.map_expression(*right)?;
                 match op {
@@ -142,10 +162,26 @@ impl<'a> QueryPlanner<'a> {
                     })),
                 }
             }
-            ir::Expression::Not(expr) => Ok(Expr::Not(Box::new(self.map_expression(*expr)?))),
+            ir::ExpressionKind::Unary {
+                operator: ir::UnaryOperator::Not,
+                operand,
+            } => Ok(Expr::Not(Box::new(self.map_expression(*operand)?))),
+            ir::ExpressionKind::NullPredicate {
+                expression,
+                predicate,
+            } => {
+                let expression = self.map_expression(*expression)?;
+                match predicate {
+                    ir::NullPredicate::IsNull => Ok(expression.is_null()),
+                    ir::NullPredicate::IsNotNull => Ok(expression.is_not_null()),
+                    _ => Err(DataFusionError::Plan(
+                        "unsupported null predicate".to_owned(),
+                    )),
+                }
+            }
             _ => Err(DataFusionError::Plan(format!(
                 "unsupported expression: {:?}",
-                expression
+                kind
             ))),
         }
     }

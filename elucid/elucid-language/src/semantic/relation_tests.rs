@@ -5,7 +5,7 @@ use elucid_catalog::{
 };
 use uuid::Uuid;
 
-use crate::{AnalyzeError, CatalogSnapshot, SemanticError, Span, analyze, ir};
+use crate::{AnalyzeError, CatalogSnapshot, DiagnosticCode, QueryTimeContext, Span, analyze, ir};
 
 #[test]
 fn canonical_relations_resolve_catalog_and_derived_fields() {
@@ -74,19 +74,17 @@ fn names_are_resolved_only_from_the_catalog_or_preceding_relation() {
 
     for (query, expected_name, expected_span, failure) in cases {
         let error = analyze_query(query).expect_err("name must not resolve");
-        let errors = semantic_errors(error);
-        assert_eq!(errors.len(), 1, "{query}: {errors:?}");
-        match (&errors[0], failure) {
-            (SemanticError::SourceNotFound { name, span }, ResolutionFailure::Source) => {
-                assert_eq!(name, expected_name);
-                assert_eq!(*span, Span::new(expected_span));
+        assert_eq!(error.diagnostics().len(), 1, "{query}: {error:?}");
+        let diagnostic = &error.diagnostics()[0];
+        assert_eq!(
+            diagnostic.code(),
+            match failure {
+                ResolutionFailure::Source => DiagnosticCode::SourceNotFound,
+                ResolutionFailure::Field => DiagnosticCode::FieldNotFound,
             }
-            (SemanticError::FieldNotFound { name, span }, ResolutionFailure::Field) => {
-                assert_eq!(name, expected_name);
-                assert_eq!(*span, Span::new(expected_span));
-            }
-            (actual, _) => panic!("{query}: unexpected semantic error {actual:?}"),
-        }
+        );
+        assert_eq!(diagnostic.span(), Some(Span::new(expected_span)));
+        assert!(diagnostic.message().contains(expected_name));
     }
 }
 
@@ -97,11 +95,10 @@ fn transformed_relations_reject_duplicate_output_names() {
         "source logs | summarize service = count() by service",
     ] {
         let error = analyze_query(query).expect_err("duplicate output must be rejected");
-        let errors = semantic_errors(error);
-        assert!(matches!(
-            errors.as_slice(),
-            [SemanticError::DuplicateOutputField { name, .. }] if name == "service"
-        ));
+        assert_eq!(
+            error.diagnostics()[0].code(),
+            DiagnosticCode::DuplicateOutputField
+        );
     }
 }
 
@@ -109,12 +106,11 @@ fn transformed_relations_reject_duplicate_output_names() {
 fn only_sort_and_take_can_follow_summarize() {
     let query = "source logs | summarize events = count() | filter status == 500";
     let error = analyze_query(query).expect_err("filter after summarize must be rejected");
-    let errors = semantic_errors(error);
-
-    assert!(matches!(
-        errors.as_slice(),
-        [SemanticError::StageOrderInvalid { span }] if *span == Span::new(43..63)
-    ));
+    assert_eq!(
+        error.diagnostics()[0].code(),
+        DiagnosticCode::StageOrderInvalid
+    );
+    assert_eq!(error.diagnostics()[0].span(), Some(Span::new(43..63)));
 }
 
 #[derive(Clone, Copy)]
@@ -125,14 +121,16 @@ enum ResolutionFailure {
 
 pub(super) fn analyze_query(query: &str) -> Result<ir::Pipeline, AnalyzeError> {
     let source = catalog_source();
-    analyze(query, &CatalogSnapshot::new(&source))
-}
-
-pub(super) fn semantic_errors(error: AnalyzeError) -> Vec<SemanticError> {
-    match error {
-        AnalyzeError::Semantic(errors) => errors,
-        AnalyzeError::Parse(error) => panic!("query unexpectedly failed to parse: {error}"),
-    }
+    analyze(
+        query,
+        &CatalogSnapshot::new(&source),
+        &QueryTimeContext::new(
+            ir::UtcInstant::UNIX_EPOCH,
+            Some(ir::UtcInstant::from_unix_milliseconds(-86_400_000)),
+            Some(ir::UtcInstant::from_unix_milliseconds(86_400_000)),
+        ),
+    )
+    .map(crate::Analysis::into_pipeline)
 }
 
 fn field_names(relation: &ir::Relation) -> Vec<&str> {

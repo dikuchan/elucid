@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 ariadne = { workspace = true }
+chrono = { workspace = true }
 chumsky = { workspace = true, features = ["pratt"] }
 elucid-catalog = { workspace = true }
 logos = { workspace = true }

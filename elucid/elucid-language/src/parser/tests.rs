@@ -180,8 +180,14 @@ fn contextual_keywords_and_alias_rules_are_exact() {
     let StageKind::Summarize { measures, group_by } = query.stages()[2].kind() else {
         panic!("expected summarize stage");
     };
-    assert_eq!(measures[0].alias().as_str(), "event_count");
-    assert_eq!(measures[1].alias().as_str(), "total");
+    assert_eq!(
+        measures[0].alias().expect("measure is aliased").as_str(),
+        "event_count"
+    );
+    assert_eq!(
+        measures[1].alias().expect("measure is aliased").as_str(),
+        "total"
+    );
     assert_eq!(group_by[0].as_str(), "source");
 
     let quoted = parse("source `as` | project `count`").expect("quoted reserved names are valid");
@@ -199,8 +205,6 @@ fn contextual_keywords_and_alias_rules_are_exact() {
 
     for invalid in [
         "source as",
-        "source logs | project value + 1",
-        "source logs | summarize count()",
         "source logs | summarize total = sum(value + 1)",
         "source logs | filter arbitrary(1)",
         "dataset logs",

@@ -1797,6 +1797,7 @@ name = "elucid-language"
 version = "0.1.0"
 dependencies = [
  "ariadne",
+ "chrono",
  "chumsky",
  "elucid-catalog",
  "insta",

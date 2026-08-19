@@ -12,7 +12,7 @@ use elucid_engine::{Context, StorageConfig};
 use elucid_ingestion::{
     DeadLetterWriter, LineSource, NoopWal, ObjectStoreSink, SchemaConfig, TableName, run_ingestion,
 };
-use elucid_language::CatalogSnapshot;
+use elucid_language::{CatalogSnapshot, QueryTimeContext, ir};
 use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
@@ -166,7 +166,11 @@ async fn s3_ingestion_then_query_all_rows() {
     let source = support::test_logs_source();
 
     let df = ctx
-        .execute(&format!("source {table}"), &CatalogSnapshot::new(&source))
+        .execute(
+            &format!("source {table}"),
+            &CatalogSnapshot::new(&source),
+            &query_time_context(),
+        )
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -207,6 +211,7 @@ async fn s3_ingestion_then_query_filter() {
         .execute(
             &format!("source {table} | filter status >= 400"),
             &CatalogSnapshot::new(&source),
+            &query_time_context(),
         )
         .await
         .expect("query failed");
@@ -248,6 +253,7 @@ async fn s3_ingestion_then_query_count() {
         .execute(
             &format!("source {table} | summarize event_count = count()"),
             &CatalogSnapshot::new(&source),
+            &query_time_context(),
         )
         .await
         .expect("query failed");
@@ -326,7 +332,11 @@ async fn s3_ingestion_multiple_batches_then_query() {
     let source = support::test_logs_source();
 
     let df = ctx
-        .execute(&format!("source {table}"), &CatalogSnapshot::new(&source))
+        .execute(
+            &format!("source {table}"),
+            &CatalogSnapshot::new(&source),
+            &query_time_context(),
+        )
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -334,4 +344,12 @@ async fn s3_ingestion_multiple_batches_then_query() {
         rows, 5,
         "should return all 5 rows across multiple Parquet files"
     );
+}
+
+fn query_time_context() -> QueryTimeContext {
+    QueryTimeContext::new(
+        ir::UtcInstant::UNIX_EPOCH,
+        Some(ir::UtcInstant::from_unix_milliseconds(-86_400_000)),
+        Some(ir::UtcInstant::from_unix_milliseconds(86_400_000)),
+    )
 }

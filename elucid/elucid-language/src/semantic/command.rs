@@ -4,37 +4,46 @@ use elucid_catalog::{LogicalType, Nullability};
 
 use crate::ast::{self, NumericSign, Projection, SortDirection, StageKind};
 use crate::ir;
+use crate::{Diagnostic, DiagnosticCode, Span};
 
-use super::error::SemanticError;
 use super::expression::{convert_expression, resolve_field};
 
 pub(crate) fn convert_stage(
     stage: &ast::Stage,
     input: &ir::Relation,
-) -> Result<ir::Stage, SemanticError> {
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<ir::Stage, Diagnostic> {
     let (kind, output) = match stage.kind() {
-        StageKind::Filter(expression) => (
-            ir::StageKind::Filter(convert_expression(expression, input)?),
-            input.clone(),
-        ),
-        StageKind::Project(projections) => convert_project(projections, input)?,
+        StageKind::Filter(expression) => {
+            let span = expression.span();
+            let expression = convert_expression(expression, input, diagnostics)?;
+            if expression.logical_type() != LogicalType::Bool {
+                return Err(type_mismatch("filter expression must have type bool", span));
+            }
+            (ir::StageKind::Filter(expression), input.clone())
+        }
+        StageKind::Project(projections) => convert_project(projections, input, diagnostics)?,
         StageKind::Sort(items) => {
             let mut specs = Vec::with_capacity(items.len());
             for item in items {
+                let field = resolve_field(item.field(), input, diagnostics)?;
+                if field.logical_type() == LogicalType::Json {
+                    return Err(type_mismatch(
+                        "sort does not support json fields",
+                        item.span(),
+                    ));
+                }
                 let direction = match item.direction() {
                     SortDirection::Ascending => ir::SortOrder::Ascending,
                     SortDirection::Descending => ir::SortOrder::Descending,
                 };
-                specs.push(ir::SortSpec::new(
-                    resolve_field(item.field(), input)?,
-                    direction,
-                ));
+                specs.push(ir::SortSpec::new(field, direction));
             }
             (ir::StageKind::Sort(specs), input.clone())
         }
         StageKind::Take(value) => (convert_take(value)?, input.clone()),
         StageKind::Summarize { measures, group_by } => {
-            convert_summarize(measures, group_by, input)?
+            convert_summarize(measures, group_by, input, diagnostics)?
         }
     };
     Ok(ir::Stage::new(kind, output))
@@ -43,44 +52,43 @@ pub(crate) fn convert_stage(
 fn convert_project(
     projections: &[Projection],
     input: &ir::Relation,
-) -> Result<(ir::StageKind, ir::Relation), SemanticError> {
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ir::StageKind, ir::Relation), Diagnostic> {
     let mut names = HashSet::with_capacity(projections.len());
     let mut converted = Vec::with_capacity(projections.len());
     let mut output_fields = Vec::with_capacity(projections.len());
 
     for projection in projections {
-        let (expression, output_field, span) = match projection {
+        let (expression, output_field, declaration_span) = match projection {
             Projection::Field(reference) => {
-                let field = resolve_field(reference, input)?;
+                let field = resolve_field(reference, input, diagnostics)?;
                 (
-                    ir::Expression::Field(field.clone()),
+                    ir::Expression::field(field.clone()),
                     field,
                     reference.span(),
                 )
             }
             Projection::Computed(projection) => {
-                let expression = convert_expression(projection.expression(), input)?;
-                let source_field = match &expression {
-                    ir::Expression::Field(field) => field,
-                    _ => {
-                        return Err(unsupported_syntax(
-                            "typed computed projection",
-                            projection.span(),
-                        ));
-                    }
-                };
+                let expression = convert_expression(projection.expression(), input, diagnostics)?;
                 let output = ir::Field::new(
                     projection.alias().as_str(),
-                    source_field.logical_type(),
-                    source_field.nullability(),
+                    expression.logical_type(),
+                    expression.nullability(),
                     ir::FieldOrigin::Derived {
                         declaration_span: projection.alias().span(),
                     },
                 );
                 (expression, output, projection.alias().span())
             }
+            Projection::Unaliased(expression) => {
+                return Err(Diagnostic::error(
+                    DiagnosticCode::ProjectionAliasRequired,
+                    "computed projection requires an alias",
+                    expression.span(),
+                ));
+            }
         };
-        ensure_unique_output(&mut names, &output_field, span)?;
+        ensure_unique_output(&mut names, &output_field, declaration_span)?;
         output_fields.push(output_field.clone());
         converted.push(ir::Projection::new(expression, output_field));
     }
@@ -95,15 +103,19 @@ fn convert_summarize(
     measures: &[ast::Measure],
     group_by: &[ast::FieldReference],
     input: &ir::Relation,
-) -> Result<(ir::StageKind, ir::Relation), SemanticError> {
-    let output_count = group_by.len().checked_add(measures.len()).ok_or_else(|| {
-        SemanticError::ConversionError("summarize output field count overflowed".to_owned())
-    })?;
-    let mut names = HashSet::with_capacity(output_count);
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(ir::StageKind, ir::Relation), Diagnostic> {
+    let mut names = HashSet::new();
     let mut resolved_groups = Vec::with_capacity(group_by.len());
-    let mut output_fields = Vec::with_capacity(output_count);
+    let mut output_fields = Vec::new();
     for reference in group_by {
-        let field = resolve_field(reference, input)?;
+        let field = resolve_field(reference, input, diagnostics)?;
+        if field.logical_type() == LogicalType::Json {
+            return Err(type_mismatch(
+                "summarize group keys do not support json",
+                reference.span(),
+            ));
+        }
         ensure_unique_output(&mut names, &field, reference.span())?;
         output_fields.push(field.clone());
         resolved_groups.push(field);
@@ -112,21 +124,28 @@ fn convert_summarize(
     let mut resolved_measures = Vec::with_capacity(measures.len());
     for measure in measures {
         let aggregate = measure.aggregate();
+        let alias = measure.alias().ok_or_else(|| {
+            Diagnostic::error(
+                DiagnosticCode::AggregateAliasRequired,
+                "aggregate measure requires an alias",
+                aggregate.span(),
+            )
+        })?;
         let argument = aggregate
             .argument()
-            .map(|reference| resolve_field(reference, input))
+            .map(|reference| resolve_field(reference, input, diagnostics))
             .transpose()?;
         let function = convert_aggregate_function(aggregate.function());
         let (logical_type, nullability) = aggregate_output(function, argument.as_ref(), aggregate)?;
         let output = ir::Field::new(
-            measure.alias().as_str(),
+            alias.as_str(),
             logical_type,
             nullability,
             ir::FieldOrigin::Derived {
-                declaration_span: measure.alias().span(),
+                declaration_span: alias.span(),
             },
         );
-        ensure_unique_output(&mut names, &output, measure.alias().span())?;
+        ensure_unique_output(&mut names, &output, alias.span())?;
         output_fields.push(output.clone());
         resolved_measures.push(ir::AggregateExpression::new(function, argument, output));
     }
@@ -144,9 +163,20 @@ fn aggregate_output(
     function: ir::AggregateFunction,
     argument: Option<&ir::Field>,
     aggregate: &ast::AggregateCall,
-) -> Result<(LogicalType, Nullability), SemanticError> {
+) -> Result<(LogicalType, Nullability), Diagnostic> {
     match (function, argument) {
         (ir::AggregateFunction::Count, _) => Ok((LogicalType::Int64, Nullability::NonNull)),
+        (
+            ir::AggregateFunction::Sum
+            | ir::AggregateFunction::Min
+            | ir::AggregateFunction::Max
+            | ir::AggregateFunction::Average,
+            None,
+        ) => Err(Diagnostic::error(
+            DiagnosticCode::FunctionArityInvalid,
+            format!("{} requires one field argument", function),
+            aggregate.span(),
+        )),
         (ir::AggregateFunction::Sum, Some(field)) => match field.logical_type() {
             LogicalType::Int32 | LogicalType::Int64 => {
                 Ok((LogicalType::Int64, Nullability::Nullable))
@@ -157,54 +187,42 @@ fn aggregate_output(
             LogicalType::Float32 | LogicalType::Float64 => {
                 Ok((LogicalType::Float64, Nullability::Nullable))
             }
-            _ => Err(unsupported_syntax(
-                "aggregate argument type",
+            _ => Err(invalid_aggregate_argument(
+                function,
+                field,
                 aggregate.span(),
             )),
         },
-        (ir::AggregateFunction::Average, Some(field))
-            if matches!(
-                field.logical_type(),
-                LogicalType::Int32
-                    | LogicalType::Int64
-                    | LogicalType::UInt32
-                    | LogicalType::UInt64
-                    | LogicalType::Float32
-                    | LogicalType::Float64
-            ) =>
-        {
+        (ir::AggregateFunction::Average, Some(field)) if is_numeric(field.logical_type()) => {
             Ok((LogicalType::Float64, Nullability::Nullable))
         }
         (ir::AggregateFunction::Min | ir::AggregateFunction::Max, Some(field))
-            if matches!(
-                field.logical_type(),
-                LogicalType::Int32
-                    | LogicalType::Int64
-                    | LogicalType::UInt32
-                    | LogicalType::UInt64
-                    | LogicalType::Float32
-                    | LogicalType::Float64
-                    | LogicalType::Utf8
-                    | LogicalType::Datetime
-                    | LogicalType::Eid
-            ) =>
+            if is_orderable_aggregate_type(field.logical_type()) =>
         {
             Ok((field.logical_type(), Nullability::Nullable))
         }
-        (
-            ir::AggregateFunction::Sum
-            | ir::AggregateFunction::Min
-            | ir::AggregateFunction::Max
-            | ir::AggregateFunction::Average,
-            None,
-        )
-        | (
-            ir::AggregateFunction::Min
-            | ir::AggregateFunction::Max
-            | ir::AggregateFunction::Average,
-            Some(_),
-        ) => Err(unsupported_syntax("aggregate argument", aggregate.span())),
+        (function, Some(field)) => Err(invalid_aggregate_argument(
+            function,
+            field,
+            aggregate.span(),
+        )),
     }
+}
+
+fn invalid_aggregate_argument(
+    function: ir::AggregateFunction,
+    field: &ir::Field,
+    span: Span,
+) -> Diagnostic {
+    Diagnostic::error(
+        DiagnosticCode::FunctionArgumentTypeInvalid,
+        format!(
+            "{} does not accept an argument of type {}",
+            function,
+            field.logical_type()
+        ),
+        span,
+    )
 }
 
 fn convert_aggregate_function(function: ast::AggregateFunction) -> ir::AggregateFunction {
@@ -220,44 +238,73 @@ fn convert_aggregate_function(function: ast::AggregateFunction) -> ir::Aggregate
 fn ensure_unique_output(
     names: &mut HashSet<String>,
     field: &ir::Field,
-    span: crate::Span,
-) -> Result<(), SemanticError> {
+    span: Span,
+) -> Result<(), Diagnostic> {
     if names.insert(field.name().to_owned()) {
         Ok(())
     } else {
-        Err(SemanticError::DuplicateOutputField {
-            name: field.name().to_owned(),
+        Err(Diagnostic::error(
+            DiagnosticCode::DuplicateOutputField,
+            format!("output field {:?} occurs more than once", field.name()),
             span,
-        })
+        ))
     }
 }
 
-fn convert_take(value: &ast::SignedIntegerLiteral) -> Result<ir::StageKind, SemanticError> {
+fn convert_take(value: &ast::SignedIntegerLiteral) -> Result<ir::StageKind, Diagnostic> {
     if value.sign() == NumericSign::Negative && value.magnitude() != 0 {
-        let invalid = if value.magnitude() == i64::MAX as u64 + 1 {
-            i64::MIN
-        } else {
-            let magnitude = i64::try_from(value.magnitude()).map_err(|_| {
-                SemanticError::ConversionError(
-                    "take literal is outside the signed 64-bit range".to_owned(),
-                )
-            })?;
-            -magnitude
-        };
-        return Err(SemanticError::InvalidLimitValue { value: invalid });
+        return Err(Diagnostic::error(
+            DiagnosticCode::TakeInvalid,
+            "take requires a non-negative signed 64-bit integer",
+            value.span(),
+        ));
     }
-
-    let value = i64::try_from(value.magnitude()).map_err(|_| {
-        SemanticError::ConversionError("take literal is outside the signed 64-bit range".to_owned())
-    })?;
-    let value = usize::try_from(value).map_err(|_| {
-        SemanticError::ConversionError("take literal exceeds the platform limit".to_owned())
-    })?;
-    Ok(ir::StageKind::Take(value))
+    if value.magnitude() > i64::MAX as u64 {
+        return Err(Diagnostic::error(
+            DiagnosticCode::TakeInvalid,
+            "take value is outside the signed 64-bit range",
+            value.span(),
+        ));
+    }
+    Ok(ir::StageKind::Take(value.magnitude()))
 }
 
-fn unsupported_syntax(feature: &str, span: crate::Span) -> SemanticError {
-    SemanticError::ConversionError(format!(
-        "{feature} at bytes {span} is not supported by semantic analysis"
-    ))
+fn is_numeric(logical_type: LogicalType) -> bool {
+    matches!(
+        logical_type,
+        LogicalType::Int32
+            | LogicalType::Int64
+            | LogicalType::UInt32
+            | LogicalType::UInt64
+            | LogicalType::Float32
+            | LogicalType::Float64
+    )
+}
+
+fn is_orderable_aggregate_type(logical_type: LogicalType) -> bool {
+    is_numeric(logical_type)
+        || matches!(
+            logical_type,
+            LogicalType::Utf8 | LogicalType::Datetime | LogicalType::Eid
+        )
+}
+
+fn type_mismatch(message: impl Into<String>, span: Span) -> Diagnostic {
+    Diagnostic::error(DiagnosticCode::TypeMismatch, message, span)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::relation_tests::analyze_query;
+
+    #[test]
+    fn take_accepts_zero_with_or_without_a_minus_sign() {
+        for query in ["source logs | take 0", "source logs | take -0"] {
+            let pipeline = analyze_query(query).expect("zero is a valid take value");
+            assert!(matches!(
+                pipeline.stages()[0].kind(),
+                crate::ir::StageKind::Take(0)
+            ));
+        }
+    }
 }

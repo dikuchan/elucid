@@ -236,10 +236,12 @@ Query {
             kind: Summarize {
                 measures: [
                     Measure {
-                        alias: Identifier {
-                            value: "event_count",
-                            span: 312..323,
-                        },
+                        alias: Some(
+                            Identifier {
+                                value: "event_count",
+                                span: 312..323,
+                            },
+                        ),
                         aggregate: AggregateCall {
                             function: Count,
                             argument: None,
@@ -248,10 +250,12 @@ Query {
                         span: 312..333,
                     },
                     Measure {
-                        alias: Identifier {
-                            value: "total",
-                            span: 335..340,
-                        },
+                        alias: Some(
+                            Identifier {
+                                value: "total",
+                                span: 335..340,
+                            },
+                        ),
                         aggregate: AggregateCall {
                             function: Sum,
                             argument: Some(
