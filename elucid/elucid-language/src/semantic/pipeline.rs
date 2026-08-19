@@ -17,7 +17,6 @@ pub(crate) fn convert_query(
     catalog: &CatalogSnapshot<'_>,
     time_context: &QueryTimeContext,
 ) -> Result<Analysis, AnalyzeError> {
-    let mut diagnostics = Vec::new();
     let source_name = query.source().name();
     let catalog_source = catalog.source(source_name.as_str()).ok_or_else(|| {
         AnalyzeError::semantic(vec![Diagnostic::error(
@@ -36,8 +35,7 @@ pub(crate) fn convert_query(
         catalog_source.name().as_str(),
         active_schema.id(),
     );
-    let time_range = resolve_time_range(query, *time_context)
-        .map_err(|error| semantic_failure(diagnostics.clone(), error))?;
+    let time_range = resolve_time_range(query, *time_context).map_err(semantic_failure)?;
 
     let mut position = PipelinePosition::Rows;
     let mut relation = source_relation.clone();
@@ -46,18 +44,14 @@ pub(crate) fn convert_query(
         if position == PipelinePosition::Summarized
             && !matches!(stage.kind(), StageKind::Sort(_) | StageKind::Take(_))
         {
-            return Err(semantic_failure(
-                diagnostics,
-                Diagnostic::error(
-                    DiagnosticCode::StageOrderInvalid,
-                    "only sort and take may follow summarize",
-                    stage.span(),
-                ),
-            ));
+            return Err(semantic_failure(Diagnostic::error(
+                DiagnosticCode::StageOrderInvalid,
+                "only sort and take may follow summarize",
+                stage.span(),
+            )));
         }
 
-        let converted = convert_stage(stage, &relation, &mut diagnostics)
-            .map_err(|error| semantic_failure(diagnostics.clone(), error))?;
+        let converted = convert_stage(stage, &relation).map_err(semantic_failure)?;
         relation = converted.output_relation().clone();
         if matches!(stage.kind(), StageKind::Summarize { .. }) {
             position = PipelinePosition::Summarized;
@@ -65,10 +59,12 @@ pub(crate) fn convert_query(
         stages.push(converted);
     }
 
-    Ok(Analysis::new(
-        ir::Pipeline::new(source, time_range, source_relation, stages),
-        diagnostics,
-    ))
+    Ok(Analysis::new(ir::Pipeline::new(
+        source,
+        time_range,
+        source_relation,
+        stages,
+    )))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,7 +201,6 @@ fn relation_from_schema(schema: &Schema) -> ir::Relation {
     ir::Relation::new(fields)
 }
 
-fn semantic_failure(mut diagnostics: Vec<Diagnostic>, error: Diagnostic) -> AnalyzeError {
-    diagnostics.push(error);
-    AnalyzeError::semantic(diagnostics)
+fn semantic_failure(error: Diagnostic) -> AnalyzeError {
+    AnalyzeError::semantic(vec![error])
 }

@@ -17,53 +17,29 @@ enum IntegerLiteralSite {
 pub(crate) fn convert_expression(
     expression: &ast::Expression,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ir::Expression, Diagnostic> {
-    convert_expression_with_expected(expression, relation, diagnostics, None)
+    convert_expression_with_expected(expression, relation, None)
 }
 
 pub(crate) fn resolve_field(
     reference: &ast::FieldReference,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ir::Field, Diagnostic> {
-    if let Some(field) = relation.field(reference.as_str()) {
-        return Ok(field.clone());
-    }
-
-    if matches!(reference, ast::FieldReference::User(_)) && relation.field("@rest").is_some() {
-        diagnostics.push(Diagnostic::warning(
-            DiagnosticCode::FieldResolvedFromRemainder,
+    relation.field(reference.as_str()).cloned().ok_or_else(|| {
+        Diagnostic::error(
+            DiagnosticCode::FieldNotFound,
             format!(
-                "field {:?} resolves implicitly from @rest",
+                "field {:?} was not found in the current relation",
                 reference.as_str()
             ),
             reference.span(),
-        ));
-        return Ok(ir::Field::new(
-            reference.as_str(),
-            LogicalType::Json,
-            Nullability::Nullable,
-            ir::FieldOrigin::Remainder {
-                key: reference.as_str().to_owned(),
-            },
-        ));
-    }
-
-    Err(Diagnostic::error(
-        DiagnosticCode::FieldNotFound,
-        format!(
-            "field {:?} was not found in the current relation",
-            reference.as_str()
-        ),
-        reference.span(),
-    ))
+        )
+    })
 }
 
 fn convert_expression_with_expected(
     expression: &ast::Expression,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
     expected: Option<LogicalType>,
 ) -> Result<ir::Expression, Diagnostic> {
     match expression.kind() {
@@ -71,19 +47,14 @@ fn convert_expression_with_expected(
             convert_literal(literal, expected, expression.span())
         }
         AstExpressionKind::Field(reference) => {
-            resolve_field(reference, relation, diagnostics).map(ir::Expression::field)
+            resolve_field(reference, relation).map(ir::Expression::field)
         }
         AstExpressionKind::Constructor(constructor) => convert_constructor(constructor),
-        AstExpressionKind::Cast(cast) => convert_cast(cast, relation, diagnostics),
+        AstExpressionKind::Cast(cast) => convert_cast(cast, relation),
         AstExpressionKind::Remainder(remainder) => convert_remainder(remainder, relation),
-        AstExpressionKind::Unary { operator, operand } => convert_unary(
-            *operator,
-            operand,
-            expression.span(),
-            relation,
-            diagnostics,
-            expected,
-        ),
+        AstExpressionKind::Unary { operator, operand } => {
+            convert_unary(*operator, operand, expression.span(), relation, expected)
+        }
         AstExpressionKind::Binary {
             operator,
             left,
@@ -94,7 +65,6 @@ fn convert_expression_with_expected(
             right,
             expression.span(),
             relation,
-            diagnostics,
             expected,
         ),
     }
@@ -172,7 +142,6 @@ fn convert_constructor(constructor: &ast::Constructor) -> Result<ir::Expression,
 fn convert_cast(
     cast: &ast::CastExpression,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ir::Expression, Diagnostic> {
     let target = logical_type(cast.target());
     let expected = match cast.expression().kind() {
@@ -182,8 +151,7 @@ fn convert_cast(
         _ if is_numeric(target) => Some(target),
         _ => None,
     };
-    let expression =
-        convert_expression_with_expected(cast.expression(), relation, diagnostics, expected)?;
+    let expression = convert_expression_with_expected(cast.expression(), relation, expected)?;
 
     if !cast_is_defined(expression.logical_type(), target) {
         return Err(Diagnostic::error(
@@ -265,7 +233,6 @@ fn convert_unary(
     operand: &ast::Expression,
     span: Span,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
     expected: Option<LogicalType>,
 ) -> Result<ir::Expression, Diagnostic> {
     if operator == ast::UnaryOperator::Negate
@@ -286,8 +253,7 @@ fn convert_unary(
         ast::UnaryOperator::Not => Some(LogicalType::Bool),
         ast::UnaryOperator::Negate => expected.filter(|logical_type| is_numeric(*logical_type)),
     };
-    let operand =
-        convert_expression_with_expected(operand, relation, diagnostics, expected_operand)?;
+    let operand = convert_expression_with_expected(operand, relation, expected_operand)?;
     let ir_operator = match operator {
         ast::UnaryOperator::Not if operand.logical_type() == LogicalType::Bool => {
             ir::UnaryOperator::Not
@@ -335,7 +301,6 @@ fn convert_binary(
     right: &ast::Expression,
     span: Span,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
     expected: Option<LogicalType>,
 ) -> Result<ir::Expression, Diagnostic> {
     if matches!(
@@ -343,27 +308,17 @@ fn convert_binary(
         ast::BinaryOperator::Equal | ast::BinaryOperator::NotEqual
     ) {
         if is_null_literal(left) {
-            return convert_null_predicate(operator, right, span, relation, diagnostics);
+            return convert_null_predicate(operator, right, span, relation);
         }
         if is_null_literal(right) {
-            return convert_null_predicate(operator, left, span, relation, diagnostics);
+            return convert_null_predicate(operator, left, span, relation);
         }
     }
 
     match operator {
         ast::BinaryOperator::And | ast::BinaryOperator::Or => {
-            let left = convert_expression_with_expected(
-                left,
-                relation,
-                diagnostics,
-                Some(LogicalType::Bool),
-            )?;
-            let right = convert_expression_with_expected(
-                right,
-                relation,
-                diagnostics,
-                Some(LogicalType::Bool),
-            )?;
+            let left = convert_expression_with_expected(left, relation, Some(LogicalType::Bool))?;
+            let right = convert_expression_with_expected(right, relation, Some(LogicalType::Bool))?;
             if left.logical_type() != LogicalType::Bool || right.logical_type() != LogicalType::Bool
             {
                 return Err(type_mismatch(
@@ -383,7 +338,6 @@ fn convert_binary(
                 expected.filter(|logical_type| is_numeric(*logical_type)),
                 span,
                 relation,
-                diagnostics,
             )?;
             build_binary(operator, left, right, common, span)
         }
@@ -393,8 +347,7 @@ fn convert_binary(
         | ast::BinaryOperator::GreaterThanOrEqual
         | ast::BinaryOperator::LessThan
         | ast::BinaryOperator::LessThanOrEqual => {
-            let (left, right) =
-                convert_comparison_pair(left, right, operator, span, relation, diagnostics)?;
+            let (left, right) = convert_comparison_pair(left, right, operator, span, relation)?;
             build_binary(operator, left, right, LogicalType::Bool, span)
         }
     }
@@ -405,7 +358,6 @@ fn convert_null_predicate(
     value: &ast::Expression,
     span: Span,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ir::Expression, Diagnostic> {
     if is_null_literal(value) {
         return Err(type_mismatch(
@@ -413,7 +365,7 @@ fn convert_null_predicate(
             span,
         ));
     }
-    let expression = convert_expression(value, relation, diagnostics)?;
+    let expression = convert_expression(value, relation)?;
     let predicate = match operator {
         ast::BinaryOperator::Equal => ir::NullPredicate::IsNull,
         ast::BinaryOperator::NotEqual => ir::NullPredicate::IsNotNull,
@@ -441,9 +393,8 @@ fn convert_numeric_pair(
     expected: Option<LogicalType>,
     span: Span,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ir::Expression, ir::Expression, LogicalType), Diagnostic> {
-    let (left, right) = convert_contextual_pair(left, right, expected, relation, diagnostics)?;
+    let (left, right) = convert_contextual_pair(left, right, expected, relation)?;
     if !is_numeric(left.logical_type()) || !is_numeric(right.logical_type()) {
         return Err(type_mismatch("arithmetic requires numeric operands", span));
     }
@@ -462,9 +413,8 @@ fn convert_comparison_pair(
     operator: ast::BinaryOperator,
     span: Span,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ir::Expression, ir::Expression), Diagnostic> {
-    let (left, right) = convert_contextual_pair(left, right, None, relation, diagnostics)?;
+    let (left, right) = convert_contextual_pair(left, right, None, relation)?;
     if is_numeric(left.logical_type()) && is_numeric(right.logical_type()) {
         let common = common_numeric_type(left.logical_type(), right.logical_type())
             .ok_or_else(|| type_mismatch("numeric operands have no lossless common type", span))?;
@@ -498,58 +448,41 @@ fn convert_contextual_pair(
     right: &ast::Expression,
     expected: Option<LogicalType>,
     relation: &ir::Relation,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ir::Expression, ir::Expression), Diagnostic> {
     let left_contextual = needs_context(left);
     let right_contextual = needs_context(right);
     match (left_contextual, right_contextual) {
         (true, false) => {
-            let right = convert_expression_with_expected(right, relation, diagnostics, expected)?;
-            let left = convert_expression_with_expected(
-                left,
-                relation,
-                diagnostics,
-                Some(right.logical_type()),
-            )?;
+            let right = convert_expression_with_expected(right, relation, expected)?;
+            let left =
+                convert_expression_with_expected(left, relation, Some(right.logical_type()))?;
             Ok((left, right))
         }
         (false, true) => {
-            let left = convert_expression_with_expected(left, relation, diagnostics, expected)?;
-            let right = convert_expression_with_expected(
-                right,
-                relation,
-                diagnostics,
-                Some(left.logical_type()),
-            )?;
+            let left = convert_expression_with_expected(left, relation, expected)?;
+            let right =
+                convert_expression_with_expected(right, relation, Some(left.logical_type()))?;
             Ok((left, right))
         }
         (true, true) if expected.is_some() => Ok((
-            convert_expression_with_expected(left, relation, diagnostics, expected)?,
-            convert_expression_with_expected(right, relation, diagnostics, expected)?,
+            convert_expression_with_expected(left, relation, expected)?,
+            convert_expression_with_expected(right, relation, expected)?,
         )),
         (true, true) if is_null_literal(left) => {
-            let right = convert_expression_with_expected(right, relation, diagnostics, None)?;
-            let left = convert_expression_with_expected(
-                left,
-                relation,
-                diagnostics,
-                Some(right.logical_type()),
-            )?;
+            let right = convert_expression_with_expected(right, relation, None)?;
+            let left =
+                convert_expression_with_expected(left, relation, Some(right.logical_type()))?;
             Ok((left, right))
         }
         (true, true) => {
-            let left = convert_expression_with_expected(left, relation, diagnostics, None)?;
-            let right = convert_expression_with_expected(
-                right,
-                relation,
-                diagnostics,
-                Some(left.logical_type()),
-            )?;
+            let left = convert_expression_with_expected(left, relation, None)?;
+            let right =
+                convert_expression_with_expected(right, relation, Some(left.logical_type()))?;
             Ok((left, right))
         }
         (false, false) => Ok((
-            convert_expression_with_expected(left, relation, diagnostics, expected)?,
-            convert_expression_with_expected(right, relation, diagnostics, expected)?,
+            convert_expression_with_expected(left, relation, expected)?,
+            convert_expression_with_expected(right, relation, expected)?,
         )),
     }
 }

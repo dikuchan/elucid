@@ -390,16 +390,20 @@ Analysis {
                                 kind: Cast {
                                     kind: NullOnFailure,
                                     expression: Expression {
-                                        kind: Field(
-                                            Field {
-                                                name: "experimental_status",
+                                        kind: Remainder {
+                                            function: Value,
+                                            remainder: Field {
+                                                name: "@rest",
                                                 logical_type: Json,
                                                 nullability: Nullable,
-                                                origin: Remainder {
-                                                    key: "experimental_status",
+                                                origin: System {
+                                                    field_id: FieldId(
+                                                        00000000-0000-7000-8000-000000000004,
+                                                    ),
                                                 },
                                             },
-                                        ),
+                                            key: "experimental_status",
+                                        },
                                         logical_type: Json,
                                         nullability: Nullable,
                                     },
@@ -441,7 +445,7 @@ Analysis {
                                 logical_type: Json,
                                 nullability: Nullable,
                                 origin: Derived {
-                                    declaration_span: 226..240,
+                                    declaration_span: 234..248,
                                 },
                             },
                         },
@@ -469,7 +473,7 @@ Analysis {
                                 logical_type: Bool,
                                 nullability: NonNull,
                                 origin: Derived {
-                                    declaration_span: 266..282,
+                                    declaration_span: 274..290,
                                 },
                             },
                         },
@@ -490,7 +494,7 @@ Analysis {
                                 logical_type: Datetime,
                                 nullability: NonNull,
                                 origin: Derived {
-                                    declaration_span: 315..320,
+                                    declaration_span: 323..328,
                                 },
                             },
                         },
@@ -526,7 +530,7 @@ Analysis {
                                 logical_type: Eid,
                                 nullability: NonNull,
                                 origin: Derived {
-                                    declaration_span: 361..366,
+                                    declaration_span: 369..374,
                                 },
                             },
                         },
@@ -545,7 +549,7 @@ Analysis {
                                 logical_type: Int64,
                                 nullability: NonNull,
                                 origin: Derived {
-                                    declaration_span: 410..418,
+                                    declaration_span: 418..426,
                                 },
                             },
                         },
@@ -584,7 +588,7 @@ Analysis {
                             logical_type: Json,
                             nullability: Nullable,
                             origin: Derived {
-                                declaration_span: 226..240,
+                                declaration_span: 234..248,
                             },
                         },
                         Field {
@@ -592,7 +596,7 @@ Analysis {
                             logical_type: Bool,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 266..282,
+                                declaration_span: 274..290,
                             },
                         },
                         Field {
@@ -600,7 +604,7 @@ Analysis {
                             logical_type: Datetime,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 315..320,
+                                declaration_span: 323..328,
                             },
                         },
                         Field {
@@ -608,7 +612,7 @@ Analysis {
                             logical_type: Eid,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 361..366,
+                                declaration_span: 369..374,
                             },
                         },
                         Field {
@@ -616,7 +620,7 @@ Analysis {
                             logical_type: Int64,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 410..418,
+                                declaration_span: 418..426,
                             },
                         },
                     ],
@@ -671,7 +675,7 @@ Analysis {
                             logical_type: Json,
                             nullability: Nullable,
                             origin: Derived {
-                                declaration_span: 226..240,
+                                declaration_span: 234..248,
                             },
                         },
                         Field {
@@ -679,7 +683,7 @@ Analysis {
                             logical_type: Bool,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 266..282,
+                                declaration_span: 274..290,
                             },
                         },
                         Field {
@@ -687,7 +691,7 @@ Analysis {
                             logical_type: Datetime,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 315..320,
+                                declaration_span: 323..328,
                             },
                         },
                         Field {
@@ -695,7 +699,7 @@ Analysis {
                             logical_type: Eid,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 361..366,
+                                declaration_span: 369..374,
                             },
                         },
                         Field {
@@ -703,7 +707,7 @@ Analysis {
                             logical_type: Int64,
                             nullability: NonNull,
                             origin: Derived {
-                                declaration_span: 410..418,
+                                declaration_span: 418..426,
                             },
                         },
                     ],
@@ -711,26 +715,4 @@ Analysis {
             },
         ],
     },
-    diagnostics: [
-        Diagnostic {
-            code: FieldResolvedFromRemainder,
-            severity: Warning,
-            message: "field \"experimental_status\" resolves implicitly from @rest",
-            span: Some(
-                195..214,
-            ),
-            source_range: Some(
-                SourceRange {
-                    start: SourcePosition {
-                        line: 1,
-                        column: 196,
-                    },
-                    end: SourcePosition {
-                        line: 1,
-                        column: 215,
-                    },
-                },
-            ),
-        },
-    ],
 }

@@ -139,12 +139,7 @@ impl<'a> QueryPlanner<'a> {
                     value
                 ))),
             },
-            ir::ExpressionKind::Field(field) => match field.origin() {
-                ir::FieldOrigin::Remainder { .. } => Err(DataFusionError::Plan(
-                    "remainder fields are lowered in the snapshot query milestone".to_owned(),
-                )),
-                _ => Ok(col(field.name())),
-            },
+            ir::ExpressionKind::Field(field) => Ok(col(field.name())),
             ir::ExpressionKind::Binary {
                 operator: op,
                 left,

@@ -31,7 +31,6 @@ impl fmt::Display for AnalyzeErrorCode {
 #[non_exhaustive]
 pub enum DiagnosticSeverity {
     Error,
-    Warning,
 }
 
 impl DiagnosticSeverity {
@@ -39,14 +38,6 @@ impl DiagnosticSeverity {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Error => "ERROR",
-            Self::Warning => "WARNING",
-        }
-    }
-
-    const fn sort_order(self) -> u8 {
-        match self {
-            Self::Error => 0,
-            Self::Warning => 1,
         }
     }
 }
@@ -77,7 +68,6 @@ pub enum DiagnosticCode {
     TakeInvalid,
     TypeMismatch,
     ConstantEvaluationFailed,
-    FieldResolvedFromRemainder,
 }
 
 impl DiagnosticCode {
@@ -101,7 +91,6 @@ impl DiagnosticCode {
             Self::TakeInvalid => "QUERY_TAKE_INVALID",
             Self::TypeMismatch => "QUERY_TYPE_MISMATCH",
             Self::ConstantEvaluationFailed => "QUERY_CONSTANT_EVALUATION_FAILED",
-            Self::FieldResolvedFromRemainder => "QUERY_FIELD_RESOLVED_FROM_REMAINDER",
         }
     }
 }
@@ -159,24 +148,11 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub(crate) fn error(code: DiagnosticCode, message: impl Into<String>, span: Span) -> Self {
-        Self::new(code, DiagnosticSeverity::Error, message, Some(span))
-    }
-
-    pub(crate) fn warning(code: DiagnosticCode, message: impl Into<String>, span: Span) -> Self {
-        Self::new(code, DiagnosticSeverity::Warning, message, Some(span))
-    }
-
-    fn new(
-        code: DiagnosticCode,
-        severity: DiagnosticSeverity,
-        message: impl Into<String>,
-        span: Option<Span>,
-    ) -> Self {
         Self {
             code,
-            severity,
+            severity: DiagnosticSeverity::Error,
             message: message.into(),
-            span,
+            span: Some(span),
             source_range: None,
         }
     }
@@ -219,34 +195,16 @@ impl Diagnostic {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analysis {
     pipeline: ir::Pipeline,
-    diagnostics: Vec<Diagnostic>,
 }
 
 impl Analysis {
-    pub(crate) fn new(pipeline: ir::Pipeline, diagnostics: Vec<Diagnostic>) -> Self {
-        debug_assert!(
-            diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.severity == DiagnosticSeverity::Warning)
-        );
-        Self {
-            pipeline,
-            diagnostics,
-        }
+    pub(crate) const fn new(pipeline: ir::Pipeline) -> Self {
+        Self { pipeline }
     }
 
     #[must_use]
     pub const fn pipeline(&self) -> &ir::Pipeline {
         &self.pipeline
-    }
-
-    #[must_use]
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        &self.diagnostics
-    }
-
-    pub(crate) fn diagnostics_mut(&mut self) -> &mut Vec<Diagnostic> {
-        &mut self.diagnostics
     }
 
     #[must_use]
@@ -274,11 +232,6 @@ impl AnalyzeError {
     }
 
     pub(crate) fn semantic(diagnostics: Vec<Diagnostic>) -> Self {
-        debug_assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
-        );
         Self {
             code: AnalyzeErrorCode::Semantic,
             diagnostics,
@@ -333,7 +286,6 @@ fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> Ordering {
         .start()
         .cmp(&right_span.start())
         .then_with(|| left_span.end().cmp(&right_span.end()))
-        .then_with(|| left.severity.sort_order().cmp(&right.severity.sort_order()))
         .then_with(|| left.code.as_str().cmp(right.code.as_str()))
 }
 

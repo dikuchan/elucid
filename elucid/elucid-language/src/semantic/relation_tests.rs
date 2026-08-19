@@ -70,6 +70,12 @@ fn names_are_resolved_only_from_the_catalog_or_preceding_relation() {
             22..30,
             ResolutionFailure::Field,
         ),
+        (
+            "source logs | project missing",
+            "missing",
+            22..29,
+            ResolutionFailure::Field,
+        ),
     ];
 
     for (query, expected_name, expected_span, failure) in cases {

@@ -127,7 +127,6 @@ pub enum NullPredicate {
 pub enum FieldOrigin {
     Schema { field_id: FieldId },
     System { field_id: FieldId },
-    Remainder { key: String },
     Derived { declaration_span: Span },
 }
 

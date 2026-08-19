@@ -12,7 +12,7 @@ use crate::{
 
 #[test]
 fn typed_expression_analysis_is_canonical() {
-    let query = r#"source logs start_inclusive=-1d@h end_exclusive=datetime("1970-01-02T03:00:00+03:00") | filter status >= 400 and active | project @event_time, widened = status + ratio, dynamic_status = try_cast(experimental_status as int32), explicit_value = rest("explicit_null"), explicit_present = rest_exists("explicit_null"), stamp = datetime("1970-01-01T00:00:00.123Z"), event = eid("00112233445566778899aabbccddeeff"), constant = 1 + 2 * 3 | sort by -dynamic_status"#;
+    let query = r#"source logs start_inclusive=-1d@h end_exclusive=datetime("1970-01-02T03:00:00+03:00") | filter status >= 400 and active | project @event_time, widened = status + ratio, dynamic_status = try_cast(rest("experimental_status") as int32), explicit_value = rest("explicit_null"), explicit_present = rest_exists("explicit_null"), stamp = datetime("1970-01-01T00:00:00.123Z"), event = eid("00112233445566778899aabbccddeeff"), constant = 1 + 2 * 3 | sort by -dynamic_status"#;
     let source = typed_catalog_source();
     let analysis = analyze(
         query,
@@ -21,15 +21,6 @@ fn typed_expression_analysis_is_canonical() {
     )
     .expect("canonical typed query is valid");
 
-    assert_eq!(analysis.diagnostics().len(), 1);
-    assert_eq!(
-        analysis.diagnostics()[0].code(),
-        DiagnosticCode::FieldResolvedFromRemainder
-    );
-    assert_eq!(
-        analysis.diagnostics()[0].severity(),
-        DiagnosticSeverity::Warning
-    );
     insta::assert_debug_snapshot!(analysis);
 }
 
@@ -236,7 +227,7 @@ fn diagnostic_registry_classifies_semantic_failures() {
 }
 
 #[test]
-fn syntax_errors_and_successful_warnings_use_stable_ordering() {
+fn syntax_errors_are_classified() {
     let source = typed_catalog_source();
     let syntax = analyze(
         "source logs | filter )",
@@ -246,23 +237,6 @@ fn syntax_errors_and_successful_warnings_use_stable_ordering() {
     .expect_err("query must fail parsing");
     assert_eq!(syntax.code(), AnalyzeErrorCode::Syntax);
     assert_eq!(syntax.diagnostics()[0].code(), DiagnosticCode::SyntaxError);
-
-    let query = "source logs | filter service == \"ошибка\" | project later, earlier";
-    let analysis = analyze(
-        query,
-        &CatalogSnapshot::new(&source),
-        &bounded_time_context(),
-    )
-    .expect("implicit remainder fields are valid");
-    let spans = analysis
-        .diagnostics()
-        .iter()
-        .map(|diagnostic| diagnostic.span().expect("warning has a span"))
-        .collect::<Vec<_>>();
-    assert_eq!(spans.len(), 2);
-    assert!(spans[0].start() < spans[1].start());
-    assert_eq!(&query[spans[0].start()..spans[0].end()], "later");
-    assert_eq!(&query[spans[1].start()..spans[1].end()], "earlier");
 }
 
 fn bounded_time_context() -> QueryTimeContext {
