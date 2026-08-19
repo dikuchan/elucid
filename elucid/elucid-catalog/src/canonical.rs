@@ -4,8 +4,8 @@ use crate::manifest::{ManifestIngestionProfileRevision, ManifestSchema};
 use crate::{
     CanonicalJson, CatalogApplicationError, CatalogPath, DeclarationDigest, Field, FieldRole,
     IngestionProfile, IngestionProfileRevision, IngestionProfileRevisionId, Input, InputId,
-    InputKind, InputName, JsonPointer, LogicalType, MaterializedDigest, ProfileRevision, Schema,
-    SchemaId, SchemaVersion, SourceId, SourceName,
+    InputName, JsonPointer, LogicalType, MaterializedDigest, ProfileRevision, Schema, SchemaId,
+    SchemaVersion, SourceId, SourceName,
 };
 
 const SOURCE_DECLARATION_DOMAIN: &[u8] = b"elucid:catalog:source:v1\0";
@@ -53,6 +53,7 @@ pub(crate) fn manifest_schema_declaration(
                 field.nullability.as_str(),
                 FieldRole::Data.as_str(),
                 field.description.as_deref(),
+                field.historical_remainder_pointer.as_ref(),
             )
         })
         .collect();
@@ -74,6 +75,7 @@ pub(crate) fn stored_schema_declaration(
                 field.nullability().as_str(),
                 field.role().as_str(),
                 field.description(),
+                field.historical_remainder_pointer(),
             )
         })
         .collect();
@@ -126,15 +128,11 @@ pub(crate) fn schema_materialized_parts(
 
 pub(crate) fn input_declaration(
     name: &InputName,
-    kind: InputKind,
     path: &str,
 ) -> Result<DeclarationDocument, CatalogApplicationError> {
     declaration_document(
         INPUT_DECLARATION_DOMAIN,
-        object([
-            ("kind", string(kind.as_str())),
-            ("name", string(name.as_str())),
-        ]),
+        object([("name", string(name.as_str()))]),
         path,
     )
 }
@@ -143,14 +141,12 @@ pub(crate) fn input_materialized(
     input_id: InputId,
     source_id: SourceId,
     name: &InputName,
-    kind: InputKind,
     path: &str,
 ) -> Result<MaterializedDocument, CatalogApplicationError> {
     materialized_document(
         INPUT_MATERIALIZED_DOMAIN,
         object([
             ("input_id", string(&input_id.to_string())),
-            ("kind", string(kind.as_str())),
             ("name", string(name.as_str())),
             ("source_id", string(&source_id.to_string())),
         ]),
@@ -162,13 +158,7 @@ pub(crate) fn stored_input_materialized(
     input: &Input,
     path: &str,
 ) -> Result<MaterializedDocument, CatalogApplicationError> {
-    input_materialized(
-        input.id(),
-        input.source_id(),
-        input.name(),
-        input.kind(),
-        path,
-    )
+    input_materialized(input.id(), input.source_id(), input.name(), path)
 }
 
 pub(crate) fn manifest_profile_declaration(
@@ -225,41 +215,24 @@ pub(crate) fn stored_profile_declaration(
     let profile = revision.profile();
     let declaration = object([
         (
-            "conversion_policy",
-            string(profile.conversion_policy().as_str()),
-        ),
-        ("encoding", string(profile.encoding().as_str())),
-        (
-            "event_time_mapping",
+            "event_time",
             object([
-                (
-                    "format",
-                    string(profile.event_time_mapping().format().as_str()),
-                ),
+                ("format", string(profile.event_time().format().as_str())),
                 (
                     "json_pointer",
-                    string(&profile.event_time_mapping().json_pointer().to_string()),
+                    string(&profile.event_time().json_pointer().to_string()),
                 ),
             ]),
-        ),
-        (
-            "line_boundary_policy",
-            string(profile.line_boundary_policy().as_str()),
         ),
         ("mappings", Value::Array(mappings)),
         (
             "maximum_record_bytes",
             unsigned(profile.maximum_record_bytes().get()),
         ),
-        ("parser_kind", string(profile.parser_kind().as_str())),
         ("revision", unsigned(revision.revision().get())),
         (
             "target_schema_version",
             unsigned(target_schema.version().get()),
-        ),
-        (
-            "unknown_field_policy",
-            string(profile.unknown_field_policy().as_str()),
         ),
     ]);
     declaration_document(INGESTION_PROFILE_DECLARATION_DOMAIN, declaration, path)
@@ -308,24 +281,16 @@ pub(crate) fn profile_materialized_parts(
         INGESTION_PROFILE_MATERIALIZED_DOMAIN,
         object([
             (
-                "conversion_policy",
-                string(profile.conversion_policy().as_str()),
-            ),
-            ("encoding", string(profile.encoding().as_str())),
-            (
-                "event_time_mapping",
+                "event_time",
                 object([
-                    (
-                        "format",
-                        string(profile.event_time_mapping().format().as_str()),
-                    ),
+                    ("format", string(profile.event_time().format().as_str())),
                     (
                         "json_pointer",
-                        string(&profile.event_time_mapping().json_pointer().to_string()),
+                        string(&profile.event_time().json_pointer().to_string()),
                     ),
                     (
                         "json_pointer_tokens",
-                        pointer_tokens(profile.event_time_mapping().json_pointer()),
+                        pointer_tokens(profile.event_time().json_pointer()),
                     ),
                 ]),
             ),
@@ -334,22 +299,13 @@ pub(crate) fn profile_materialized_parts(
                 string(&revision_id.to_string()),
             ),
             ("input_id", string(&input_id.to_string())),
-            (
-                "line_boundary_policy",
-                string(profile.line_boundary_policy().as_str()),
-            ),
             ("mappings", Value::Array(mappings)),
             (
                 "maximum_record_bytes",
                 unsigned(profile.maximum_record_bytes().get()),
             ),
-            ("parser_kind", string(profile.parser_kind().as_str())),
             ("revision", unsigned(revision.get())),
             ("target_schema_id", string(&target_schema_id.to_string())),
-            (
-                "unknown_field_policy",
-                string(profile.unknown_field_policy().as_str()),
-            ),
         ]),
         path,
     )
@@ -365,39 +321,22 @@ fn profile_declaration(
         INGESTION_PROFILE_DECLARATION_DOMAIN,
         object([
             (
-                "conversion_policy",
-                string(revision.conversion_policy.as_str()),
-            ),
-            ("encoding", string(revision.encoding.as_str())),
-            (
-                "event_time_mapping",
+                "event_time",
                 object([
-                    (
-                        "format",
-                        string(revision.event_time_mapping.format.as_str()),
-                    ),
+                    ("format", string(revision.event_time.format.as_str())),
                     (
                         "json_pointer",
-                        string(&revision.event_time_mapping.json_pointer.to_string()),
+                        string(&revision.event_time.json_pointer.to_string()),
                     ),
                 ]),
-            ),
-            (
-                "line_boundary_policy",
-                string(revision.line_boundary_policy.as_str()),
             ),
             ("mappings", Value::Array(mappings)),
             (
                 "maximum_record_bytes",
                 unsigned(revision.maximum_record_bytes.get()),
             ),
-            ("parser_kind", string(revision.parser_kind.as_str())),
             ("revision", unsigned(revision.revision.get())),
             ("target_schema_version", unsigned(target_schema_version)),
-            (
-                "unknown_field_policy",
-                string(revision.unknown_field_policy.as_str()),
-            ),
         ]),
         path,
     )
@@ -425,10 +364,17 @@ fn field_declaration(
     nullability: &str,
     role: &str,
     description: Option<&str>,
+    historical_remainder_pointer: Option<&JsonPointer>,
 ) -> Value {
     let mut fields = Map::new();
     if let Some(description) = description {
         fields.insert("description".to_owned(), string(description));
+    }
+    if let Some(pointer) = historical_remainder_pointer {
+        fields.insert(
+            "historical_remainder_pointer".to_owned(),
+            string(&pointer.to_string()),
+        );
     }
     fields.insert("logical_type".to_owned(), string(logical_type));
     fields.insert("name".to_owned(), string(name));
@@ -441,6 +387,16 @@ fn materialized_field(field: &Field) -> Value {
     let mut fields = Map::new();
     if let Some(description) = field.description() {
         fields.insert("description".to_owned(), string(description));
+    }
+    if let Some(pointer) = field.historical_remainder_pointer() {
+        fields.insert(
+            "historical_remainder_pointer".to_owned(),
+            string(&pointer.to_string()),
+        );
+        fields.insert(
+            "historical_remainder_pointer_tokens".to_owned(),
+            pointer_tokens(pointer),
+        );
     }
     fields.insert("field_id".to_owned(), string(&field.id().to_string()));
     fields.insert(

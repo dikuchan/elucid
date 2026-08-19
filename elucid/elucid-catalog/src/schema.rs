@@ -4,8 +4,8 @@ use arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 
 use crate::{
     CatalogModelError, DeclarationDigest, DefinitionDigests, FieldId, FieldOrdinal, FieldRole,
-    LogicalType, MaterializedDigest, Nullability, SchemaId, SchemaVersion, SourceId, UserFieldName,
-    UserLogicalType,
+    JsonPointer, LogicalType, MaterializedDigest, Nullability, SchemaId, SchemaVersion, SourceId,
+    UserFieldName, UserLogicalType,
 };
 
 const FIELD_ID_METADATA_KEY: &str = "elucid.field_id";
@@ -19,6 +19,7 @@ pub struct UserField {
     logical_type: UserLogicalType,
     nullability: Nullability,
     description: Option<String>,
+    historical_remainder_pointer: Option<JsonPointer>,
 }
 
 impl UserField {
@@ -37,6 +38,7 @@ impl UserField {
             logical_type,
             nullability,
             description: None,
+            historical_remainder_pointer: None,
         })
     }
 
@@ -44,6 +46,21 @@ impl UserField {
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
+    }
+
+    pub fn with_historical_remainder_pointer(
+        mut self,
+        pointer: JsonPointer,
+    ) -> Result<Self, CatalogModelError> {
+        if self.nullability != Nullability::Nullable {
+            return Err(
+                CatalogModelError::HistoricalRemainderPointerRequiresNullableField {
+                    field_id: self.id,
+                },
+            );
+        }
+        self.historical_remainder_pointer = Some(pointer);
+        Ok(self)
     }
 
     #[must_use]
@@ -70,6 +87,11 @@ impl UserField {
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
+
+    #[must_use]
+    pub const fn historical_remainder_pointer(&self) -> Option<&JsonPointer> {
+        self.historical_remainder_pointer.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +104,7 @@ pub struct Field {
     role: FieldRole,
     ordinal: FieldOrdinal,
     description: Option<String>,
+    historical_remainder_pointer: Option<JsonPointer>,
 }
 
 impl Field {
@@ -120,6 +143,11 @@ impl Field {
         self.description.as_deref()
     }
 
+    #[must_use]
+    pub const fn historical_remainder_pointer(&self) -> Option<&JsonPointer> {
+        self.historical_remainder_pointer.as_ref()
+    }
+
     fn system(
         id: FieldId,
         name: &'static str,
@@ -136,6 +164,7 @@ impl Field {
             role,
             ordinal: FieldOrdinal::from_index(ordinal)?,
             description: None,
+            historical_remainder_pointer: None,
         })
     }
 
@@ -148,6 +177,7 @@ impl Field {
             role: FieldRole::Data,
             ordinal: FieldOrdinal::from_index(ordinal)?,
             description: field.description,
+            historical_remainder_pointer: field.historical_remainder_pointer,
         })
     }
 

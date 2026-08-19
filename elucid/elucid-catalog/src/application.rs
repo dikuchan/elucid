@@ -7,11 +7,10 @@ use crate::canonical::{
 };
 use crate::manifest::{ManifestIngestionProfileRevision, ManifestInput};
 use crate::{
-    CatalogApplicationError, CatalogManifest, CatalogPath, DeclarationDigest, DefinitionDigests,
-    EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestionProfile, IngestionProfileRevision,
-    IngestionProfileRevisionId, Input, InputId, LogicalType, MaterializedDigest, Nullability,
-    ProfileRevision, Schema, SchemaId, SchemaIncompatibility, SchemaVersion, Source, SourceId,
-    UserField,
+    CatalogApplicationError, CatalogManifest, CatalogModelError, CatalogPath, DeclarationDigest,
+    DefinitionDigests, EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestionProfile,
+    IngestionProfileRevision, IngestionProfileRevisionId, Input, InputId, MaterializedDigest,
+    ProfileRevision, Schema, SchemaId, SchemaVersion, Source, SourceId, UserField,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -340,8 +339,7 @@ pub fn plan_catalog_application(
         schemas,
         inputs,
     )
-    .map_err(|error| CatalogApplicationError::corruption("source", error.to_string()))?;
-    validate_schema_adapters(&source)?;
+    .map_err(catalog_source_error)?;
 
     let created_immutable = source_disposition == CatalogEntityDisposition::Create
         || schema_definitions
@@ -434,10 +432,21 @@ fn plan_schemas(
                         .map_err(|error| {
                             CatalogApplicationError::manifest_model(format!("{path}.fields"), error)
                         })?;
-                        Ok(match &field.description {
+                        let user_field = match &field.description {
                             Some(description) => user_field.with_description(description.clone()),
                             None => user_field,
-                        })
+                        };
+                        match &field.historical_remainder_pointer {
+                            Some(pointer) => user_field
+                                .with_historical_remainder_pointer(pointer.clone())
+                                .map_err(|error| {
+                                    CatalogApplicationError::manifest_model(
+                                        format!("{path}.fields"),
+                                        error,
+                                    )
+                                }),
+                            None => Ok(user_field),
+                        }
                     })
                     .collect::<Result<Vec<_>, CatalogApplicationError>>()?;
                 let schema_materialization = Schema::materialize_user_fields(user_fields)
@@ -547,13 +556,7 @@ fn plan_inputs(
                 CatalogEntityDisposition::Create,
             ),
         };
-        let materialized = input_materialized(
-            input_id,
-            source_id,
-            &declared_input.name,
-            declared_input.kind,
-            &path,
-        )?;
+        let materialized = input_materialized(input_id, source_id, &declared_input.name, &path)?;
         if let Some(stored) = stored {
             verify_materialized_digest(&path, stored.materialized_digest(), materialized.digest)?;
         }
@@ -586,7 +589,6 @@ fn plan_inputs(
             input_id,
             source_id,
             declared_input.name.clone(),
-            declared_input.kind,
             DefinitionDigests::new(declaration.digest, materialized.digest),
             active_profile_revision_id,
             revisions,
@@ -740,7 +742,7 @@ fn materialize_profile(
                     field.role() == FieldRole::Data && field.name() == mapping.target_field.as_str()
                 })
                 .ok_or_else(|| {
-                    CatalogApplicationError::profile_target(
+                    CatalogApplicationError::profile_invalid(
                         path,
                         format!(
                             "field {:?} is absent from target schema {}",
@@ -756,8 +758,8 @@ fn materialize_profile(
     IngestionProfile::new(
         revision.maximum_record_bytes,
         EventTimeMapping::new(
-            revision.event_time_mapping.json_pointer.clone(),
-            revision.event_time_mapping.format,
+            revision.event_time.json_pointer.clone(),
+            revision.event_time.format,
         ),
         mappings,
     )
@@ -772,7 +774,7 @@ fn verify_stored_schema(schema: &Schema, path: &str) -> Result<(), CatalogApplic
 }
 
 fn verify_stored_input(input: &Input, path: &str) -> Result<(), CatalogApplicationError> {
-    let declaration = input_declaration(input.name(), input.kind(), path)?;
+    let declaration = input_declaration(input.name(), path)?;
     verify_declaration_digest(path, input.declaration_digest(), declaration.digest)?;
     let materialized = stored_input_materialized(input, path)?;
     verify_materialized_digest(path, input.materialized_digest(), materialized.digest)
@@ -850,98 +852,20 @@ fn active_profile_pointer_changed(current: &Source, desired_inputs: &[Input]) ->
     })
 }
 
-fn validate_schema_adapters(source: &Source) -> Result<(), CatalogApplicationError> {
-    let active = source.active_schema();
-    for stored in source.schemas() {
-        validate_schema_adapter(stored, active)?;
+fn catalog_source_error(error: CatalogModelError) -> CatalogApplicationError {
+    match error {
+        CatalogModelError::SchemaHistoryIncompatible {
+            earlier_schema_version,
+            later_schema_version,
+            reason,
+        } => CatalogApplicationError::SchemaIncompatible {
+            path: CatalogPath::new("source.schemas"),
+            earlier_schema_version,
+            later_schema_version,
+            reason,
+        },
+        error => CatalogApplicationError::corruption("source", error.to_string()),
     }
-    Ok(())
-}
-
-fn validate_schema_adapter(
-    stored: &Schema,
-    active: &Schema,
-) -> Result<(), CatalogApplicationError> {
-    for active_field in active.fields() {
-        let Some(stored_field) = stored.field(active_field.id()) else {
-            if active_field.nullability() == Nullability::NonNull {
-                return Err(schema_incompatible(
-                    stored,
-                    active,
-                    SchemaIncompatibility::RequiredFieldAbsent {
-                        field_id: active_field.id(),
-                        field_name: active_field.name().into(),
-                    },
-                ));
-            }
-            continue;
-        };
-        if stored_field.role() != active_field.role() {
-            return Err(schema_incompatible(
-                stored,
-                active,
-                SchemaIncompatibility::Role {
-                    field_id: active_field.id(),
-                    field_name: active_field.name().into(),
-                },
-            ));
-        }
-        if !is_equal_or_lossless_widening(stored_field.logical_type(), active_field.logical_type())
-        {
-            return Err(schema_incompatible(
-                stored,
-                active,
-                SchemaIncompatibility::LogicalType {
-                    field_id: active_field.id(),
-                    field_name: active_field.name().into(),
-                    stored_type: stored_field.logical_type(),
-                    active_type: active_field.logical_type(),
-                },
-            ));
-        }
-        if stored_field.nullability() == Nullability::Nullable
-            && active_field.nullability() == Nullability::NonNull
-        {
-            return Err(schema_incompatible(
-                stored,
-                active,
-                SchemaIncompatibility::Nullability {
-                    field_id: active_field.id(),
-                    field_name: active_field.name().into(),
-                    stored_nullability: stored_field.nullability(),
-                    active_nullability: active_field.nullability(),
-                },
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn schema_incompatible(
-    stored: &Schema,
-    active: &Schema,
-    reason: SchemaIncompatibility,
-) -> CatalogApplicationError {
-    CatalogApplicationError::SchemaIncompatible {
-        path: CatalogPath::new("source.active_schema_version"),
-        stored_schema_version: stored.version(),
-        active_schema_version: active.version(),
-        reason,
-    }
-}
-
-fn is_equal_or_lossless_widening(stored: LogicalType, active: LogicalType) -> bool {
-    stored == active
-        || matches!(
-            (stored, active),
-            (
-                LogicalType::Int32,
-                LogicalType::Int64 | LogicalType::Float64
-            ) | (
-                LogicalType::UInt32,
-                LogicalType::UInt64 | LogicalType::Float64
-            ) | (LogicalType::Float32, LogicalType::Float64)
-        )
 }
 
 fn schema_by_version(schemas: &[Schema], version: SchemaVersion) -> Option<&Schema> {

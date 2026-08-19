@@ -217,9 +217,10 @@ struct RemoteError {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum RemoteErrorCode {
+    CatalogCorrupt,
     CatalogDefinitionConflict,
-    CatalogHistoryDiverged,
-    CatalogProfileTargetMismatch,
+    CatalogManifestInvalid,
+    CatalogProfileInvalid,
     CatalogSchemaIncompatible,
     IdempotencyKeyReused,
     IngestionRequestFailed,
@@ -253,8 +254,7 @@ fn classify_remote_response(
         ) => return ProcessExit::RemoteServiceUnavailable,
         Some(
             RemoteErrorCode::CatalogDefinitionConflict
-            | RemoteErrorCode::CatalogHistoryDiverged
-            | RemoteErrorCode::CatalogProfileTargetMismatch
+            | RemoteErrorCode::CatalogProfileInvalid
             | RemoteErrorCode::CatalogSchemaIncompatible,
         ) if matches!(operation, RemoteOperation::CatalogApplication) => {
             return ProcessExit::CatalogConflict;
@@ -265,9 +265,10 @@ fn classify_remote_response(
             return ProcessExit::TerminalIngestionFailure;
         }
         Some(
-            RemoteErrorCode::CatalogDefinitionConflict
-            | RemoteErrorCode::CatalogHistoryDiverged
-            | RemoteErrorCode::CatalogProfileTargetMismatch
+            RemoteErrorCode::CatalogCorrupt
+            | RemoteErrorCode::CatalogDefinitionConflict
+            | RemoteErrorCode::CatalogManifestInvalid
+            | RemoteErrorCode::CatalogProfileInvalid
             | RemoteErrorCode::CatalogSchemaIncompatible
             | RemoteErrorCode::IdempotencyKeyReused
             | RemoteErrorCode::IngestionRequestFailed

@@ -1,7 +1,55 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{FieldId, IngestionProfileRevisionId, InputId, SchemaId, SourceId};
+use crate::{
+    FieldId, IngestionProfileRevisionId, InputId, JsonPointer, LogicalType, Nullability, SchemaId,
+    SchemaVersion, SourceId,
+};
+
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
+pub enum SchemaIncompatibility {
+    #[error("field {field_name:?} ({field_id}) is not preserved at ordinal {ordinal}")]
+    ExistingFieldNotPreserved {
+        field_id: FieldId,
+        field_name: String,
+        ordinal: u32,
+    },
+
+    #[error(
+        "field {field_name:?} ({field_id}) cannot change logical type from {earlier_type} to {later_type}"
+    )]
+    LogicalType {
+        field_id: FieldId,
+        field_name: String,
+        earlier_type: LogicalType,
+        later_type: LogicalType,
+    },
+
+    #[error(
+        "field {field_name:?} ({field_id}) cannot change nullability from {earlier_nullability} to {later_nullability}"
+    )]
+    Nullability {
+        field_id: FieldId,
+        field_name: String,
+        earlier_nullability: Nullability,
+        later_nullability: Nullability,
+    },
+
+    #[error("field {field_name:?} ({field_id}) cannot change its historical remainder pointer")]
+    HistoricalRemainderPointer {
+        field_id: FieldId,
+        field_name: String,
+        earlier_pointer: Option<JsonPointer>,
+        later_pointer: Option<JsonPointer>,
+    },
+
+    #[error("new field {field_name:?} ({field_id}) must be nullable")]
+    AppendedFieldMustBeNullable {
+        field_id: FieldId,
+        field_name: String,
+    },
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -74,9 +122,6 @@ pub enum CatalogModelError {
     #[error("{kind} must be positive")]
     VersionMustBePositive { kind: VersionKind },
 
-    #[error("{kind} history exceeds the supported version range")]
-    HistoryLengthExceedsVersionRange { kind: VersionKind },
-
     #[error("maximum record bytes must be positive")]
     MaximumRecordBytesMustBePositive,
 
@@ -91,6 +136,9 @@ pub enum CatalogModelError {
 
     #[error("system field identity {field_id} is reserved")]
     SystemFieldIdentityIsReserved { field_id: FieldId },
+
+    #[error("historical remainder pointer requires nullable field {field_id}")]
+    HistoricalRemainderPointerRequiresNullableField { field_id: FieldId },
 
     #[error("system field identity {field_id} cannot be an input mapping target")]
     SystemFieldCannotBeMapped { field_id: FieldId },
@@ -119,8 +167,8 @@ pub enum CatalogModelError {
         actual_input_id: InputId,
     },
 
-    #[error("ingestion profile revisions must be contiguous: expected {expected}, got {actual}")]
-    ProfileRevisionsMustBeContiguous { expected: u64, actual: u64 },
+    #[error("ingestion profile revisions must increase: previous {previous}, got {actual}")]
+    ProfileRevisionsMustIncrease { previous: u64, actual: u64 },
 
     #[error("ingestion profile revision identity {profile_revision_id} occurs more than once")]
     DuplicateProfileRevisionIdentity {
@@ -147,8 +195,18 @@ pub enum CatalogModelError {
         actual_source_id: SourceId,
     },
 
-    #[error("schema versions must be contiguous: expected {expected}, got {actual}")]
-    SchemaVersionsMustBeContiguous { expected: u64, actual: u64 },
+    #[error("schema versions must increase: previous {previous}, got {actual}")]
+    SchemaVersionsMustIncrease { previous: u64, actual: u64 },
+
+    #[error(
+        "schema {earlier_schema_version} cannot evolve additively to schema {later_schema_version}: {reason}"
+    )]
+    SchemaHistoryIncompatible {
+        earlier_schema_version: SchemaVersion,
+        later_schema_version: SchemaVersion,
+        #[source]
+        reason: Box<SchemaIncompatibility>,
+    },
 
     #[error("schema identity {schema_id} occurs more than once")]
     DuplicateSchemaIdentity { schema_id: SchemaId },

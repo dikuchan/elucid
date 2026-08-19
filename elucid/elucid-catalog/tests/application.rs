@@ -20,18 +20,12 @@ source:
           description: Rendered log message
   inputs:
     - name: http
-      kind: HTTP_NDJSON
       active_ingestion_profile_revision: 1
       ingestion_profile_revisions:
         - revision: 1
           target_schema_version: 1
-          parser_kind: NDJSON
-          encoding: UTF8
-          line_boundary_policy: LF_WITH_OPTIONAL_CR
           maximum_record_bytes: 10485760
-          conversion_policy: STRICT
-          unknown_field_policy: CAPTURE_TOP_LEVEL_REMAINDER
-          event_time_mapping:
+          event_time:
             json_pointer: /timestamp
             format: RFC3339
           mappings:
@@ -61,20 +55,15 @@ source:
         - name: status
           logical_type: int32
           nullability: NULLABLE
+          historical_remainder_pointer: /status
   inputs:
     - name: http
-      kind: HTTP_NDJSON
       active_ingestion_profile_revision: 1
       ingestion_profile_revisions:
         - revision: 1
           target_schema_version: 1
-          parser_kind: NDJSON
-          encoding: UTF8
-          line_boundary_policy: LF_WITH_OPTIONAL_CR
           maximum_record_bytes: 10485760
-          conversion_policy: STRICT
-          unknown_field_policy: CAPTURE_TOP_LEVEL_REMAINDER
-          event_time_mapping:
+          event_time:
             json_pointer: /timestamp
             format: RFC3339
           mappings:
@@ -128,8 +117,12 @@ fn strict_manifest_loader_rejects_ambiguous_yaml_and_invalid_references() {
             CatalogErrorCode::ManifestInvalid,
         ),
         (
-            "non-contiguous schema history",
-            BASE_MANIFEST.replacen("- version: 1", "- version: 2", 1),
+            "retired input switch",
+            BASE_MANIFEST.replacen(
+                "    - name: http",
+                "    - name: http\n      kind: HTTP_NDJSON",
+                1,
+            ),
             CatalogErrorCode::ManifestInvalid,
         ),
         (
@@ -140,7 +133,7 @@ fn strict_manifest_loader_rejects_ambiguous_yaml_and_invalid_references() {
         (
             "unresolved mapping target",
             BASE_MANIFEST.replacen("target_field: message", "target_field: absent", 1),
-            CatalogErrorCode::ProfileTargetMismatch,
+            CatalogErrorCode::ProfileInvalid,
         ),
     ];
 
@@ -152,6 +145,17 @@ fn strict_manifest_loader_rejects_ambiguous_yaml_and_invalid_references() {
         assert_eq!(error.code(), expected_code, "{case}: {error}");
         assert!(!error.path().as_str().is_empty(), "{case}: missing path");
     }
+}
+
+#[test]
+fn profile_may_omit_nullable_target_fields() {
+    let manifest =
+        EXTENDED_MANIFEST.replacen("target_schema_version: 1", "target_schema_version: 2", 1);
+    let manifest = CatalogManifest::decode(manifest.as_bytes())
+        .expect("a profile may omit a nullable target field");
+
+    plan_catalog_application(&manifest, None, &mut SequentialIdentities::new())
+        .expect("an omitted nullable target field is valid");
 }
 
 #[test]
@@ -169,6 +173,10 @@ fn reconciliation_is_canonical_idempotent_and_identity_preserving() {
     assert_eq!(
         created.source_definition().declaration().as_str(),
         r#"{"name":"logs"}"#
+    );
+    assert_eq!(
+        created.input_definitions()[0].declaration().as_str(),
+        r#"{"name":"http"}"#
     );
 
     let schema_one_definition = &created.schema_definitions()[0];
@@ -189,6 +197,19 @@ fn reconciliation_is_canonical_idempotent_and_identity_preserving() {
     );
 
     let profile_definition = &created.ingestion_profile_definitions()[0];
+    let profile_declaration: serde_json::Value =
+        serde_json::from_str(profile_definition.declaration().as_str())
+            .expect("profile declaration is JSON");
+    assert!(profile_declaration.get("event_time").is_some());
+    for retired in [
+        "parser_kind",
+        "encoding",
+        "line_boundary_policy",
+        "conversion_policy",
+        "unknown_field_policy",
+    ] {
+        assert!(profile_declaration.get(retired).is_none(), "{retired}");
+    }
     let profile_materialized: serde_json::Value =
         serde_json::from_str(profile_definition.materialized_definition().as_str())
             .expect("materialized definition is JSON");
@@ -204,7 +225,7 @@ fn reconciliation_is_canonical_idempotent_and_identity_preserving() {
         schema_one.id().to_string()
     );
     assert_eq!(
-        profile_materialized["event_time_mapping"]["json_pointer_tokens"][0],
+        profile_materialized["event_time"]["json_pointer_tokens"][0],
         "timestamp"
     );
     assert_eq!(
@@ -258,6 +279,20 @@ fn reconciliation_is_canonical_idempotent_and_identity_preserving() {
         extended.source().inputs()[0].id(),
         created.source().inputs()[0].id()
     );
+    let extended_schema_definition: serde_json::Value = serde_json::from_str(
+        extended.schema_definitions()[1]
+            .materialized_definition()
+            .as_str(),
+    )
+    .expect("materialized schema definition is JSON");
+    assert_eq!(
+        extended_schema_definition["fields"][4]["historical_remainder_pointer"],
+        "/status"
+    );
+    assert_eq!(
+        extended_schema_definition["fields"][4]["historical_remainder_pointer_tokens"][0],
+        "status"
+    );
 
     let renamed_manifest = CatalogManifest::decode(
         EXTENDED_MANIFEST
@@ -276,6 +311,137 @@ fn reconciliation_is_canonical_idempotent_and_identity_preserving() {
     assert_eq!(updated.outcome(), CatalogApplicationOutcome::Updated);
     assert_eq!(updated.source().display_name(), "Security events");
     assert_eq!(identities.allocations(), allocations_before_update);
+}
+
+#[test]
+fn positive_version_histories_allow_gaps_and_reject_duplicates() {
+    let gapped_schemas = EXTENDED_MANIFEST
+        .replacen("active_schema_version: 2", "active_schema_version: 3", 1)
+        .replacen("    - version: 2", "    - version: 3", 1);
+    let manifest =
+        CatalogManifest::decode(gapped_schemas.as_bytes()).expect("schema versions may have gaps");
+    plan_catalog_application(&manifest, None, &mut SequentialIdentities::new())
+        .expect("gapped schema history is valid");
+
+    let duplicate_schemas = EXTENDED_MANIFEST.replacen("    - version: 2", "    - version: 1", 1);
+    let error = CatalogManifest::decode(duplicate_schemas.as_bytes())
+        .expect_err("schema versions must be unique");
+    assert_eq!(error.code(), CatalogErrorCode::ManifestInvalid);
+
+    let mut gapped_profiles = BASE_MANIFEST.replacen(
+        "active_ingestion_profile_revision: 1",
+        "active_ingestion_profile_revision: 3",
+        1,
+    );
+    gapped_profiles.push_str(
+        r#"        - revision: 3
+          target_schema_version: 1
+          maximum_record_bytes: 10485760
+          event_time:
+            json_pointer: /timestamp
+            format: RFC3339
+          mappings:
+            - target_field: message
+              json_pointer: /message
+"#,
+    );
+    let manifest = CatalogManifest::decode(gapped_profiles.as_bytes())
+        .expect("profile revisions may have gaps");
+    plan_catalog_application(&manifest, None, &mut SequentialIdentities::new())
+        .expect("gapped profile history is valid");
+
+    let duplicate_profiles =
+        gapped_profiles.replacen("        - revision: 3", "        - revision: 1", 1);
+    let error = CatalogManifest::decode(duplicate_profiles.as_bytes())
+        .expect_err("profile revisions must be unique");
+    assert_eq!(error.code(), CatalogErrorCode::ManifestInvalid);
+}
+
+#[test]
+fn schema_history_is_additive_only() {
+    let schema_two_prefix = r#"        - name: message
+          logical_type: utf8
+          nullability: NON_NULL
+          description: Rendered log message
+        - name: status
+          logical_type: int32
+          nullability: NULLABLE
+          historical_remainder_pointer: /status"#;
+
+    let removed = EXTENDED_MANIFEST.replacen(
+        schema_two_prefix,
+        r#"        - name: status
+          logical_type: int32
+          nullability: NULLABLE
+          historical_remainder_pointer: /status"#,
+        1,
+    );
+    let reordered = EXTENDED_MANIFEST.replacen(
+        schema_two_prefix,
+        r#"        - name: status
+          logical_type: int32
+          nullability: NULLABLE
+          historical_remainder_pointer: /status
+        - name: message
+          logical_type: utf8
+          nullability: NON_NULL
+          description: Rendered log message"#,
+        1,
+    );
+    let changed_nullability = EXTENDED_MANIFEST.replacen(
+        schema_two_prefix,
+        r#"        - name: message
+          logical_type: utf8
+          nullability: NULLABLE
+          description: Rendered log message
+        - name: status
+          logical_type: int32
+          nullability: NULLABLE
+          historical_remainder_pointer: /status"#,
+        1,
+    );
+    let changed_adapter = EXTENDED_MANIFEST
+        .replacen(
+            "          nullability: NON_NULL\n          description: Rendered log message",
+            "          nullability: NULLABLE\n          description: Rendered log message\n          historical_remainder_pointer: /message",
+            1,
+        )
+        .replacen(
+            schema_two_prefix,
+            r#"        - name: message
+          logical_type: utf8
+          nullability: NULLABLE
+          description: Rendered log message
+          historical_remainder_pointer: /renamed_message
+        - name: status
+          logical_type: int32
+          nullability: NULLABLE
+          historical_remainder_pointer: /status"#,
+            1,
+        );
+    let required_append = EXTENDED_MANIFEST.replacen(
+        "          nullability: NULLABLE\n          historical_remainder_pointer: /status",
+        "          nullability: NON_NULL",
+        1,
+    );
+    let widening = EXTENDED_MANIFEST
+        .replacen("logical_type: utf8", "logical_type: int32", 1)
+        .replacen("logical_type: utf8", "logical_type: int64", 1);
+
+    for (case, manifest) in [
+        ("removed field", removed),
+        ("reordered field", reordered),
+        ("changed nullability", changed_nullability),
+        ("changed historical adapter", changed_adapter),
+        ("required appended field", required_append),
+        ("lossless widening", widening),
+    ] {
+        let manifest = CatalogManifest::decode(manifest.as_bytes())
+            .unwrap_or_else(|error| panic!("{case} must decode structurally: {error}"));
+        let error = plan_catalog_application(&manifest, None, &mut SequentialIdentities::new())
+            .expect_err("non-additive schema history must be rejected");
+        assert_eq!(error.code(), CatalogErrorCode::SchemaIncompatible, "{case}");
+    }
 }
 
 #[test]
@@ -299,7 +465,11 @@ fn reconciliation_rejects_history_rewrites_and_incompatible_activation() {
 
     let required_extension = CatalogManifest::decode(
         EXTENDED_MANIFEST
-            .replacen("nullability: NULLABLE", "nullability: NON_NULL", 1)
+            .replacen(
+                "nullability: NULLABLE\n          historical_remainder_pointer: /status",
+                "nullability: NON_NULL",
+                1,
+            )
             .as_bytes(),
     )
     .expect("required extension is structurally valid");
@@ -307,14 +477,14 @@ fn reconciliation_rejects_history_rewrites_and_incompatible_activation() {
         plan_catalog_application(&required_extension, Some(created.source()), &mut identities)
             .expect_err("historical rows cannot supply a new required field");
     assert_eq!(incompatible.code(), CatalogErrorCode::SchemaIncompatible);
-    assert_eq!(incompatible.path().as_str(), "source.active_schema_version");
+    assert_eq!(incompatible.path().as_str(), "source.schemas");
 
     let compatible = CatalogManifest::decode(EXTENDED_MANIFEST.as_bytes()).expect("manifest valid");
     let extended = plan_catalog_application(&compatible, Some(created.source()), &mut identities)
         .expect("compatible extension is valid");
     let diverged = plan_catalog_application(&manifest, Some(extended.source()), &mut identities)
         .expect_err("persisted history cannot be omitted");
-    assert_eq!(diverged.code(), CatalogErrorCode::HistoryDiverged);
+    assert_eq!(diverged.code(), CatalogErrorCode::DefinitionConflict);
     assert_eq!(diverged.path().as_str(), "source.schemas");
 }
 

@@ -98,16 +98,23 @@ fn require_success(operation: RemoteOperation, response: HttpResponse) -> Result
 async fn report_failure(failure: Failure) -> ProcessExit {
     let process_exit = failure.process_exit();
     let output = failure.into_stderr();
-    match tokio::io::stderr().write_all(&output).await {
-        Ok(()) => process_exit,
-        Err(_) => ProcessExit::UncategorizedInternalFailure,
+    let mut stderr = tokio::io::stderr();
+    if stderr.write_all(&output).await.is_err() || stderr.flush().await.is_err() {
+        return ProcessExit::UncategorizedInternalFailure;
     }
+    process_exit
 }
 
 async fn write_standard_output(output: &[u8]) -> Result<(), Failure> {
-    tokio::io::stdout()
+    let mut stdout = tokio::io::stdout();
+    stdout
         .write_all(output)
         .await
         .context("failed to write command output")
+        .map_err(|error| Failure::internal(CliErrorCode::StandardOutputWriteFailed, error))?;
+    stdout
+        .flush()
+        .await
+        .context("failed to flush command output")
         .map_err(|error| Failure::internal(CliErrorCode::StandardOutputWriteFailed, error))
 }

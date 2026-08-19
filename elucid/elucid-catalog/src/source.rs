@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     CatalogModelError, DeclarationDigest, FieldId, FieldRole, IngestionProfileRevision, Input,
-    InputId, Schema, SchemaId, SourceId, SourceName, VersionKind,
+    InputId, Nullability, Schema, SchemaId, SchemaIncompatibility, SourceId, SourceName,
 };
 
 #[derive(Clone, Debug)]
@@ -101,6 +101,7 @@ fn validate_schema_history(
     let mut active_schema_index = None;
     let mut names_by_id: HashMap<FieldId, String> = HashMap::new();
     let mut ids_by_name: HashMap<String, FieldId> = HashMap::new();
+    let mut previous_version = None;
 
     for (index, schema) in schemas.iter().enumerate() {
         if schema.source_id() != source_id {
@@ -110,11 +111,13 @@ fn validate_schema_history(
                 actual_source_id: schema.source_id(),
             });
         }
-        let expected = expected_sequence_value(index)?;
         let actual = schema.version().get();
-        if actual != expected {
-            return Err(CatalogModelError::SchemaVersionsMustBeContiguous { expected, actual });
+        if let Some(previous) = previous_version
+            && actual <= previous
+        {
+            return Err(CatalogModelError::SchemaVersionsMustIncrease { previous, actual });
         }
+        previous_version = Some(actual);
         if schema_indexes.insert(schema.id(), index).is_some() {
             return Err(CatalogModelError::DuplicateSchemaIdentity {
                 schema_id: schema.id(),
@@ -125,6 +128,9 @@ fn validate_schema_history(
         }
         validate_historical_field_identity(schema, &mut names_by_id, &mut ids_by_name)?;
     }
+    for pair in schemas.windows(2) {
+        validate_additive_schema_evolution(&pair[0], &pair[1])?;
+    }
 
     let active_schema_index =
         active_schema_index.ok_or(CatalogModelError::ActiveSchemaNotFound {
@@ -132,6 +138,109 @@ fn validate_schema_history(
             schema_id: active_schema_id,
         })?;
     Ok((schema_indexes, active_schema_index))
+}
+
+fn validate_additive_schema_evolution(
+    earlier: &Schema,
+    later: &Schema,
+) -> Result<(), CatalogModelError> {
+    let earlier_fields = earlier
+        .fields()
+        .iter()
+        .filter(|field| field.role() == FieldRole::Data);
+    let mut later_fields = later
+        .fields()
+        .iter()
+        .filter(|field| field.role() == FieldRole::Data);
+
+    for earlier_field in earlier_fields {
+        let Some(later_field) = later_fields.next() else {
+            return schema_history_incompatible(
+                earlier,
+                later,
+                SchemaIncompatibility::ExistingFieldNotPreserved {
+                    field_id: earlier_field.id(),
+                    field_name: earlier_field.name().to_owned(),
+                    ordinal: earlier_field.ordinal().get(),
+                },
+            );
+        };
+        if earlier_field.id() != later_field.id() || earlier_field.name() != later_field.name() {
+            return schema_history_incompatible(
+                earlier,
+                later,
+                SchemaIncompatibility::ExistingFieldNotPreserved {
+                    field_id: earlier_field.id(),
+                    field_name: earlier_field.name().to_owned(),
+                    ordinal: earlier_field.ordinal().get(),
+                },
+            );
+        }
+        if earlier_field.logical_type() != later_field.logical_type() {
+            return schema_history_incompatible(
+                earlier,
+                later,
+                SchemaIncompatibility::LogicalType {
+                    field_id: earlier_field.id(),
+                    field_name: earlier_field.name().to_owned(),
+                    earlier_type: earlier_field.logical_type(),
+                    later_type: later_field.logical_type(),
+                },
+            );
+        }
+        if earlier_field.nullability() != later_field.nullability() {
+            return schema_history_incompatible(
+                earlier,
+                later,
+                SchemaIncompatibility::Nullability {
+                    field_id: earlier_field.id(),
+                    field_name: earlier_field.name().to_owned(),
+                    earlier_nullability: earlier_field.nullability(),
+                    later_nullability: later_field.nullability(),
+                },
+            );
+        }
+        if earlier_field.historical_remainder_pointer()
+            != later_field.historical_remainder_pointer()
+        {
+            return schema_history_incompatible(
+                earlier,
+                later,
+                SchemaIncompatibility::HistoricalRemainderPointer {
+                    field_id: earlier_field.id(),
+                    field_name: earlier_field.name().to_owned(),
+                    earlier_pointer: earlier_field.historical_remainder_pointer().cloned(),
+                    later_pointer: later_field.historical_remainder_pointer().cloned(),
+                },
+            );
+        }
+    }
+
+    for field in later_fields {
+        if field.nullability() != Nullability::Nullable {
+            return schema_history_incompatible(
+                earlier,
+                later,
+                SchemaIncompatibility::AppendedFieldMustBeNullable {
+                    field_id: field.id(),
+                    field_name: field.name().to_owned(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+fn schema_history_incompatible(
+    earlier: &Schema,
+    later: &Schema,
+    reason: SchemaIncompatibility,
+) -> Result<(), CatalogModelError> {
+    Err(CatalogModelError::SchemaHistoryIncompatible {
+        earlier_schema_version: earlier.version(),
+        later_schema_version: later.version(),
+        reason: Box::new(reason),
+    })
 }
 
 fn validate_historical_field_identity(
@@ -224,11 +333,9 @@ fn validate_profile_mappings(
             });
         }
     }
-    for field in schema
-        .fields()
-        .iter()
-        .filter(|field| field.role() == FieldRole::Data)
-    {
+    for field in schema.fields().iter().filter(|field| {
+        field.role() == FieldRole::Data && field.nullability() == Nullability::NonNull
+    }) {
         if !revision
             .profile()
             .mappings()
@@ -243,13 +350,4 @@ fn validate_profile_mappings(
         }
     }
     Ok(())
-}
-
-fn expected_sequence_value(index: usize) -> Result<u64, CatalogModelError> {
-    u64::try_from(index)
-        .ok()
-        .and_then(|value| value.checked_add(1))
-        .ok_or(CatalogModelError::HistoryLengthExceedsVersionRange {
-            kind: VersionKind::Schema,
-        })
 }

@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, TimeUnit};
 use elucid_catalog::{
-    CatalogModelError, ConversionPolicy, DeclarationDigest, DefinitionDigests, EventTimeFormat,
-    EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestionProfile, IngestionProfileRevision,
-    IngestionProfileRevisionId, Input, InputEncoding, InputId, InputKind, InputName, JsonPointer,
-    LineBoundaryPolicy, LogicalType, MaterializedDigest, MaximumRecordBytes, Nullability,
-    ParserKind, ProfileRevision, Schema, SchemaId, SchemaVersion, Source, SourceId, SourceName,
-    UnknownFieldPolicy, UserField, UserFieldName, UserLogicalType,
+    CatalogModelError, DeclarationDigest, DefinitionDigests, EventTimeFormat, EventTimeMapping,
+    FieldId, FieldMapping, FieldRole, IngestionProfile, IngestionProfileRevision,
+    IngestionProfileRevisionId, Input, InputId, InputName, JsonPointer, LogicalType,
+    MaterializedDigest, MaximumRecordBytes, Nullability, ProfileRevision, Schema, SchemaId,
+    SchemaVersion, Source, SourceId, SourceName, UserField, UserFieldName, UserLogicalType,
 };
 use uuid::Uuid;
 
@@ -236,7 +235,11 @@ fn versioned_source_accepts_a_profile_targeting_a_historical_schema() {
                 UserLogicalType::Utf8,
                 Nullability::Nullable,
             )
-            .expect("the user field is valid"),
+            .expect("the user field is valid")
+            .with_historical_remainder_pointer(
+                JsonPointer::parse("/region").expect("the JSON Pointer is valid"),
+            )
+            .expect("a nullable field may define a historical remainder pointer"),
         ],
     );
     let input_id = input_id(25);
@@ -263,7 +266,6 @@ fn versioned_source_accepts_a_profile_targeting_a_historical_schema() {
         input_id,
         source_id,
         input_name("http"),
-        InputKind::HttpNdjson,
         definition_digests(5, 6),
         revision_one_id,
         vec![revision_one, revision_two],
@@ -283,48 +285,21 @@ fn versioned_source_accepts_a_profile_targeting_a_historical_schema() {
 
     assert_eq!(source.active_schema().version(), schema_version(2));
     let active_input = &source.inputs()[0];
-    assert_eq!(active_input.kind(), InputKind::HttpNdjson);
     assert_eq!(active_input.active_profile_revision().id(), revision_one_id);
     let profile = active_input.active_profile_revision().profile();
-    assert_eq!(profile.parser_kind(), ParserKind::Ndjson);
-    assert_eq!(profile.encoding(), InputEncoding::Utf8);
     assert_eq!(
-        profile.line_boundary_policy(),
-        LineBoundaryPolicy::LfWithOptionalCr
+        profile.event_time().json_pointer(),
+        &JsonPointer::parse("/timestamp").expect("the JSON Pointer is valid")
     );
     assert_eq!(
-        profile.unknown_field_policy(),
-        UnknownFieldPolicy::CaptureTopLevelRemainder
+        source.active_schema().fields()[4].historical_remainder_pointer(),
+        Some(&JsonPointer::parse("/region").expect("the JSON Pointer is valid"))
     );
-    assert_eq!(profile.conversion_policy(), ConversionPolicy::Strict);
 }
 
 #[test]
 fn aggregate_construction_rejects_incomplete_histories_and_mappings() {
     let source_id = source_id(30);
-    let only_schema = schema(
-        source_id,
-        schema_id(31),
-        2,
-        vec![required_utf8(field_id(32), "message")],
-    );
-
-    assert!(matches!(
-        Source::new(
-            source_id,
-            SourceName::try_from("logs").expect("the source name is valid"),
-            "Logs",
-            declaration_digest(8),
-            only_schema.id(),
-            vec![only_schema],
-            Vec::new(),
-        ),
-        Err(CatalogModelError::SchemaVersionsMustBeContiguous {
-            expected: 1,
-            actual: 2
-        })
-    ));
-
     let target_field_id = field_id(33);
     let target_schema = schema(
         source_id,
@@ -340,7 +315,6 @@ fn aggregate_construction_rejects_incomplete_histories_and_mappings() {
         input_id,
         source_id,
         input_name("http"),
-        InputKind::HttpNdjson,
         definition_digests(9, 10),
         revision_id,
         vec![incomplete_revision],

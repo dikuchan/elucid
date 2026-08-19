@@ -3,98 +3,8 @@ use std::collections::HashSet;
 use crate::{
     CatalogModelError, DeclarationDigest, DefinitionDigests, FieldId, IngestionProfileRevisionId,
     InputId, InputName, JsonPointer, MaterializedDigest, MaximumRecordBytes, ProfileRevision,
-    SchemaId, SourceId, VersionKind,
+    SchemaId, SourceId,
 };
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum InputKind {
-    HttpNdjson,
-}
-
-impl InputKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::HttpNdjson => "HTTP_NDJSON",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum ParserKind {
-    Ndjson,
-}
-
-impl ParserKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ndjson => "NDJSON",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum InputEncoding {
-    Utf8,
-}
-
-impl InputEncoding {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Utf8 => "UTF8",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum LineBoundaryPolicy {
-    LfWithOptionalCr,
-}
-
-impl LineBoundaryPolicy {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LfWithOptionalCr => "LF_WITH_OPTIONAL_CR",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum UnknownFieldPolicy {
-    CaptureTopLevelRemainder,
-}
-
-impl UnknownFieldPolicy {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::CaptureTopLevelRemainder => "CAPTURE_TOP_LEVEL_REMAINDER",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum ConversionPolicy {
-    Strict,
-}
-
-impl ConversionPolicy {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Strict => "STRICT",
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
@@ -178,14 +88,14 @@ impl EventTimeMapping {
 #[non_exhaustive]
 pub struct IngestionProfile {
     maximum_record_bytes: MaximumRecordBytes,
-    event_time_mapping: EventTimeMapping,
+    event_time: EventTimeMapping,
     mappings: Vec<FieldMapping>,
 }
 
 impl IngestionProfile {
     pub fn new(
         maximum_record_bytes: MaximumRecordBytes,
-        event_time_mapping: EventTimeMapping,
+        event_time: EventTimeMapping,
         mappings: Vec<FieldMapping>,
     ) -> Result<Self, CatalogModelError> {
         let mut targets = HashSet::with_capacity(mappings.len());
@@ -198,24 +108,9 @@ impl IngestionProfile {
         }
         Ok(Self {
             maximum_record_bytes,
-            event_time_mapping,
+            event_time,
             mappings,
         })
-    }
-
-    #[must_use]
-    pub const fn parser_kind(&self) -> ParserKind {
-        ParserKind::Ndjson
-    }
-
-    #[must_use]
-    pub const fn encoding(&self) -> InputEncoding {
-        InputEncoding::Utf8
-    }
-
-    #[must_use]
-    pub const fn line_boundary_policy(&self) -> LineBoundaryPolicy {
-        LineBoundaryPolicy::LfWithOptionalCr
     }
 
     #[must_use]
@@ -224,23 +119,13 @@ impl IngestionProfile {
     }
 
     #[must_use]
-    pub const fn event_time_mapping(&self) -> &EventTimeMapping {
-        &self.event_time_mapping
+    pub const fn event_time(&self) -> &EventTimeMapping {
+        &self.event_time
     }
 
     #[must_use]
     pub fn mappings(&self) -> &[FieldMapping] {
         &self.mappings
-    }
-
-    #[must_use]
-    pub const fn unknown_field_policy(&self) -> UnknownFieldPolicy {
-        UnknownFieldPolicy::CaptureTopLevelRemainder
-    }
-
-    #[must_use]
-    pub const fn conversion_policy(&self) -> ConversionPolicy {
-        ConversionPolicy::Strict
     }
 }
 
@@ -317,7 +202,6 @@ pub struct Input {
     id: InputId,
     source_id: SourceId,
     name: InputName,
-    kind: InputKind,
     digests: DefinitionDigests,
     profile_revisions: Vec<IngestionProfileRevision>,
     active_profile_revision_index: usize,
@@ -328,7 +212,6 @@ impl Input {
         id: InputId,
         source_id: SourceId,
         name: InputName,
-        kind: InputKind,
         digests: DefinitionDigests,
         active_profile_revision_id: IngestionProfileRevisionId,
         profile_revisions: Vec<IngestionProfileRevision>,
@@ -339,6 +222,7 @@ impl Input {
 
         let mut revision_ids = HashSet::with_capacity(profile_revisions.len());
         let mut active_profile_revision_index = None;
+        let mut previous_revision = None;
         for (index, revision) in profile_revisions.iter().enumerate() {
             if revision.input_id != id {
                 return Err(CatalogModelError::ProfileRevisionInputMismatch {
@@ -347,14 +231,13 @@ impl Input {
                     actual_input_id: revision.input_id,
                 });
             }
-            let expected = expected_sequence_value(index)?;
             let actual = revision.revision.get();
-            if actual != expected {
-                return Err(CatalogModelError::ProfileRevisionsMustBeContiguous {
-                    expected,
-                    actual,
-                });
+            if let Some(previous) = previous_revision
+                && actual <= previous
+            {
+                return Err(CatalogModelError::ProfileRevisionsMustIncrease { previous, actual });
             }
+            previous_revision = Some(actual);
             if !revision_ids.insert(revision.id) {
                 return Err(CatalogModelError::DuplicateProfileRevisionIdentity {
                     profile_revision_id: revision.id,
@@ -375,7 +258,6 @@ impl Input {
             id,
             source_id,
             name,
-            kind,
             digests,
             profile_revisions,
             active_profile_revision_index,
@@ -398,11 +280,6 @@ impl Input {
     }
 
     #[must_use]
-    pub const fn kind(&self) -> InputKind {
-        self.kind
-    }
-
-    #[must_use]
     pub const fn declaration_digest(&self) -> DeclarationDigest {
         self.digests.declaration()
     }
@@ -421,13 +298,4 @@ impl Input {
     pub fn active_profile_revision(&self) -> &IngestionProfileRevision {
         &self.profile_revisions[self.active_profile_revision_index]
     }
-}
-
-fn expected_sequence_value(index: usize) -> Result<u64, CatalogModelError> {
-    u64::try_from(index)
-        .ok()
-        .and_then(|value| value.checked_add(1))
-        .ok_or(CatalogModelError::HistoryLengthExceedsVersionRange {
-            kind: VersionKind::IngestionProfileRevision,
-        })
 }

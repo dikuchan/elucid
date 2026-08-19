@@ -8,9 +8,8 @@ use crate::canonical::{
     manifest_schema_declaration, source_declaration,
 };
 use crate::{
-    CatalogApplicationError, CatalogPath, ConversionPolicy, EventTimeFormat, InputEncoding,
-    InputKind, InputName, JsonPointer, LineBoundaryPolicy, MaximumRecordBytes, Nullability,
-    ParserKind, ProfileRevision, SchemaVersion, SourceName, UnknownFieldPolicy, UserFieldName,
+    CatalogApplicationError, CatalogPath, EventTimeFormat, InputName, JsonPointer,
+    MaximumRecordBytes, Nullability, ProfileRevision, SchemaVersion, SourceName, UserFieldName,
     UserLogicalType,
 };
 
@@ -68,12 +67,12 @@ pub(crate) struct ManifestUserField {
     pub(crate) logical_type: UserLogicalType,
     pub(crate) nullability: Nullability,
     pub(crate) description: Option<String>,
+    pub(crate) historical_remainder_pointer: Option<JsonPointer>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManifestInput {
     pub(crate) name: InputName,
-    pub(crate) kind: InputKind,
     pub(crate) active_ingestion_profile_revision: ProfileRevision,
     pub(crate) ingestion_profile_revisions: Vec<ManifestIngestionProfileRevision>,
 }
@@ -82,13 +81,8 @@ pub(crate) struct ManifestInput {
 pub(crate) struct ManifestIngestionProfileRevision {
     pub(crate) revision: ProfileRevision,
     pub(crate) target_schema_version: SchemaVersion,
-    pub(crate) parser_kind: ParserKind,
-    pub(crate) encoding: InputEncoding,
-    pub(crate) line_boundary_policy: LineBoundaryPolicy,
     pub(crate) maximum_record_bytes: MaximumRecordBytes,
-    pub(crate) conversion_policy: ConversionPolicy,
-    pub(crate) unknown_field_policy: UnknownFieldPolicy,
-    pub(crate) event_time_mapping: ManifestEventTimeMapping,
+    pub(crate) event_time: ManifestEventTimeMapping,
     pub(crate) mappings: Vec<ManifestFieldMapping>,
 }
 
@@ -149,13 +143,14 @@ struct RawUserField {
     nullability: RawNullability,
     #[serde(default, deserialize_with = "deserialize_optional_string")]
     description: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
+    historical_remainder_pointer: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawInput {
     name: String,
-    kind: RawInputKind,
     active_ingestion_profile_revision: u64,
     ingestion_profile_revisions: Vec<RawIngestionProfileRevision>,
 }
@@ -165,13 +160,8 @@ struct RawInput {
 struct RawIngestionProfileRevision {
     revision: u64,
     target_schema_version: u64,
-    parser_kind: RawParserKind,
-    encoding: RawInputEncoding,
-    line_boundary_policy: RawLineBoundaryPolicy,
     maximum_record_bytes: u64,
-    conversion_policy: RawConversionPolicy,
-    unknown_field_policy: RawUnknownFieldPolicy,
-    event_time_mapping: RawEventTimeMapping,
+    event_time: RawEventTimeMapping,
     mappings: Vec<RawFieldMapping>,
 }
 
@@ -217,42 +207,6 @@ enum RawNullability {
     NonNull,
     #[serde(rename = "NULLABLE")]
     Nullable,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RawInputKind {
-    #[serde(rename = "HTTP_NDJSON")]
-    HttpNdjson,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RawParserKind {
-    #[serde(rename = "NDJSON")]
-    Ndjson,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RawInputEncoding {
-    #[serde(rename = "UTF8")]
-    Utf8,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RawLineBoundaryPolicy {
-    #[serde(rename = "LF_WITH_OPTIONAL_CR")]
-    LfWithOptionalCr,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RawConversionPolicy {
-    #[serde(rename = "STRICT")]
-    Strict,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RawUnknownFieldPolicy {
-    #[serde(rename = "CAPTURE_TOP_LEVEL_REMAINDER")]
-    CaptureTopLevelRemainder,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -302,7 +256,7 @@ impl ManifestDeclarations {
             .enumerate()
             .map(|(input_index, input)| {
                 let path = format!("source.inputs[{input_index}]");
-                let input_declaration = input_declaration(&input.name, input.kind, &path)?;
+                let input_declaration = input_declaration(&input.name, &path)?;
                 let ingestion_profiles = input
                     .ingestion_profile_revisions
                     .iter()
@@ -347,6 +301,21 @@ impl TryFrom<RawSource> for ManifestSource {
             .enumerate()
             .map(|(index, schema)| ManifestSchema::try_from_raw(schema, index))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut previous_schema_version = None;
+        for (index, schema) in schemas.iter().enumerate() {
+            let actual = schema.version.get();
+            if let Some(previous) = previous_schema_version
+                && actual <= previous
+            {
+                return Err(CatalogApplicationError::manifest(
+                    format!("source.schemas[{index}].version"),
+                    format!(
+                        "schema versions must increase and be unique: previous {previous}, got {actual}"
+                    ),
+                ));
+            }
+            previous_schema_version = Some(actual);
+        }
         let active_schema_version =
             SchemaVersion::new(raw.active_schema_version).map_err(|source| {
                 CatalogApplicationError::manifest_model("source.active_schema_version", source)
@@ -397,17 +366,6 @@ impl ManifestSchema {
         let version = SchemaVersion::new(raw.version).map_err(|source| {
             CatalogApplicationError::manifest_model(format!("{path}.version"), source)
         })?;
-        let expected = sequence_number(index, &format!("{path}.version"))?;
-        if version.get() != expected {
-            return Err(CatalogApplicationError::manifest(
-                format!("{path}.version"),
-                format!(
-                    "schema versions must be contiguous: expected {expected}, got {}",
-                    version.get()
-                ),
-            ));
-        }
-
         let mut names = HashSet::with_capacity(raw.fields.len());
         let fields = raw
             .fields
@@ -424,11 +382,16 @@ impl ManifestSchema {
                         format!("field name {:?} occurs more than once", name.as_str()),
                     ));
                 }
+                let historical_remainder_pointer = raw_pointer(
+                    field.historical_remainder_pointer,
+                    &format!("{field_path}.historical_remainder_pointer"),
+                )?;
                 Ok(ManifestUserField {
                     name,
                     logical_type: field.logical_type.into(),
                     nullability: field.nullability.into(),
                     description: field.description,
+                    historical_remainder_pointer,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -465,6 +428,21 @@ impl ManifestInput {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let mut previous_revision = None;
+        for (revision_index, revision) in revisions.iter().enumerate() {
+            let actual = revision.revision.get();
+            if let Some(previous) = previous_revision
+                && actual <= previous
+            {
+                return Err(CatalogApplicationError::manifest(
+                    format!("{path}.ingestion_profile_revisions[{revision_index}].revision"),
+                    format!(
+                        "ingestion profile revisions must increase and be unique: previous {previous}, got {actual}"
+                    ),
+                ));
+            }
+            previous_revision = Some(actual);
+        }
         let active_ingestion_profile_revision =
             ProfileRevision::new(raw.active_ingestion_profile_revision).map_err(|source| {
                 CatalogApplicationError::manifest_model(
@@ -486,7 +464,6 @@ impl ManifestInput {
         }
         Ok(Self {
             name,
-            kind: raw.kind.into(),
             active_ingestion_profile_revision,
             ingestion_profile_revisions: revisions,
         })
@@ -505,17 +482,6 @@ impl ManifestIngestionProfileRevision {
         let revision = ProfileRevision::new(raw.revision).map_err(|source| {
             CatalogApplicationError::manifest_model(format!("{path}.revision"), source)
         })?;
-        let expected = sequence_number(revision_index, &format!("{path}.revision"))?;
-        if revision.get() != expected {
-            return Err(CatalogApplicationError::manifest(
-                format!("{path}.revision"),
-                format!(
-                    "ingestion profile revisions must be contiguous: expected {expected}, got {}",
-                    revision.get()
-                ),
-            ));
-        }
-
         let target_schema_version =
             SchemaVersion::new(raw.target_schema_version).map_err(|source| {
                 CatalogApplicationError::manifest_model(
@@ -527,7 +493,7 @@ impl ManifestIngestionProfileRevision {
             .iter()
             .find(|schema| schema.version == target_schema_version)
         else {
-            return Err(CatalogApplicationError::profile_target(
+            return Err(CatalogApplicationError::profile_invalid(
                 format!("{path}.target_schema_version"),
                 format!(
                     "schema version {} is absent from source.schemas",
@@ -536,16 +502,14 @@ impl ManifestIngestionProfileRevision {
             ));
         };
 
-        let event_time_mapping = ManifestEventTimeMapping {
-            json_pointer: JsonPointer::parse(&raw.event_time_mapping.json_pointer).map_err(
-                |source| {
-                    CatalogApplicationError::manifest_model(
-                        format!("{path}.event_time_mapping.json_pointer"),
-                        source,
-                    )
-                },
-            )?,
-            format: raw.event_time_mapping.format.into(),
+        let event_time = ManifestEventTimeMapping {
+            json_pointer: JsonPointer::parse(&raw.event_time.json_pointer).map_err(|source| {
+                CatalogApplicationError::manifest_model(
+                    format!("{path}.event_time.json_pointer"),
+                    source,
+                )
+            })?,
+            format: raw.event_time.format.into(),
         };
 
         let target_names = target_schema
@@ -568,7 +532,7 @@ impl ManifestIngestionProfileRevision {
                         )
                     })?;
                 if !target_names.contains(&target_field) {
-                    return Err(CatalogApplicationError::profile_target(
+                    return Err(CatalogApplicationError::profile_invalid(
                         format!("{mapping_path}.target_field"),
                         format!(
                             "field {:?} is absent from target schema version {}",
@@ -578,7 +542,7 @@ impl ManifestIngestionProfileRevision {
                     ));
                 }
                 if !mapped_names.insert(target_field.clone()) {
-                    return Err(CatalogApplicationError::profile_target(
+                    return Err(CatalogApplicationError::profile_invalid(
                         format!("{mapping_path}.target_field"),
                         format!("field {:?} is mapped more than once", target_field.as_str()),
                     ));
@@ -595,12 +559,10 @@ impl ManifestIngestionProfileRevision {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if let Some(missing) = target_schema
-            .fields
-            .iter()
-            .find(|field| !mapped_names.contains(&field.name))
-        {
-            return Err(CatalogApplicationError::profile_target(
+        if let Some(missing) = target_schema.fields.iter().find(|field| {
+            field.nullability == Nullability::NonNull && !mapped_names.contains(&field.name)
+        }) {
+            return Err(CatalogApplicationError::profile_invalid(
                 format!("{path}.mappings"),
                 format!(
                     "target schema field {:?} has no mapping",
@@ -612,9 +574,6 @@ impl ManifestIngestionProfileRevision {
         Ok(Self {
             revision,
             target_schema_version,
-            parser_kind: raw.parser_kind.into(),
-            encoding: raw.encoding.into(),
-            line_boundary_policy: raw.line_boundary_policy.into(),
             maximum_record_bytes: MaximumRecordBytes::new(raw.maximum_record_bytes).map_err(
                 |source| {
                     CatalogApplicationError::manifest_model(
@@ -623,9 +582,7 @@ impl ManifestIngestionProfileRevision {
                     )
                 },
             )?,
-            conversion_policy: raw.conversion_policy.into(),
-            unknown_field_policy: raw.unknown_field_policy.into(),
-            event_time_mapping,
+            event_time,
             mappings,
         })
     }
@@ -684,11 +641,16 @@ fn audit_yaml_syntax(document: &str) -> Result<(), CatalogApplicationError> {
     Ok(())
 }
 
-fn sequence_number(index: usize, path: &str) -> Result<u64, CatalogApplicationError> {
-    u64::try_from(index)
-        .ok()
-        .and_then(|value| value.checked_add(1))
-        .ok_or_else(|| CatalogApplicationError::manifest(path, "history is too long"))
+fn raw_pointer(
+    value: Option<String>,
+    path: &str,
+) -> Result<Option<JsonPointer>, CatalogApplicationError> {
+    value
+        .map(|value| {
+            JsonPointer::parse(&value)
+                .map_err(|source| CatalogApplicationError::manifest_model(path, source))
+        })
+        .transpose()
 }
 
 fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -719,54 +681,6 @@ impl From<RawNullability> for Nullability {
         match value {
             RawNullability::NonNull => Self::NonNull,
             RawNullability::Nullable => Self::Nullable,
-        }
-    }
-}
-
-impl From<RawInputKind> for InputKind {
-    fn from(value: RawInputKind) -> Self {
-        match value {
-            RawInputKind::HttpNdjson => Self::HttpNdjson,
-        }
-    }
-}
-
-impl From<RawParserKind> for ParserKind {
-    fn from(value: RawParserKind) -> Self {
-        match value {
-            RawParserKind::Ndjson => Self::Ndjson,
-        }
-    }
-}
-
-impl From<RawInputEncoding> for InputEncoding {
-    fn from(value: RawInputEncoding) -> Self {
-        match value {
-            RawInputEncoding::Utf8 => Self::Utf8,
-        }
-    }
-}
-
-impl From<RawLineBoundaryPolicy> for LineBoundaryPolicy {
-    fn from(value: RawLineBoundaryPolicy) -> Self {
-        match value {
-            RawLineBoundaryPolicy::LfWithOptionalCr => Self::LfWithOptionalCr,
-        }
-    }
-}
-
-impl From<RawConversionPolicy> for ConversionPolicy {
-    fn from(value: RawConversionPolicy) -> Self {
-        match value {
-            RawConversionPolicy::Strict => Self::Strict,
-        }
-    }
-}
-
-impl From<RawUnknownFieldPolicy> for UnknownFieldPolicy {
-    fn from(value: RawUnknownFieldPolicy) -> Self {
-        match value {
-            RawUnknownFieldPolicy::CaptureTopLevelRemainder => Self::CaptureTopLevelRemainder,
         }
     }
 }

@@ -3,17 +3,16 @@ use std::fmt::{Display, Formatter};
 use thiserror::Error;
 use yaml_rust2::scanner::ScanError;
 
-use crate::{CatalogModelError, FieldId, LogicalType, Nullability, SchemaVersion};
+use crate::{CatalogModelError, SchemaIncompatibility, SchemaVersion};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CatalogErrorCode {
     ManifestInvalid,
     DefinitionConflict,
-    HistoryDiverged,
-    ProfileTargetMismatch,
     SchemaIncompatible,
-    Corruption,
+    ProfileInvalid,
+    Corrupt,
 }
 
 impl CatalogErrorCode {
@@ -22,10 +21,9 @@ impl CatalogErrorCode {
         match self {
             Self::ManifestInvalid => "CATALOG_MANIFEST_INVALID",
             Self::DefinitionConflict => "CATALOG_DEFINITION_CONFLICT",
-            Self::HistoryDiverged => "CATALOG_HISTORY_DIVERGED",
-            Self::ProfileTargetMismatch => "CATALOG_PROFILE_TARGET_MISMATCH",
             Self::SchemaIncompatible => "CATALOG_SCHEMA_INCOMPATIBLE",
-            Self::Corruption => "CATALOG_CORRUPTION",
+            Self::ProfileInvalid => "CATALOG_PROFILE_INVALID",
+            Self::Corrupt => "CATALOG_CORRUPT",
         }
     }
 }
@@ -56,42 +54,6 @@ impl Display for CatalogPath {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
-}
-
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
-#[non_exhaustive]
-pub enum SchemaIncompatibility {
-    #[error("active non-null field {field_name:?} ({field_id}) is absent")]
-    RequiredFieldAbsent {
-        field_id: FieldId,
-        field_name: String,
-    },
-
-    #[error(
-        "field {field_name:?} ({field_id}) cannot change logical type from {stored_type} to {active_type}"
-    )]
-    LogicalType {
-        field_id: FieldId,
-        field_name: String,
-        stored_type: LogicalType,
-        active_type: LogicalType,
-    },
-
-    #[error(
-        "field {field_name:?} ({field_id}) cannot change nullability from {stored_nullability} to {active_nullability}"
-    )]
-    Nullability {
-        field_id: FieldId,
-        field_name: String,
-        stored_nullability: Nullability,
-        active_nullability: Nullability,
-    },
-
-    #[error("field {field_name:?} ({field_id}) changed role")]
-    Role {
-        field_id: FieldId,
-        field_name: String,
-    },
 }
 
 #[derive(Debug, Error)]
@@ -134,17 +96,17 @@ pub enum CatalogApplicationError {
     #[error("catalog history diverged at {path}: {message}")]
     HistoryDiverged { path: CatalogPath, message: String },
 
-    #[error("ingestion profile target is invalid at {path}: {message}")]
-    ProfileTargetMismatch { path: CatalogPath, message: String },
+    #[error("ingestion profile is invalid at {path}: {message}")]
+    ProfileInvalid { path: CatalogPath, message: String },
 
     #[error(
-        "schema {stored_schema_version} cannot adapt to active schema {active_schema_version} at {path}: {reason}"
+        "schema {earlier_schema_version} cannot evolve additively to schema {later_schema_version} at {path}: {reason}"
     )]
     SchemaIncompatible {
         path: CatalogPath,
-        stored_schema_version: SchemaVersion,
-        active_schema_version: SchemaVersion,
-        reason: SchemaIncompatibility,
+        earlier_schema_version: SchemaVersion,
+        later_schema_version: SchemaVersion,
+        reason: Box<SchemaIncompatibility>,
     },
 
     #[error("catalog state is corrupt at {path}: {message}")]
@@ -168,11 +130,11 @@ impl CatalogApplicationError {
             | Self::ManifestInvalid { .. }
             | Self::ManifestModelInvalid { .. } => CatalogErrorCode::ManifestInvalid,
             Self::DefinitionConflict { .. } => CatalogErrorCode::DefinitionConflict,
-            Self::HistoryDiverged { .. } => CatalogErrorCode::HistoryDiverged,
-            Self::ProfileTargetMismatch { .. } => CatalogErrorCode::ProfileTargetMismatch,
+            Self::HistoryDiverged { .. } => CatalogErrorCode::DefinitionConflict,
+            Self::ProfileInvalid { .. } => CatalogErrorCode::ProfileInvalid,
             Self::SchemaIncompatible { .. } => CatalogErrorCode::SchemaIncompatible,
             Self::Corruption { .. } | Self::CanonicalJsonEncoding { .. } => {
-                CatalogErrorCode::Corruption
+                CatalogErrorCode::Corrupt
             }
         }
     }
@@ -187,7 +149,7 @@ impl CatalogApplicationError {
             | Self::ManifestModelInvalid { path, .. }
             | Self::DefinitionConflict { path }
             | Self::HistoryDiverged { path, .. }
-            | Self::ProfileTargetMismatch { path, .. }
+            | Self::ProfileInvalid { path, .. }
             | Self::SchemaIncompatible { path, .. }
             | Self::Corruption { path, .. }
             | Self::CanonicalJsonEncoding { path, .. } => path,
@@ -208,8 +170,8 @@ impl CatalogApplicationError {
         }
     }
 
-    pub(crate) fn profile_target(path: impl AsRef<str>, message: impl Into<String>) -> Self {
-        Self::ProfileTargetMismatch {
+    pub(crate) fn profile_invalid(path: impl AsRef<str>, message: impl Into<String>) -> Self {
+        Self::ProfileInvalid {
             path: CatalogPath::new(path),
             message: message.into(),
         }
