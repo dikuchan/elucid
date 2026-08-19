@@ -6,12 +6,11 @@ use toml_edit::{DocumentMut, Item, Table, Value};
 
 use super::error::{ConfigurationError, EnvironmentOverrideInvalidReason};
 
-pub(super) const DIRECT_CURSOR_HMAC_KEY: &str = "ELUCID_SERVER__CURSOR_HMAC_KEY";
-pub(super) const DIRECT_OPERATOR_BEARER_TOKEN: &str = "ELUCID_SERVER__OPERATOR_BEARER_TOKEN";
-pub(super) const DIRECT_POSTGRESQL_DSN: &str = "ELUCID_METASTORE__POSTGRESQL_DSN";
-pub(super) const DIRECT_S3_ACCESS_KEY_ID: &str = "ELUCID_OBJECT_STORE__ACCESS_KEY_ID";
-pub(super) const DIRECT_S3_SECRET_ACCESS_KEY: &str = "ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY";
-pub(super) const DIRECT_S3_SESSION_TOKEN: &str = "ELUCID_OBJECT_STORE__SESSION_TOKEN";
+pub(super) const DIRECT_POSTGRESQL_URL: &str = "ELUCID_METASTORE__POSTGRESQL_URL";
+pub(super) const DIRECT_OBJECT_STORE_ACCESS_KEY_ID: &str = "ELUCID_OBJECT_STORE__ACCESS_KEY_ID";
+pub(super) const DIRECT_OBJECT_STORE_SECRET_ACCESS_KEY: &str =
+    "ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY";
+pub(super) const DIRECT_OBJECT_STORE_SESSION_TOKEN: &str = "ELUCID_OBJECT_STORE__SESSION_TOKEN";
 
 #[derive(Clone)]
 #[non_exhaustive]
@@ -43,13 +42,13 @@ impl Environment {
 
     #[must_use]
     pub fn from_current_process() -> Self {
-        let mut values = BTreeMap::new();
-        for (name, value) in std::env::vars_os() {
-            let Some(name) = name.into_string().ok() else {
-                continue;
-            };
-            values.insert(name, EnvironmentValue::from_os_string(value));
-        }
+        let values = std::env::vars_os()
+            .filter_map(|(name, value)| {
+                name.into_string()
+                    .ok()
+                    .map(|name| (name, EnvironmentValue::from_os_string(value)))
+            })
+            .collect();
         Self { values }
     }
 
@@ -176,21 +175,14 @@ fn is_environment_path_component(component: &str) -> bool {
 fn is_direct_secret_override(name: &str) -> bool {
     matches!(
         name,
-        DIRECT_CURSOR_HMAC_KEY
-            | DIRECT_OPERATOR_BEARER_TOKEN
-            | DIRECT_POSTGRESQL_DSN
-            | DIRECT_S3_ACCESS_KEY_ID
-            | DIRECT_S3_SECRET_ACCESS_KEY
-            | DIRECT_S3_SESSION_TOKEN
+        DIRECT_POSTGRESQL_URL
+            | DIRECT_OBJECT_STORE_ACCESS_KEY_ID
+            | DIRECT_OBJECT_STORE_SECRET_ACCESS_KEY
+            | DIRECT_OBJECT_STORE_SESSION_TOKEN
     )
 }
 
 fn parse_override_value(field: &str, value: &str) -> Value {
-    if field == "enabled_services" {
-        return value
-            .parse::<Value>()
-            .unwrap_or_else(|_| Value::from(value));
-    }
     if is_unsigned_integer_field(field) {
         return value
             .parse::<i64>()
@@ -201,24 +193,12 @@ fn parse_override_value(field: &str, value: &str) -> Value {
 
 fn is_unsigned_integer_field(field: &str) -> bool {
     [
-        "_applications",
-        "_attempts",
-        "_buckets",
         "_bytes",
         "_connections",
-        "_deletions",
-        "_depth",
-        "_items",
-        "_objects",
         "_queries",
         "_requests",
-        "_reservations",
-        "_roots",
         "_rows",
-        "_runs",
         "_seconds",
-        "_segments",
-        "_stages",
     ]
     .iter()
     .any(|suffix| field.ends_with(suffix))

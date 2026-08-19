@@ -4,9 +4,7 @@ use anyhow::Context as _;
 use elucid_service::RuntimeConfiguration;
 use tokio::io::AsyncWriteExt as _;
 
-use crate::arguments::{
-    Action, Arguments, CatalogSubcommand, IngestionSubcommand, RootCommand, ServerSubcommand,
-};
+use crate::arguments::{Action, Arguments, CatalogSubcommand, IngestionSubcommand, RootCommand};
 use crate::client::{HttpResponse, ProductClient};
 use crate::error::{CliErrorCode, Failure, ProcessExit, RemoteOperation};
 use crate::input::RequestInput;
@@ -33,15 +31,14 @@ async fn execute(arguments: Arguments) -> Result<Vec<u8>, Failure> {
 
 async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
     match command {
-        RootCommand::Server(command) => match command.into_command() {
-            ServerSubcommand::Run(command) => execute_server(&command.into_config_path()),
-        },
+        RootCommand::Server(command) => {
+            let configuration_path = command.into_config_path();
+            execute_server(configuration_path.as_deref())
+        }
         RootCommand::Catalog(command) => match command.into_command() {
             CatalogSubcommand::Apply(command) => {
-                let (endpoint, file, token_environment_variable, timeout_seconds) =
-                    command.into_parts();
-                let client =
-                    ProductClient::new(timeout_seconds, token_environment_variable.as_ref())?;
+                let (endpoint, file, timeout_seconds) = command.into_parts();
+                let client = ProductClient::new(timeout_seconds)?;
                 let response = client
                     .apply_catalog(&endpoint, RequestInput::from_path_or_dash(file))
                     .await?;
@@ -50,23 +47,13 @@ async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
         },
         RootCommand::Ingestion(command) => match command.into_command() {
             IngestionSubcommand::Submit(command) => {
-                let (
-                    endpoint,
-                    source,
-                    input_name,
-                    file,
-                    idempotency_key,
-                    token_environment_variable,
-                    timeout_seconds,
-                ) = command.into_parts();
-                let client =
-                    ProductClient::new(timeout_seconds, token_environment_variable.as_ref())?;
+                let (endpoint, source, input_name, file, timeout_seconds) = command.into_parts();
+                let client = ProductClient::new(timeout_seconds)?;
                 let response = client
                     .submit_ingestion(
                         &endpoint,
                         &source,
                         &input_name,
-                        &idempotency_key,
                         RequestInput::from_path_or_dash(file),
                     )
                     .await?;
@@ -76,9 +63,9 @@ async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
     }
 }
 
-fn execute_server(configuration_path: &Path) -> Result<Vec<u8>, Failure> {
+fn execute_server(configuration_path: Option<&Path>) -> Result<Vec<u8>, Failure> {
     let _configuration =
-        RuntimeConfiguration::load(Some(configuration_path)).map_err(Failure::configuration)?;
+        RuntimeConfiguration::load(configuration_path).map_err(Failure::configuration)?;
     Err(Failure::internal(
         CliErrorCode::ServerRuntimeUnavailable,
         anyhow::anyhow!("server runtime is not implemented in this build"),

@@ -11,18 +11,14 @@ use toml_edit::DocumentMut;
 
 pub use environment::Environment;
 pub use error::{
-    ConfigurationError, ConfigurationErrorCode, ConfigurationExpression, ConfigurationField,
-    ConfigurationViolation, EnvironmentOverrideInvalidReason, InvalidValueReason,
-    SecretInvalidReason, SecretKind,
+    ConfigurationError, ConfigurationErrorCode, ConfigurationField, ConfigurationViolation,
+    EnvironmentOverrideInvalidReason, InvalidValueReason, SecretInvalidReason, SecretKind,
 };
 pub use model::{
-    AddressingStyle, Applications, Attempts, Buckets, Bytes, CatalogConfiguration,
-    CompactionConfiguration, Connections, Depth, EnabledServices, GarbageCollectionConfiguration,
-    IngestionConfiguration, Items, LogFormat, LogLevel, MetastoreConfiguration, NetworkTrust,
-    NodeService, ObjectStoreConfiguration, Objects, Queries, QueryConfiguration, Requests,
-    Reservations, RetentionConfiguration, Roots, Rows, Runs, RuntimeConfiguration, Seconds,
-    SecretBytes, SecretReference, SecretString, Secrets, Segments, ServerConfiguration, Stages,
-    TelemetryConfiguration,
+    Bytes, Connections, IngestionConfiguration, LocalStorageConfiguration, LogFormat,
+    MaintenanceConfiguration, MaintenanceMode, MetastoreConfiguration, ObjectStoreConfiguration,
+    Queries, QueryConfiguration, Requests, Rows, RuntimeConfiguration, Seconds, SecretString,
+    Secrets, ServerConfiguration, TelemetryConfiguration,
 };
 
 pub const MAXIMUM_CONFIGURATION_DOCUMENT_BYTES: usize = 1_048_576;

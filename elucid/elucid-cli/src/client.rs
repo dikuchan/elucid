@@ -1,12 +1,10 @@
 use std::time::Duration;
 
 use elucid_catalog::{InputName, SourceName};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderValue};
+use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 
-use crate::arguments::{
-    ClientTimeoutSeconds, EnvironmentVariableName, IdempotencyKey, ProductEndpoint,
-};
+use crate::arguments::{ClientTimeoutSeconds, ProductEndpoint};
 use crate::error::{CliErrorCode, Failure};
 use crate::input::RequestInput;
 
@@ -15,14 +13,10 @@ const MAXIMUM_CLIENT_RESPONSE_BYTES: usize = 1_048_576;
 #[derive(Debug)]
 pub(crate) struct ProductClient {
     client: Client,
-    authorization: Option<HeaderValue>,
 }
 
 impl ProductClient {
-    pub(crate) fn new(
-        timeout_seconds: ClientTimeoutSeconds,
-        operator_token_environment_variable: Option<&EnvironmentVariableName>,
-    ) -> Result<Self, Failure> {
+    pub(crate) fn new(timeout_seconds: ClientTimeoutSeconds) -> Result<Self, Failure> {
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_seconds.get()))
             .redirect(reqwest::redirect::Policy::none())
@@ -33,13 +27,7 @@ impl ProductClient {
                     anyhow::Error::new(error).context("failed to initialize HTTP client"),
                 )
             })?;
-        let authorization = operator_token_environment_variable
-            .map(load_authorization)
-            .transpose()?;
-        Ok(Self {
-            client,
-            authorization,
-        })
+        Ok(Self { client })
     }
 
     pub(crate) async fn apply_catalog(
@@ -49,7 +37,8 @@ impl ProductClient {
     ) -> Result<HttpResponse, Failure> {
         let body = input.into_body().await?;
         let request = self
-            .authorize(self.client.post(endpoint.catalog_application_url()))
+            .client
+            .post(endpoint.catalog_application_url())
             .header(CONTENT_TYPE, "application/yaml")
             .body(body);
         send(request).await
@@ -60,7 +49,6 @@ impl ProductClient {
         endpoint: &ProductEndpoint,
         source: &SourceName,
         input_name: &InputName,
-        idempotency_key: &IdempotencyKey,
         input: RequestInput,
     ) -> Result<HttpResponse, Failure> {
         let url = endpoint
@@ -73,18 +61,11 @@ impl ProductClient {
             })?;
         let body = input.into_body().await?;
         let request = self
-            .authorize(self.client.post(url))
+            .client
+            .post(url)
             .header(CONTENT_TYPE, "application/x-ndjson")
-            .header("Idempotency-Key", idempotency_key.as_str())
             .body(body);
         send(request).await
-    }
-
-    fn authorize(&self, request: RequestBuilder) -> RequestBuilder {
-        match &self.authorization {
-            Some(value) => request.header(AUTHORIZATION, value.clone()),
-            None => request,
-        }
     }
 }
 
@@ -173,48 +154,4 @@ fn validate_response_body(body: &[u8]) -> Result<(), Failure> {
             anyhow::Error::new(error).context("remote response body is not valid JSON"),
         )),
     }
-}
-
-fn load_authorization(
-    environment_variable: &EnvironmentVariableName,
-) -> Result<HeaderValue, Failure> {
-    let token = std::env::var(environment_variable.as_str()).map_err(|error| match error {
-        std::env::VarError::NotPresent => Failure::command(
-            CliErrorCode::OperatorBearerTokenMissing,
-            anyhow::anyhow!(
-                "operator bearer token environment variable {:?} is missing",
-                environment_variable.as_str()
-            ),
-        ),
-        std::env::VarError::NotUnicode(_) => Failure::command(
-            CliErrorCode::OperatorBearerTokenInvalid,
-            anyhow::anyhow!(
-                "operator bearer token environment variable {:?} is not valid Unicode",
-                environment_variable.as_str()
-            ),
-        ),
-    })?;
-    if token.len() < 32 || !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
-        return Err(Failure::command(
-            CliErrorCode::OperatorBearerTokenInvalid,
-            anyhow::anyhow!(
-                "operator bearer token from environment variable {:?} must contain at least 32 visible ASCII bytes",
-                environment_variable.as_str()
-            ),
-        ));
-    }
-    let mut value = Vec::with_capacity("Bearer ".len() + token.len());
-    value.extend_from_slice(b"Bearer ");
-    value.extend_from_slice(token.as_bytes());
-    let mut value = HeaderValue::from_bytes(&value).map_err(|_| {
-        Failure::command(
-            CliErrorCode::OperatorBearerTokenInvalid,
-            anyhow::anyhow!(
-                "operator bearer token from environment variable {:?} cannot be encoded as an HTTP header",
-                environment_variable.as_str()
-            ),
-        )
-    })?;
-    value.set_sensitive(true);
-    Ok(value)
 }

@@ -61,31 +61,13 @@ pub(crate) enum RootCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct ServerCommand {
-    #[command(subcommand)]
-    command: ServerSubcommand,
+    /// Optional path to the runtime TOML configuration.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
 }
 
 impl ServerCommand {
-    pub(crate) fn into_command(self) -> ServerSubcommand {
-        self.command
-    }
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum ServerSubcommand {
-    /// Run an Elucid server in the foreground.
-    Run(ServerRunCommand),
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct ServerRunCommand {
-    /// Path to the runtime TOML configuration.
-    #[arg(long, value_name = "PATH")]
-    config: PathBuf,
-}
-
-impl ServerRunCommand {
-    pub(crate) fn into_config_path(self) -> PathBuf {
+    pub(crate) fn into_config_path(self) -> Option<PathBuf> {
         self.config
     }
 }
@@ -118,30 +100,14 @@ pub(crate) struct CatalogApplyCommand {
     #[arg(long, value_name = "PATH_OR_DASH")]
     file: PathBuf,
 
-    /// Environment variable containing the operator bearer token.
-    #[arg(long, value_name = "NAME")]
-    operator_bearer_token_environment_variable: Option<EnvironmentVariableName>,
-
     /// Maximum local wait for the HTTP operation.
     #[arg(long, default_value = "120", value_name = "SECONDS")]
     timeout_seconds: ClientTimeoutSeconds,
 }
 
 impl CatalogApplyCommand {
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        ProductEndpoint,
-        PathBuf,
-        Option<EnvironmentVariableName>,
-        ClientTimeoutSeconds,
-    ) {
-        (
-            self.endpoint,
-            self.file,
-            self.operator_bearer_token_environment_variable,
-            self.timeout_seconds,
-        )
+    pub(crate) fn into_parts(self) -> (ProductEndpoint, PathBuf, ClientTimeoutSeconds) {
+        (self.endpoint, self.file, self.timeout_seconds)
     }
 }
 
@@ -181,14 +147,6 @@ pub(crate) struct IngestionSubmitCommand {
     #[arg(long, value_name = "PATH_OR_DASH")]
     file: PathBuf,
 
-    /// Input-scoped idempotency key.
-    #[arg(long, value_name = "KEY")]
-    idempotency_key: IdempotencyKey,
-
-    /// Environment variable containing the operator bearer token.
-    #[arg(long, value_name = "NAME")]
-    operator_bearer_token_environment_variable: Option<EnvironmentVariableName>,
-
     /// Maximum local wait for the HTTP operation.
     #[arg(long, default_value = "120", value_name = "SECONDS")]
     timeout_seconds: ClientTimeoutSeconds,
@@ -202,8 +160,6 @@ impl IngestionSubmitCommand {
         SourceName,
         InputName,
         PathBuf,
-        IdempotencyKey,
-        Option<EnvironmentVariableName>,
         ClientTimeoutSeconds,
     ) {
         (
@@ -211,8 +167,6 @@ impl IngestionSubmitCommand {
             self.source,
             self.input,
             self.file,
-            self.idempotency_key,
-            self.operator_bearer_token_environment_variable,
             self.timeout_seconds,
         )
     }
@@ -270,55 +224,6 @@ impl FromStr for ProductEndpoint {
             return Err("endpoint must be an origin without path, query, or fragment".to_owned());
         }
         Ok(Self(url))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct EnvironmentVariableName(String);
-
-impl EnvironmentVariableName {
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl FromStr for EnvironmentVariableName {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut bytes = value.bytes();
-        let valid = bytes
-            .next()
-            .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
-            && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
-        if !valid {
-            return Err("environment variable name must match [A-Za-z_][A-Za-z0-9_]*".to_owned());
-        }
-        Ok(Self(value.to_owned()))
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct IdempotencyKey(String);
-
-impl IdempotencyKey {
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl FromStr for IdempotencyKey {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if !(1..=128).contains(&value.len())
-            || !value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-        {
-            return Err(
-                "idempotency key must contain 1 through 128 visible ASCII bytes".to_owned(),
-            );
-        }
-        Ok(Self(value.to_owned()))
     }
 }
 

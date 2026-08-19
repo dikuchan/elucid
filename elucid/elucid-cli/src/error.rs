@@ -15,7 +15,6 @@ pub(crate) enum ProcessExit {
     ConfigurationFailure = 3,
     RemoteServiceUnavailable = 4,
     CatalogConflict = 5,
-    TerminalIngestionFailure = 6,
     LocalClientTimeout = 7,
 }
 
@@ -33,8 +32,6 @@ pub(crate) enum CliErrorCode {
     HttpClientInitializationFailed,
     InputFileUnreadable,
     InputReadFailed,
-    OperatorBearerTokenInvalid,
-    OperatorBearerTokenMissing,
     RemoteResponseFailed,
     RemoteResponseInvalid,
     RemoteResponseTooLarge,
@@ -53,8 +50,6 @@ impl CliErrorCode {
             Self::HttpClientInitializationFailed => "HTTP_CLIENT_INITIALIZATION_FAILED",
             Self::InputFileUnreadable => "INPUT_FILE_UNREADABLE",
             Self::InputReadFailed => "INPUT_READ_FAILED",
-            Self::OperatorBearerTokenInvalid => "OPERATOR_BEARER_TOKEN_INVALID",
-            Self::OperatorBearerTokenMissing => "OPERATOR_BEARER_TOKEN_MISSING",
             Self::RemoteResponseFailed => "REMOTE_RESPONSE_FAILED",
             Self::RemoteResponseInvalid => "REMOTE_RESPONSE_INVALID",
             Self::RemoteResponseTooLarge => "REMOTE_RESPONSE_TOO_LARGE",
@@ -222,13 +217,11 @@ enum RemoteErrorCode {
     CatalogManifestInvalid,
     CatalogProfileInvalid,
     CatalogSchemaIncompatible,
-    IdempotencyKeyReused,
-    IngestionRequestFailed,
-    IngestionRequestInProgress,
+    CapacityExhausted,
     MetastoreUnavailable,
     ObjectStoreUnavailable,
-    RequestTimeout,
     ServerDraining,
+    ServerNotReady,
     #[serde(other)]
     Other,
 }
@@ -248,9 +241,9 @@ fn classify_remote_response(
         Some(
             RemoteErrorCode::MetastoreUnavailable
             | RemoteErrorCode::ObjectStoreUnavailable
+            | RemoteErrorCode::CapacityExhausted
             | RemoteErrorCode::ServerDraining
-            | RemoteErrorCode::IngestionRequestInProgress
-            | RemoteErrorCode::RequestTimeout,
+            | RemoteErrorCode::ServerNotReady,
         ) => return ProcessExit::RemoteServiceUnavailable,
         Some(
             RemoteErrorCode::CatalogDefinitionConflict
@@ -259,19 +252,12 @@ fn classify_remote_response(
         ) if matches!(operation, RemoteOperation::CatalogApplication) => {
             return ProcessExit::CatalogConflict;
         }
-        Some(RemoteErrorCode::IngestionRequestFailed | RemoteErrorCode::IdempotencyKeyReused)
-            if matches!(operation, RemoteOperation::Ingestion) =>
-        {
-            return ProcessExit::TerminalIngestionFailure;
-        }
         Some(
             RemoteErrorCode::CatalogCorrupt
             | RemoteErrorCode::CatalogDefinitionConflict
             | RemoteErrorCode::CatalogManifestInvalid
             | RemoteErrorCode::CatalogProfileInvalid
             | RemoteErrorCode::CatalogSchemaIncompatible
-            | RemoteErrorCode::IdempotencyKeyReused
-            | RemoteErrorCode::IngestionRequestFailed
             | RemoteErrorCode::Other,
         )
         | None => {}
@@ -281,10 +267,6 @@ fn classify_remote_response(
             RemoteOperation::CatalogApplication,
             StatusCode::CONFLICT | StatusCode::UNPROCESSABLE_ENTITY,
         ) => ProcessExit::CatalogConflict,
-        (RemoteOperation::Ingestion, StatusCode::UNPROCESSABLE_ENTITY) => {
-            ProcessExit::TerminalIngestionFailure
-        }
-        (RemoteOperation::Ingestion, StatusCode::CONFLICT) => ProcessExit::RemoteServiceUnavailable,
         (_, status) if status.is_client_error() => ProcessExit::CommandOrDocumentValidationFailure,
         _ => ProcessExit::UncategorizedInternalFailure,
     }

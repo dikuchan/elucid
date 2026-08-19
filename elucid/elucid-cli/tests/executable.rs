@@ -69,10 +69,10 @@ fn invalid_server_configuration_exits_with_configuration_failure() {
         .expect("write invalid configuration");
 
     let output = Command::new(ELUCID)
-        .args(["server", "run", "--config"])
+        .args(["server", "--config"])
         .arg(configuration.path())
         .output()
-        .expect("run elucid server run");
+        .expect("run elucid server");
 
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
@@ -80,34 +80,27 @@ fn invalid_server_configuration_exits_with_configuration_failure() {
 }
 
 #[test]
-fn server_requires_an_explicit_run_action() {
+fn server_is_the_foreground_entrypoint_without_a_run_subcommand() {
     let output = Command::new(ELUCID)
-        .args(["server", "--config", "unused.toml"])
+        .args(["server", "run", "--config", "unused.toml"])
         .output()
-        .expect("run obsolete server invocation");
+        .expect("run obsolete server subcommand");
 
     assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]
-fn catalog_apply_sends_exact_file_bytes_and_operator_authorization() {
+fn catalog_apply_sends_exact_file_bytes_without_authentication() {
     let response = br#"{"outcome":"UNCHANGED"}"#;
     let server = TestServer::start("200 OK", response, ResponseTiming::Immediate);
     let manifest = b"format_version: 1\r\nsource:\r\n  name: demo_logs";
     let mut file = tempfile::NamedTempFile::new().expect("temporary manifest");
     file.write_all(manifest).expect("write manifest");
-    let token = "visible-test-token-with-at-least-32-bytes";
-
     let output = Command::new(ELUCID)
         .args(["catalog", "apply", "--endpoint"])
         .arg(server.endpoint())
         .args(["--file"])
         .arg(file.path())
-        .args([
-            "--operator-bearer-token-environment-variable",
-            "ELUCID_TEST_OPERATOR_TOKEN",
-        ])
-        .env("ELUCID_TEST_OPERATOR_TOKEN", token)
         .output()
         .expect("run catalog apply");
 
@@ -117,18 +110,15 @@ fn catalog_apply_sends_exact_file_bytes_and_operator_authorization() {
     assert_eq!(request.method, "POST");
     assert_eq!(request.target, "/api/v1/catalog-applications");
     assert_eq!(request.header("content-type"), Some("application/yaml"));
-    assert_eq!(
-        request.header("authorization"),
-        Some(format!("Bearer {token}").as_str())
-    );
+    assert_eq!(request.header("authorization"), None);
     assert_eq!(request.header("idempotency-key"), None);
     assert_eq!(request.body, manifest);
 }
 
 #[test]
-fn ingestion_submit_sends_exact_standard_input_and_idempotency_key() {
-    let response = br#"{"state":"COMMITTED"}"#;
-    let server = TestServer::start("201 Created", response, ResponseTiming::Immediate);
+fn ingestion_submit_sends_exact_standard_input_without_authentication_or_idempotency() {
+    let response = br#"{"state":"DURABLY_QUEUED"}"#;
+    let server = TestServer::start("202 Accepted", response, ResponseTiming::Immediate);
     let body = b"{\"status\":200}\r\n\r\n{\"status\":503}";
     let mut child = Command::new(ELUCID)
         .args([
@@ -142,8 +132,6 @@ fn ingestion_submit_sends_exact_standard_input_and_idempotency_key() {
             "http",
             "--file",
             "-",
-            "--idempotency-key",
-            "showcase-demo-fixture-v1",
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -167,11 +155,46 @@ fn ingestion_submit_sends_exact_standard_input_and_idempotency_key() {
         "/api/v1/sources/demo_logs/inputs/http/events"
     );
     assert_eq!(request.header("content-type"), Some("application/x-ndjson"));
-    assert_eq!(
-        request.header("idempotency-key"),
-        Some("showcase-demo-fixture-v1")
-    );
+    assert_eq!(request.header("authorization"), None);
+    assert_eq!(request.header("idempotency-key"), None);
     assert_eq!(request.body, body);
+}
+
+#[test]
+fn retained_http_helpers_reject_retired_authentication_and_idempotency_flags() {
+    let catalog = Command::new(ELUCID)
+        .args([
+            "catalog",
+            "apply",
+            "--endpoint",
+            "http://127.0.0.1:1",
+            "--file",
+            "-",
+            "--operator-bearer-token-environment-variable",
+            "TOKEN",
+        ])
+        .output()
+        .expect("run catalog helper with retired authentication flag");
+    assert_eq!(catalog.status.code(), Some(2));
+
+    let ingestion = Command::new(ELUCID)
+        .args([
+            "ingestion",
+            "submit",
+            "--endpoint",
+            "http://127.0.0.1:1",
+            "--source",
+            "demo_logs",
+            "--input",
+            "http",
+            "--file",
+            "-",
+            "--idempotency-key",
+            "retired",
+        ])
+        .output()
+        .expect("run ingestion helper with retired idempotency flag");
+    assert_eq!(ingestion.status.code(), Some(2));
 }
 
 #[test]
@@ -184,14 +207,14 @@ fn remote_responses_have_stable_exit_categories() {
     );
     assert_remote_exit(
         RemoteOperation::Ingestion,
-        "422 Unprocessable Entity",
-        br#"{"error":{"code":"INGESTION_REQUEST_FAILED"}}"#,
-        6,
+        "413 Content Too Large",
+        br#"{"error":{"code":"INGESTION_BATCH_LIMIT_EXCEEDED"}}"#,
+        2,
     );
     assert_remote_exit(
         RemoteOperation::Ingestion,
-        "409 Conflict",
-        br#"{"error":{"code":"INGESTION_REQUEST_IN_PROGRESS"}}"#,
+        "429 Too Many Requests",
+        br#"{"error":{"code":"CAPACITY_EXHAUSTED"}}"#,
         4,
     );
     assert_remote_exit(
@@ -297,8 +320,6 @@ fn assert_remote_exit(
                 "http",
                 "--file",
                 "-",
-                "--idempotency-key",
-                "test-key",
             ]);
         }
     }
