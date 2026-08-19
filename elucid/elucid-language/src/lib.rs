@@ -74,8 +74,11 @@ pub fn analyze(
         error
     })?;
     let mut result = semantic::convert_query(&ast, catalog, time_context);
-    if let Err(error) = &mut result {
-        semantic::error::finish_diagnostics(error.diagnostics_mut(), query);
+    match &mut result {
+        Ok(analysis) => {
+            semantic::error::finish_diagnostics(analysis.diagnostics_mut(), query);
+        }
+        Err(error) => semantic::error::finish_diagnostics(error.diagnostics_mut(), query),
     }
     result
 }

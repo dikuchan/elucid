@@ -21,6 +21,7 @@ fn typed_expression_analysis_is_canonical() {
     )
     .expect("canonical typed query is valid");
 
+    assert!(analysis.diagnostics().is_empty());
     insta::assert_debug_snapshot!(analysis);
 }
 
@@ -227,7 +228,10 @@ fn diagnostic_registry_classifies_semantic_failures() {
 }
 
 #[test]
-fn syntax_errors_are_classified() {
+fn diagnostic_severities_and_syntax_errors_are_classified() {
+    assert_eq!(DiagnosticSeverity::Error.as_str(), "ERROR");
+    assert_eq!(DiagnosticSeverity::Warning.as_str(), "WARNING");
+
     let source = typed_catalog_source();
     let syntax = analyze(
         "source logs | filter )",

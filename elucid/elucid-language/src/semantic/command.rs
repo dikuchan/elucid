@@ -11,21 +11,22 @@ use super::expression::{convert_expression, resolve_field};
 pub(crate) fn convert_stage(
     stage: &ast::Stage,
     input: &ir::Relation,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ir::Stage, Diagnostic> {
     let (kind, output) = match stage.kind() {
         StageKind::Filter(expression) => {
             let span = expression.span();
-            let expression = convert_expression(expression, input)?;
+            let expression = convert_expression(expression, input, diagnostics)?;
             if expression.logical_type() != LogicalType::Bool {
                 return Err(type_mismatch("filter expression must have type bool", span));
             }
             (ir::StageKind::Filter(expression), input.clone())
         }
-        StageKind::Project(projections) => convert_project(projections, input)?,
+        StageKind::Project(projections) => convert_project(projections, input, diagnostics)?,
         StageKind::Sort(items) => {
             let mut specs = Vec::with_capacity(items.len());
             for item in items {
-                let field = resolve_field(item.field(), input)?;
+                let field = resolve_field(item.field(), input, diagnostics)?;
                 if field.logical_type() == LogicalType::Json {
                     return Err(type_mismatch(
                         "sort does not support json fields",
@@ -42,7 +43,7 @@ pub(crate) fn convert_stage(
         }
         StageKind::Take(value) => (convert_take(value)?, input.clone()),
         StageKind::Summarize { measures, group_by } => {
-            convert_summarize(measures, group_by, input)?
+            convert_summarize(measures, group_by, input, diagnostics)?
         }
     };
     Ok(ir::Stage::new(kind, output))
@@ -51,6 +52,7 @@ pub(crate) fn convert_stage(
 fn convert_project(
     projections: &[Projection],
     input: &ir::Relation,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ir::StageKind, ir::Relation), Diagnostic> {
     let mut names = HashSet::with_capacity(projections.len());
     let mut converted = Vec::with_capacity(projections.len());
@@ -59,7 +61,7 @@ fn convert_project(
     for projection in projections {
         let (expression, output_field, declaration_span) = match projection {
             Projection::Field(reference) => {
-                let field = resolve_field(reference, input)?;
+                let field = resolve_field(reference, input, diagnostics)?;
                 (
                     ir::Expression::field(field.clone()),
                     field,
@@ -67,7 +69,7 @@ fn convert_project(
                 )
             }
             Projection::Computed(projection) => {
-                let expression = convert_expression(projection.expression(), input)?;
+                let expression = convert_expression(projection.expression(), input, diagnostics)?;
                 let output = ir::Field::new(
                     projection.alias().as_str(),
                     expression.logical_type(),
@@ -101,12 +103,13 @@ fn convert_summarize(
     measures: &[ast::Measure],
     group_by: &[ast::FieldReference],
     input: &ir::Relation,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(ir::StageKind, ir::Relation), Diagnostic> {
     let mut names = HashSet::new();
     let mut resolved_groups = Vec::with_capacity(group_by.len());
     let mut output_fields = Vec::new();
     for reference in group_by {
-        let field = resolve_field(reference, input)?;
+        let field = resolve_field(reference, input, diagnostics)?;
         if field.logical_type() == LogicalType::Json {
             return Err(type_mismatch(
                 "summarize group keys do not support json",
@@ -130,7 +133,7 @@ fn convert_summarize(
         })?;
         let argument = aggregate
             .argument()
-            .map(|reference| resolve_field(reference, input))
+            .map(|reference| resolve_field(reference, input, diagnostics))
             .transpose()?;
         let function = convert_aggregate_function(aggregate.function());
         let (logical_type, nullability) = aggregate_output(function, argument.as_ref(), aggregate)?;
