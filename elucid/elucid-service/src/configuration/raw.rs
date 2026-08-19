@@ -15,12 +15,12 @@ use super::error::{
 };
 use super::model::{
     AddressingStyle, Applications, Attempts, Buckets, Bytes, CatalogConfiguration,
-    CompactionConfiguration, Connections, Depth, GarbageCollectionConfiguration,
+    CompactionConfiguration, Connections, Depth, EnabledServices, GarbageCollectionConfiguration,
     IngestionConfiguration, Items, LogFormat, LogLevel, MetastoreConfiguration, NetworkTrust,
-    ObjectStoreConfiguration, Objects, Queries, QueryConfiguration, Requests, Reservations,
-    RetentionConfiguration, Roots, Rows, Runs, RuntimeConfiguration, RuntimeRole, RuntimeRoles,
-    Seconds, SecretBytes, SecretReference, SecretString, Secrets, Segments, ServerConfiguration,
-    Stages, TelemetryConfiguration, non_empty_boxed_str,
+    NodeService, ObjectStoreConfiguration, Objects, Queries, QueryConfiguration, Requests,
+    Reservations, RetentionConfiguration, Roots, Rows, Runs, RuntimeConfiguration, Seconds,
+    SecretBytes, SecretReference, SecretString, Secrets, Segments, ServerConfiguration, Stages,
+    TelemetryConfiguration, non_empty_boxed_str,
 };
 use super::validation;
 
@@ -103,7 +103,7 @@ struct RawServerConfiguration {
     bind: String,
     browser_origin: String,
     network_trust: NetworkTrust,
-    roles: Vec<RuntimeRole>,
+    enabled_services: Vec<NodeService>,
     maximum_json_request_body_bytes: u64,
     maximum_request_header_bytes: u64,
     request_timeout_seconds: u64,
@@ -123,7 +123,7 @@ impl RawServerConfiguration {
             bind: parse_socket_address(self.bind, field("server.bind"))?,
             browser_origin: parse_url(self.browser_origin, field("server.browser_origin"))?,
             network_trust: self.network_trust,
-            roles: RuntimeRoles::from_configuration(self.roles)?,
+            enabled_services: EnabledServices::from_configuration(self.enabled_services)?,
             maximum_json_request_body_bytes: Bytes::from_configuration(
                 self.maximum_json_request_body_bytes,
                 field("server.maximum_json_request_body_bytes"),

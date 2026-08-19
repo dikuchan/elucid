@@ -69,14 +69,24 @@ fn invalid_server_configuration_exits_with_configuration_failure() {
         .expect("write invalid configuration");
 
     let output = Command::new(ELUCID)
-        .args(["server", "--config"])
+        .args(["server", "run", "--config"])
         .arg(configuration.path())
         .output()
-        .expect("run elucid server");
+        .expect("run elucid server run");
 
     assert_eq!(output.status.code(), Some(3));
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
     assert!(stderr.contains("CONFIGURATION_DOCUMENT_MALFORMED"));
+}
+
+#[test]
+fn server_requires_an_explicit_run_action() {
+    let output = Command::new(ELUCID)
+        .args(["server", "--config", "unused.toml"])
+        .output()
+        .expect("run obsolete server invocation");
+
+    assert_eq!(output.status.code(), Some(2));
 }
 
 #[test]

@@ -51,7 +51,7 @@ pub(crate) enum VersionOutput {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RootCommand {
-    /// Start an Elucid server runtime.
+    /// Manage an Elucid server process.
     Server(ServerCommand),
     /// Manage catalog declarations through the product API.
     Catalog(CatalogCommand),
@@ -61,12 +61,30 @@ pub(crate) enum RootCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct ServerCommand {
+    #[command(subcommand)]
+    command: ServerSubcommand,
+}
+
+impl ServerCommand {
+    pub(crate) fn into_command(self) -> ServerSubcommand {
+        self.command
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ServerSubcommand {
+    /// Run an Elucid server in the foreground.
+    Run(ServerRunCommand),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ServerRunCommand {
     /// Path to the runtime TOML configuration.
     #[arg(long, value_name = "PATH")]
     config: PathBuf,
 }
 
-impl ServerCommand {
+impl ServerRunCommand {
     pub(crate) fn into_config_path(self) -> PathBuf {
         self.config
     }

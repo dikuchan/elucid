@@ -2,7 +2,7 @@
 bind = "127.0.0.1:8080"
 browser_origin = "http://127.0.0.1:8080"
 network_trust = "LOOPBACK_ONLY"
-roles = ["SERVING", "MAINTENANCE"]
+enabled_services = ["INGESTION", "QUERY", "MAINTENANCE"]
 maximum_json_request_body_bytes = 1048576
 maximum_request_header_bytes = 32768
 request_timeout_seconds = 60

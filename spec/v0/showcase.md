@@ -10,7 +10,7 @@ The showcase MUST provide a reviewable Elucid vertical slice that starts with on
 The operator journey MUST be:
 
 1. Build the executable, embedded web assets, and container image from a clean checkout.
-2. Start PostgreSQL, MinIO, and a serving-only Elucid instance with one documented command.
+2. Start PostgreSQL, MinIO, and an Elucid instance with `INGESTION` and `QUERY` enabled with one documented command.
 3. Wait for readiness.
 4. Apply the demo source manifest through `elucid catalog apply` and the product HTTP API.
 5. Send the demo NDJSON fixture through the HTTP ingestion endpoint with a stable idempotency key.
@@ -29,20 +29,20 @@ The operator journey MUST be:
 Browser
   |
   v
-Elucid serving instance -----------+
+Elucid instance [INGESTION, QUERY] -+
   |-- embedded web application     |
-  |-- HTTP API and metrics         |
-  |-- catalog and ingestion        |
+  |-- ingestion and query APIs     |
+  |-- catalog and source APIs      |
   `-- DataFusion query runtime     |
                                     +--> PostgreSQL
-Elucid maintenance instance -------+--> MinIO
+Elucid instance [MAINTENANCE] ------+--> MinIO
   |-- recovery                     |
   |-- compaction                   |
   |-- retention and pruning        |
   `-- garbage collection ----------+
 ```
 
-Each Elucid instance MUST be one operating-system process running the same executable with its configured roles. PostgreSQL and MinIO remain external durable services. Local staging and spill storage is replaceable.
+Each Elucid instance MUST be one operating-system process running the same executable with its enabled services selected through configuration or `ELUCID_SERVER__ENABLED_SERVICES`. PostgreSQL and MinIO remain external durable services. Local staging and spill storage is replaceable.
 
 The server MUST default to `127.0.0.1:8080` with `network_trust = LOOPBACK_ONLY`. The Compose configuration MUST use `LOCAL_CONTAINER`, bind its container listener explicitly, and publish it only as `127.0.0.1:8080` on the host.
 
@@ -165,7 +165,7 @@ The server MUST emit `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-ref
 
 ## 8. Local environment and packaging
 
-The repository MUST contain one Compose definition with health-checked PostgreSQL major version `16`, MinIO, bucket initialization, one serving Elucid instance, one HTTP catalog-application client, one HTTP fixture-ingestion client, pre-compaction verification, and one maintenance Elucid instance. The catalog-application client MUST depend on serving readiness and MUST receive neither PostgreSQL nor object-store credentials. The maintenance instance MUST depend on successful pre-compaction verification. Container images MUST be pinned to immutable digests. Dependencies MUST use health or successful one-shot completion, not container start order.
+The repository MUST contain one Compose definition with health-checked PostgreSQL major version `16`, MinIO, bucket initialization, one Elucid instance with `INGESTION` and `QUERY` enabled, one HTTP catalog-application client, one HTTP fixture-ingestion client, pre-compaction verification, and one Elucid instance with only `MAINTENANCE` enabled. The catalog-application client MUST depend on readiness of the combined ingestion-query instance and MUST receive neither PostgreSQL nor object-store credentials. The maintenance instance MUST depend on successful pre-compaction verification. Container images MUST be pinned to immutable digests. Dependencies MUST use health or successful one-shot completion, not container start order.
 
 The documented startup command MUST converge on repeated execution. Catalog application, bucket creation, and fixture ingestion with the fixed key `showcase-demo-fixture-v1` MUST treat existing matching state as success.
 
@@ -181,20 +181,20 @@ The build MUST use committed Rust and npm lockfiles. It MUST run `npm ci`, gener
 
 The repository README MUST state the product thesis, show topology, provide the clean-checkout startup command, link the v0 specifications, document demo queries and CLI equivalents, explain configuration and secrets, and describe recovery from unavailable PostgreSQL, unavailable object storage, and stale local volumes.
 
-Documentation MUST state tested prerequisites, build and verification commands, startup and shutdown, runtime roles, network trust and bearer-token configuration, authenticated Prometheus scraping through `authorization.credentials_file`, HTTP catalog application, HTTP fixture ingestion, post-claim task ownership, HTTP-waiter and attempt timeouts, sender retry ownership, recommended batching, compaction capacity planning, retention task draining, reclamation, provenance pruning, dead-letter inspection, browser workflow, crate responsibilities, and the exact commit used for published screenshots or recordings. Every quickstart command MUST run in automated verification.
+Documentation MUST state tested prerequisites, build and verification commands, startup and shutdown, node-service ownership and selection, network trust and bearer-token configuration, authenticated Prometheus scraping through `authorization.credentials_file`, HTTP catalog application, HTTP fixture ingestion, post-claim task ownership, HTTP-waiter and attempt timeouts, sender retry ownership, recommended batching, compaction capacity planning, retention task draining, reclamation, provenance pruning, dead-letter inspection, browser workflow, crate responsibilities, and the exact commit used for published screenshots or recordings. Every quickstart command MUST run in automated verification.
 
 ## 10. Verification
 
 The complete showcase MUST pass this clean-state scenario:
 
 1. Build frontend, Rust workspace, executable, and image with warnings treated as errors.
-2. Start clean PostgreSQL and MinIO, then start one serving-only Elucid instance and observe `LIVE` before `READY`.
+2. Start clean PostgreSQL and MinIO, then start one Elucid instance with `INGESTION` and `QUERY` enabled and observe `LIVE` before `READY`.
 3. Verify automatic migrations and create-only, exact-read, range-read, and exact-delete object-store capabilities.
 4. Apply the demo manifest twice through `elucid catalog apply` and `POST /api/v1/catalog-applications`, compare persistent identities, and verify that the catalog client has no PostgreSQL or object-store credentials.
 5. Send the fixture to `POST /api/v1/sources/demo_logs/inputs/demo_http/events` with key `showcase-demo-fixture-v1` and verify a new `COMMITTED` ingestion request.
 6. Verify body digest and byte count, committed counts, four ingestion-origin segments, six ingestion row groups, object digests, footer metadata, direct references, computed source summary, and paginated dead-letter entries through the HTTP API.
 7. Verify every `@ingestion_time` equals the ingestion request's durable creation time and identical records at different positions have distinct event identities.
-8. Verify successful pre-compaction verification releases the Compose dependency for one maintenance-only Elucid instance, wait for exactly two committed compaction runs, and verify two active 600-row output segments plus four superseded ingestion segments without changing rows or event-time bounds.
+8. Verify successful pre-compaction verification releases the Compose dependency for one Elucid instance with only `MAINTENANCE` enabled, wait for exactly two committed compaction runs, and verify two active 600-row output segments plus four superseded ingestion segments without changing rows or event-time bounds.
 9. Execute `source demo_logs | filter status >= 400 | project @event_time, service, status, path | sort by -@event_time | take 100` and compare exact typed rows.
 10. Execute `source demo_logs | project dynamic_status = try_cast(experimental_status as int32) | filter dynamic_status >= 500` and verify exactly one non-null `int32` value equal to `503` plus one `QUERY_FIELD_RESOLVED_FROM_REMAINDER` warning at the field span; execute the equivalent expression with `rest("experimental_status")` and verify the same row without that warning. Verify that `rest_exists("explicit_null")` is true and `rest("explicit_null") != null` is true for the present JSON-null value while both expressions distinguish an absent key.
 11. Execute `source demo_logs | summarize events = count() by severity | sort by -events` and compare exact group-key and measure order and values.
@@ -204,12 +204,12 @@ The complete showcase MUST pass this clean-state scenario:
 15. Restart Elucid after deleting staging and spill contents and repeat successful queries with identical rows and statistics.
 16. Send the same body and key again and verify a replay with unchanged ingestion-request identity, event count, segment count, and stored-object count; send another body under that key and verify `IDEMPOTENCY_KEY_REUSED`.
 17. Interrupt ingestion at every [failure-outcome boundary](ingestion.md#12-failure-outcomes), retry the complete body with the same key, and verify the required durable result, publication atomicity, fencing, stable event identities, and exact-key orphan cleanup.
-18. Run two serving Elucid instances against the same PostgreSQL and MinIO services, route concurrent new requests and retries across both, terminate an active owner, and verify one ingestion request and at most one commit per active input-scoped idempotency reservation.
+18. Run two Elucid instances with only `INGESTION` enabled against the same PostgreSQL and MinIO services, route concurrent new requests and retries across both, terminate an active owner, and verify one ingestion request and at most one commit per active input-scoped idempotency reservation. Run two instances with only `QUERY` enabled, route queries across both without affinity, and verify identical typed results.
 19. Make a required dependency unavailable and verify readiness becomes `NOT_READY` while liveness remains `LIVE`, then recovers without process restart.
 20. Open the application in Chromium, run filtering and aggregation queries, inspect a JSON remainder field and dead-letter entries, verify error and warning code frames, and observe completed ingestion.
 21. In isolated catalog state, apply schema version `1` with non-null `message`, ingestion one event, apply active schema version `2` adding nullable `region` while the active profile still targets version `1`, and verify stable `message` field identity plus typed null `region`; then activate profile revision `2` targeting schema version `2`, ingestion one event with `region = "eu-west-1"`, and verify one null and one value in a mixed-schema snapshot. An attempted active schema changing `message` from `utf8` to `int64` MUST fail without mutation.
 22. In isolated catalog state, publish one event, capture a query snapshot, publish a second request whose event time precedes the first segment, and verify that the captured snapshot returns only the first event while a new snapshot returns both; the original segment and object MUST remain unchanged and source minimum event time MUST move to the late event.
-23. In isolated storage state, create the four fixture segments under a serving-only instance, capture a query snapshot, then start two maintenance instances and verify exactly two committed compaction runs with disjoint day-scoped inputs. Verify that the captured snapshot reads the four input objects, a new snapshot reads the two output objects, both return identical explicitly sorted rows, and no snapshot observes a partial replacement. In a separate state with four eligible segments sharing one event-time bucket and one data-expiry bucket and `maximum_input_segments = 2`, verify that two runs may concurrently reserve disjoint inputs.
+23. In isolated storage state, create the four fixture segments under an instance with `INGESTION` enabled, capture a query snapshot through an instance with `QUERY` enabled, then start two instances with `MAINTENANCE` enabled and verify exactly two committed compaction runs with disjoint day-scoped inputs. Verify that the captured snapshot reads the four input objects, a new snapshot reads the two output objects, both return identical explicitly sorted rows, and no snapshot observes a partial replacement. In a separate state with four eligible segments sharing one event-time bucket and one data-expiry bucket and `maximum_input_segments = 2`, verify that two runs may concurrently reserve disjoint inputs.
 24. Verify exact compaction provenance, unchanged event identities and field values, equal input and output row counts, four `SUPERSEDED` input segments, two `ACTIVE` output segments, unchanged source event count and bounds, and updated active segment, object, and byte statistics. Under isolated profiles, verify that the uncompressed-byte target and row maximum independently cause output splits. Before each reclamation time, verify every input object remains `PUBLISHED`; for an eligible superseded fixture, verify exact-key deletion and retained PostgreSQL provenance.
 25. Interrupt compaction at every [failure-outcome boundary](compaction.md#8-failure-outcomes), terminate an active maintenance owner, and verify fencing, reservation release, unchanged input visibility before publication, atomic visibility after publication, abandoned-output cleanup, and recovery by another maintenance instance.
 26. In isolated storage state, create compaction candidates for one source, schema, and event-time day across two UTC data-expiry buckets. Verify that no run mixes buckets, each output deadline equals its maximum input deadline, and repeated compaction within one bucket never moves a deadline into the next bucket or extends any input deadline by one day or more.

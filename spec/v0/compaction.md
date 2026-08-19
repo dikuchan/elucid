@@ -26,7 +26,7 @@ PostgreSQL state MUST determine run ownership, provenance, reservation, and visi
 
 ## 3. Selection and claim
 
-Every server instance with the `MAINTENANCE` role MAY search for compaction candidates. The system MUST require no leader and MUST remain correct with any positive number of maintenance instances.
+Every server instance with the `MAINTENANCE` service enabled MAY search for compaction candidates. The system MUST require no leader and MUST remain correct with any positive number of maintenance instances.
 
 Multiple runs MAY execute concurrently for one source, stored schema, UTC event-time day, and data-expiry bucket. Their input reservations MUST be disjoint; bucket identity alone MUST NOT serialize them.
 

@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use elucid_service::{
     AddressingStyle, ConfigurationErrorCode, ConfigurationViolation, Environment, LogFormat,
-    MAXIMUM_CONFIGURATION_DOCUMENT_BYTES, NetworkTrust, RuntimeConfiguration, RuntimeRole,
+    MAXIMUM_CONFIGURATION_DOCUMENT_BYTES, NetworkTrust, NodeService, RuntimeConfiguration,
     SecretKind,
 };
 
@@ -28,14 +28,20 @@ fn acceptance_profile_materializes_typed_configuration_and_redacts_secrets() {
     assert!(
         configuration
             .server()
-            .roles()
-            .contains(RuntimeRole::Serving)
+            .enabled_services()
+            .contains(NodeService::Ingestion)
     );
     assert!(
         configuration
             .server()
-            .roles()
-            .contains(RuntimeRole::Maintenance)
+            .enabled_services()
+            .contains(NodeService::Query)
+    );
+    assert!(
+        configuration
+            .server()
+            .enabled_services()
+            .contains(NodeService::Maintenance)
     );
     assert_eq!(
         configuration.server().maximum_request_header_bytes().get(),
@@ -74,7 +80,7 @@ fn environment_overrides_file_values_and_direct_secrets() {
     let direct_postgresql_dsn = "postgresql://elucid:direct-secret@postgres.example/overridden";
     let mut environment = environment();
     environment.set("ELUCID_SERVER__NETWORK_TRUST", "TRUSTED_NETWORK");
-    environment.set("ELUCID_SERVER__ROLES", "[\"SERVING\"]");
+    environment.set("ELUCID_SERVER__ENABLED_SERVICES", "[\"QUERY\"]");
     environment.set("ELUCID_SERVER__BROWSER_ORIGIN", "https://elucid.example");
     environment.set(
         "ELUCID_SERVER__OPERATOR_BEARER_TOKEN_ENVIRONMENT_VARIABLE",
@@ -95,8 +101,8 @@ fn environment_overrides_file_values_and_direct_secrets() {
         NetworkTrust::TrustedNetwork
     );
     assert_eq!(
-        configuration.server().roles().as_slice(),
-        &[RuntimeRole::Serving]
+        configuration.server().enabled_services().as_slice(),
+        &[NodeService::Query]
     );
     assert_eq!(configuration.query().default_output_rows().get(), 42);
     assert_eq!(
@@ -153,18 +159,21 @@ fn failures_distinguish_sources_and_never_echo_secret_values() {
 fn cross_field_validation_enforces_the_normative_profile() {
     let cases = [
         violation_case(
-            "empty roles",
-            &[("roles = [\"SERVING\", \"MAINTENANCE\"]", "roles = []")],
-            ConfigurationViolation::EmptyRuntimeRoles,
+            "empty enabled services",
+            &[(
+                "enabled_services = [\"INGESTION\", \"QUERY\", \"MAINTENANCE\"]",
+                "enabled_services = []",
+            )],
+            ConfigurationViolation::EmptyEnabledServices,
         ),
         violation_case(
-            "duplicate roles",
+            "duplicate enabled services",
             &[(
-                "roles = [\"SERVING\", \"MAINTENANCE\"]",
-                "roles = [\"SERVING\", \"SERVING\"]",
+                "enabled_services = [\"INGESTION\", \"QUERY\", \"MAINTENANCE\"]",
+                "enabled_services = [\"QUERY\", \"QUERY\"]",
             )],
-            ConfigurationViolation::DuplicateRuntimeRole {
-                role: RuntimeRole::Serving,
+            ConfigurationViolation::DuplicateEnabledService {
+                service: NodeService::Query,
             },
         ),
         violation_case(

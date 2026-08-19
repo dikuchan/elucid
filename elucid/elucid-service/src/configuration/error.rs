@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-use super::model::RuntimeRole;
+use super::model::NodeService;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -153,8 +153,8 @@ impl std::fmt::Display for ConfigurationExpression {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ConfigurationViolation {
-    EmptyRuntimeRoles,
-    DuplicateRuntimeRole { role: RuntimeRole },
+    EmptyEnabledServices,
+    DuplicateEnabledService { service: NodeService },
     DefaultPageItemsExceedMaximum,
     DefaultOutputRowsExceedMaximum,
     IngestionStaleThresholdTooSmall,
@@ -193,9 +193,14 @@ pub enum ConfigurationViolation {
 impl std::fmt::Display for ConfigurationViolation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyRuntimeRoles => formatter.write_str("server.roles cannot be empty"),
-            Self::DuplicateRuntimeRole { role } => {
-                write!(formatter, "server.roles contains duplicate role {role}")
+            Self::EmptyEnabledServices => {
+                formatter.write_str("server.enabled_services cannot be empty")
+            }
+            Self::DuplicateEnabledService { service } => {
+                write!(
+                    formatter,
+                    "server.enabled_services contains duplicate service {service}"
+                )
             }
             Self::DefaultPageItemsExceedMaximum => {
                 formatter.write_str("server.default_page_items exceeds server.maximum_page_items")

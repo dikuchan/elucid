@@ -59,15 +59,17 @@ positive_measurement!(Stages);
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RuntimeRole {
-    Serving,
+pub enum NodeService {
+    Ingestion,
+    Query,
     Maintenance,
 }
 
-impl std::fmt::Display for RuntimeRole {
+impl std::fmt::Display for NodeService {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let name = match self {
-            Self::Serving => "SERVING",
+            Self::Ingestion => "INGESTION",
+            Self::Query => "QUERY",
             Self::Maintenance => "MAINTENANCE",
         };
         formatter.write_str(name)
@@ -76,21 +78,23 @@ impl std::fmt::Display for RuntimeRole {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct RuntimeRoles(Box<[RuntimeRole]>);
+pub struct EnabledServices(Box<[NodeService]>);
 
-impl RuntimeRoles {
-    pub(super) fn from_configuration(roles: Vec<RuntimeRole>) -> Result<Self, ConfigurationError> {
-        if roles.is_empty() {
+impl EnabledServices {
+    pub(super) fn from_configuration(
+        services: Vec<NodeService>,
+    ) -> Result<Self, ConfigurationError> {
+        if services.is_empty() {
             return Err(ConfigurationError::ConstraintViolation {
-                violation: ConfigurationViolation::EmptyRuntimeRoles,
+                violation: ConfigurationViolation::EmptyEnabledServices,
             });
         }
 
         let mut unique = BTreeSet::new();
-        for role in roles {
-            if !unique.insert(role) {
+        for service in services {
+            if !unique.insert(service) {
                 return Err(ConfigurationError::ConstraintViolation {
-                    violation: ConfigurationViolation::DuplicateRuntimeRole { role },
+                    violation: ConfigurationViolation::DuplicateEnabledService { service },
                 });
             }
         }
@@ -98,12 +102,12 @@ impl RuntimeRoles {
     }
 
     #[must_use]
-    pub fn contains(&self, role: RuntimeRole) -> bool {
-        self.0.binary_search(&role).is_ok()
+    pub fn contains(&self, service: NodeService) -> bool {
+        self.0.binary_search(&service).is_ok()
     }
 
     #[must_use]
-    pub const fn as_slice(&self) -> &[RuntimeRole] {
+    pub const fn as_slice(&self) -> &[NodeService] {
         &self.0
     }
 }
@@ -344,7 +348,7 @@ pub struct ServerConfiguration {
     pub(super) bind: SocketAddr,
     pub(super) browser_origin: Url,
     pub(super) network_trust: NetworkTrust,
-    pub(super) roles: RuntimeRoles,
+    pub(super) enabled_services: EnabledServices,
     pub(super) maximum_json_request_body_bytes: Bytes,
     pub(super) maximum_request_header_bytes: Bytes,
     pub(super) request_timeout_seconds: Seconds,
@@ -374,8 +378,8 @@ impl ServerConfiguration {
     }
 
     #[must_use]
-    pub const fn roles(&self) -> &RuntimeRoles {
-        &self.roles
+    pub const fn enabled_services(&self) -> &EnabledServices {
+        &self.enabled_services
     }
 
     #[must_use]

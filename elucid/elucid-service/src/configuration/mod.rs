@@ -17,12 +17,12 @@ pub use error::{
 };
 pub use model::{
     AddressingStyle, Applications, Attempts, Buckets, Bytes, CatalogConfiguration,
-    CompactionConfiguration, Connections, Depth, GarbageCollectionConfiguration,
+    CompactionConfiguration, Connections, Depth, EnabledServices, GarbageCollectionConfiguration,
     IngestionConfiguration, Items, LogFormat, LogLevel, MetastoreConfiguration, NetworkTrust,
-    ObjectStoreConfiguration, Objects, Queries, QueryConfiguration, Requests, Reservations,
-    RetentionConfiguration, Roots, Rows, Runs, RuntimeConfiguration, RuntimeRole, RuntimeRoles,
-    Seconds, SecretBytes, SecretReference, SecretString, Secrets, Segments, ServerConfiguration,
-    Stages, TelemetryConfiguration,
+    NodeService, ObjectStoreConfiguration, Objects, Queries, QueryConfiguration, Requests,
+    Reservations, RetentionConfiguration, Roots, Rows, Runs, RuntimeConfiguration, Seconds,
+    SecretBytes, SecretReference, SecretString, Secrets, Segments, ServerConfiguration, Stages,
+    TelemetryConfiguration,
 };
 
 pub const MAXIMUM_CONFIGURATION_DOCUMENT_BYTES: usize = 1_048_576;

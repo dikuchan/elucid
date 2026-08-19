@@ -186,7 +186,7 @@ fn is_direct_secret_override(name: &str) -> bool {
 }
 
 fn parse_override_value(field: &str, value: &str) -> Value {
-    if field == "roles" {
+    if field == "enabled_services" {
         return value
             .parse::<Value>()
             .unwrap_or_else(|_| Value::from(value));
