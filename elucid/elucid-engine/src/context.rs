@@ -29,12 +29,16 @@ impl Context {
         Self { context, storage }
     }
 
-    pub async fn execute(&self, source: &str) -> Result<DataFrame> {
-        let pipeline = elucid_language::analyze(source)
+    pub async fn execute(
+        &self,
+        query: &str,
+        catalog: &elucid_language::CatalogSnapshot<'_>,
+    ) -> Result<DataFrame> {
+        let pipeline = elucid_language::analyze(query, catalog)
             .map_err(|e| DataFusionError::Plan(format!("Query analysis error: {e}")))?;
 
-        if !self.context.table_exist(pipeline.source().dataset())? {
-            self.register_table(pipeline.source().dataset()).await?;
+        if !self.context.table_exist(pipeline.source().name())? {
+            self.register_table(pipeline.source().name()).await?;
         }
 
         let planner = QueryPlanner::new(&self.context);
@@ -98,12 +102,19 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use bytes::Bytes;
+    use elucid_catalog::{
+        DeclarationDigest, DefinitionDigests, FieldId, MaterializedDigest, Nullability,
+        Schema as CatalogSchema, SchemaId, SchemaVersion, Source, SourceId, SourceName, UserField,
+        UserFieldName, UserLogicalType,
+    };
+    use elucid_language::CatalogSnapshot;
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
     use object_store::{ObjectStore, PutPayload};
     use parquet::arrow::arrow_writer::ArrowWriter;
     use tempfile::TempDir;
     use url::Url;
+    use uuid::Uuid;
 
     use crate::{Context, StorageConfig};
 
@@ -128,6 +139,49 @@ mod tests {
         buf
     }
 
+    fn catalog_source(name: &str) -> Source {
+        let source_id = SourceId::try_from(catalog_uuid(1)).expect("source identity");
+        let schema_id = SchemaId::try_from(catalog_uuid(2)).expect("schema identity");
+        let schema = CatalogSchema::new(
+            schema_id,
+            source_id,
+            SchemaVersion::new(1).expect("schema version"),
+            DefinitionDigests::new(
+                DeclarationDigest::new([1; 32]),
+                MaterializedDigest::new([2; 32]),
+            ),
+            vec![
+                catalog_field(3, "id", UserLogicalType::Int64),
+                catalog_field(4, "name", UserLogicalType::Utf8),
+            ],
+        )
+        .expect("catalog schema");
+        Source::new(
+            source_id,
+            SourceName::try_from(name).expect("source name"),
+            name,
+            DeclarationDigest::new([3; 32]),
+            schema_id,
+            vec![schema],
+            Vec::new(),
+        )
+        .expect("catalog source")
+    }
+
+    fn catalog_field(identity: u128, name: &str, logical_type: UserLogicalType) -> UserField {
+        UserField::new(
+            FieldId::try_from(catalog_uuid(identity)).expect("field identity"),
+            UserFieldName::try_from(name).expect("field name"),
+            logical_type,
+            Nullability::NonNull,
+        )
+        .expect("catalog field")
+    }
+
+    fn catalog_uuid(suffix: u128) -> Uuid {
+        Uuid::from_u128(0x018f_0000_0000_7000_8000_0000_0000_0000 | suffix)
+    }
+
     #[tokio::test]
     async fn query_parquet_from_memory_object_store() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -147,7 +201,11 @@ mod tests {
         };
 
         let ctx = Context::with_storage_config(config);
-        let df = ctx.execute("source my_table").await.expect("execute");
+        let source = catalog_source("my_table");
+        let df = ctx
+            .execute("source my_table", &CatalogSnapshot::new(&source))
+            .await
+            .expect("execute");
 
         let results = df.collect().await.expect("collect");
         let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
@@ -167,7 +225,11 @@ mod tests {
         std::fs::write(&parquet_path, &parquet_bytes).expect("write parquet");
 
         let ctx = Context::new(tmp.path());
-        let df = ctx.execute("source test_table").await.expect("execute");
+        let source = catalog_source("test_table");
+        let df = ctx
+            .execute("source test_table", &CatalogSnapshot::new(&source))
+            .await
+            .expect("execute");
 
         let results = df.collect().await.expect("collect");
         let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();

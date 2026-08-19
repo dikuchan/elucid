@@ -1761,12 +1761,14 @@ dependencies = [
  "arrow",
  "bytes",
  "datafusion",
+ "elucid-catalog",
  "elucid-language",
  "object_store",
  "parquet",
  "tempfile",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -1796,9 +1798,11 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "chumsky",
+ "elucid-catalog",
  "insta",
  "logos",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -1819,8 +1823,10 @@ dependencies = [
  "arrow",
  "bytes",
  "datafusion",
+ "elucid-catalog",
  "elucid-engine",
  "elucid-ingest",
+ "elucid-language",
  "futures",
  "object_store",
  "reqwest",
@@ -1828,6 +1834,7 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]

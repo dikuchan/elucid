@@ -16,6 +16,8 @@ elucid-language = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true }
 bytes = { workspace = true }
+elucid-catalog = { workspace = true }
 parquet = { workspace = true, features = ["arrow"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
+uuid = { workspace = true }

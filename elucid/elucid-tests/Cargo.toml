@@ -9,10 +9,13 @@ workspace = true
 [dependencies]
 arrow = { workspace = true }
 datafusion = { workspace = true }
+elucid-catalog = { workspace = true }
 elucid-engine = { workspace = true }
 elucid-ingest = { workspace = true }
+elucid-language = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
 tempfile = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }

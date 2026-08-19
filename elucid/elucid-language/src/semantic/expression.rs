@@ -5,14 +5,17 @@ use super::error::SemanticError;
 
 pub(crate) fn convert_expression(
     expression: &ast::Expression,
+    relation: &ir::Relation,
 ) -> Result<ir::Expression, SemanticError> {
     match expression.kind() {
         ExpressionKind::Literal(literal) => convert_literal(literal.kind()),
-        ExpressionKind::Field(field) => Ok(ir::Expression::Field(ir::FieldRef::new(
-            field.as_str().to_owned(),
-        ))),
+        ExpressionKind::Field(reference) => {
+            Ok(ir::Expression::Field(resolve_field(reference, relation)?))
+        }
         ExpressionKind::Unary { operator, operand } => match operator {
-            UnaryOperator::Not => Ok(ir::Expression::Not(Box::new(convert_expression(operand)?))),
+            UnaryOperator::Not => Ok(ir::Expression::Not(Box::new(convert_expression(
+                operand, relation,
+            )?))),
             UnaryOperator::Negate => Err(unsupported_syntax("numeric negation")),
         },
         ExpressionKind::Binary {
@@ -21,13 +24,26 @@ pub(crate) fn convert_expression(
             right,
         } => Ok(ir::Expression::Binary(
             convert_binary_operator(*operator),
-            Box::new(convert_expression(left)?),
-            Box::new(convert_expression(right)?),
+            Box::new(convert_expression(left, relation)?),
+            Box::new(convert_expression(right, relation)?),
         )),
         ExpressionKind::Constructor(_) => Err(unsupported_syntax("constructor")),
         ExpressionKind::Cast(_) => Err(unsupported_syntax("cast")),
         ExpressionKind::Remainder(_) => Err(unsupported_syntax("remainder access")),
     }
+}
+
+pub(crate) fn resolve_field(
+    reference: &ast::FieldReference,
+    relation: &ir::Relation,
+) -> Result<ir::Field, SemanticError> {
+    relation
+        .field(reference.as_str())
+        .cloned()
+        .ok_or_else(|| SemanticError::FieldNotFound {
+            name: reference.as_str().to_owned(),
+            span: reference.span(),
+        })
 }
 
 fn convert_literal(literal: &LiteralKind) -> Result<ir::Expression, SemanticError> {

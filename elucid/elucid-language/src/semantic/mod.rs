@@ -6,7 +6,9 @@
 mod command;
 mod expression;
 mod pipeline;
-mod validate;
+
+#[cfg(test)]
+mod relation_tests;
 
 pub(crate) mod error;
 

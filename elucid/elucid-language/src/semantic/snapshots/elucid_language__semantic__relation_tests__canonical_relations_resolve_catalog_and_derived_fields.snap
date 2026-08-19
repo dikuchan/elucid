@@ -1,0 +1,458 @@
+---
+source: elucid-language/src/semantic/relation_tests.rs
+expression: pipeline
+---
+Pipeline {
+    source: Source {
+        source_id: SourceId(
+            018f0000-0000-7000-8000-000000000001,
+        ),
+        name: "logs",
+        active_schema_id: SchemaId(
+            018f0000-0000-7000-8000-000000000002,
+        ),
+    },
+    time_range: TimeRange {
+        start_inclusive: None,
+        end_exclusive: None,
+    },
+    source_relation: Relation {
+        fields: [
+            Field {
+                name: "@event_time",
+                logical_type: Datetime,
+                nullability: NonNull,
+                origin: System {
+                    field_id: FieldId(
+                        00000000-0000-7000-8000-000000000001,
+                    ),
+                },
+            },
+            Field {
+                name: "@ingest_time",
+                logical_type: Datetime,
+                nullability: NonNull,
+                origin: System {
+                    field_id: FieldId(
+                        00000000-0000-7000-8000-000000000002,
+                    ),
+                },
+            },
+            Field {
+                name: "@event_id",
+                logical_type: Eid,
+                nullability: NonNull,
+                origin: System {
+                    field_id: FieldId(
+                        00000000-0000-7000-8000-000000000003,
+                    ),
+                },
+            },
+            Field {
+                name: "service",
+                logical_type: Utf8,
+                nullability: NonNull,
+                origin: Schema {
+                    field_id: FieldId(
+                        018f0000-0000-7000-8000-000000000003,
+                    ),
+                },
+            },
+            Field {
+                name: "status",
+                logical_type: Int32,
+                nullability: Nullable,
+                origin: Schema {
+                    field_id: FieldId(
+                        018f0000-0000-7000-8000-000000000004,
+                    ),
+                },
+            },
+            Field {
+                name: "bytes",
+                logical_type: Int64,
+                nullability: Nullable,
+                origin: Schema {
+                    field_id: FieldId(
+                        018f0000-0000-7000-8000-000000000005,
+                    ),
+                },
+            },
+            Field {
+                name: "@rest",
+                logical_type: Json,
+                nullability: Nullable,
+                origin: System {
+                    field_id: FieldId(
+                        00000000-0000-7000-8000-000000000004,
+                    ),
+                },
+            },
+        ],
+    },
+    stages: [
+        Stage {
+            kind: Filter(
+                Binary(
+                    GreaterThanOrEqual,
+                    Field(
+                        Field {
+                            name: "status",
+                            logical_type: Int32,
+                            nullability: Nullable,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000004,
+                                ),
+                            },
+                        },
+                    ),
+                    Literal(
+                        Number(
+                            400.0,
+                        ),
+                    ),
+                ),
+            ),
+            output_relation: Relation {
+                fields: [
+                    Field {
+                        name: "@event_time",
+                        logical_type: Datetime,
+                        nullability: NonNull,
+                        origin: System {
+                            field_id: FieldId(
+                                00000000-0000-7000-8000-000000000001,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "@ingest_time",
+                        logical_type: Datetime,
+                        nullability: NonNull,
+                        origin: System {
+                            field_id: FieldId(
+                                00000000-0000-7000-8000-000000000002,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "@event_id",
+                        logical_type: Eid,
+                        nullability: NonNull,
+                        origin: System {
+                            field_id: FieldId(
+                                00000000-0000-7000-8000-000000000003,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "service",
+                        logical_type: Utf8,
+                        nullability: NonNull,
+                        origin: Schema {
+                            field_id: FieldId(
+                                018f0000-0000-7000-8000-000000000003,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "status",
+                        logical_type: Int32,
+                        nullability: Nullable,
+                        origin: Schema {
+                            field_id: FieldId(
+                                018f0000-0000-7000-8000-000000000004,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "bytes",
+                        logical_type: Int64,
+                        nullability: Nullable,
+                        origin: Schema {
+                            field_id: FieldId(
+                                018f0000-0000-7000-8000-000000000005,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "@rest",
+                        logical_type: Json,
+                        nullability: Nullable,
+                        origin: System {
+                            field_id: FieldId(
+                                00000000-0000-7000-8000-000000000004,
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Stage {
+            kind: Project(
+                [
+                    Projection {
+                        expression: Field(
+                            Field {
+                                name: "@event_time",
+                                logical_type: Datetime,
+                                nullability: NonNull,
+                                origin: System {
+                                    field_id: FieldId(
+                                        00000000-0000-7000-8000-000000000001,
+                                    ),
+                                },
+                            },
+                        ),
+                        output_field: Field {
+                            name: "@event_time",
+                            logical_type: Datetime,
+                            nullability: NonNull,
+                            origin: System {
+                                field_id: FieldId(
+                                    00000000-0000-7000-8000-000000000001,
+                                ),
+                            },
+                        },
+                    },
+                    Projection {
+                        expression: Field(
+                            Field {
+                                name: "service",
+                                logical_type: Utf8,
+                                nullability: NonNull,
+                                origin: Schema {
+                                    field_id: FieldId(
+                                        018f0000-0000-7000-8000-000000000003,
+                                    ),
+                                },
+                            },
+                        ),
+                        output_field: Field {
+                            name: "service_name",
+                            logical_type: Utf8,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 58..70,
+                            },
+                        },
+                    },
+                    Projection {
+                        expression: Field(
+                            Field {
+                                name: "status",
+                                logical_type: Int32,
+                                nullability: Nullable,
+                                origin: Schema {
+                                    field_id: FieldId(
+                                        018f0000-0000-7000-8000-000000000004,
+                                    ),
+                                },
+                            },
+                        ),
+                        output_field: Field {
+                            name: "status",
+                            logical_type: Int32,
+                            nullability: Nullable,
+                            origin: Schema {
+                                field_id: FieldId(
+                                    018f0000-0000-7000-8000-000000000004,
+                                ),
+                            },
+                        },
+                    },
+                ],
+            ),
+            output_relation: Relation {
+                fields: [
+                    Field {
+                        name: "@event_time",
+                        logical_type: Datetime,
+                        nullability: NonNull,
+                        origin: System {
+                            field_id: FieldId(
+                                00000000-0000-7000-8000-000000000001,
+                            ),
+                        },
+                    },
+                    Field {
+                        name: "service_name",
+                        logical_type: Utf8,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 58..70,
+                        },
+                    },
+                    Field {
+                        name: "status",
+                        logical_type: Int32,
+                        nullability: Nullable,
+                        origin: Schema {
+                            field_id: FieldId(
+                                018f0000-0000-7000-8000-000000000004,
+                            ),
+                        },
+                    },
+                ],
+            },
+        },
+        Stage {
+            kind: Aggregate {
+                measures: [
+                    AggregateExpression {
+                        function: Count,
+                        argument: None,
+                        output_field: Field {
+                            name: "events",
+                            logical_type: Int64,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 101..107,
+                            },
+                        },
+                    },
+                    AggregateExpression {
+                        function: Max,
+                        argument: Some(
+                            Field {
+                                name: "status",
+                                logical_type: Int32,
+                                nullability: Nullable,
+                                origin: Schema {
+                                    field_id: FieldId(
+                                        018f0000-0000-7000-8000-000000000004,
+                                    ),
+                                },
+                            },
+                        ),
+                        output_field: Field {
+                            name: "maximum_status",
+                            logical_type: Int32,
+                            nullability: Nullable,
+                            origin: Derived {
+                                declaration_span: 119..133,
+                            },
+                        },
+                    },
+                ],
+                group_by: [
+                    Field {
+                        name: "service_name",
+                        logical_type: Utf8,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 58..70,
+                        },
+                    },
+                ],
+            },
+            output_relation: Relation {
+                fields: [
+                    Field {
+                        name: "service_name",
+                        logical_type: Utf8,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 58..70,
+                        },
+                    },
+                    Field {
+                        name: "events",
+                        logical_type: Int64,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 101..107,
+                        },
+                    },
+                    Field {
+                        name: "maximum_status",
+                        logical_type: Int32,
+                        nullability: Nullable,
+                        origin: Derived {
+                            declaration_span: 119..133,
+                        },
+                    },
+                ],
+            },
+        },
+        Stage {
+            kind: Sort(
+                [
+                    SortSpec {
+                        field: Field {
+                            name: "events",
+                            logical_type: Int64,
+                            nullability: NonNull,
+                            origin: Derived {
+                                declaration_span: 101..107,
+                            },
+                        },
+                        order: Descending,
+                    },
+                ],
+            ),
+            output_relation: Relation {
+                fields: [
+                    Field {
+                        name: "service_name",
+                        logical_type: Utf8,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 58..70,
+                        },
+                    },
+                    Field {
+                        name: "events",
+                        logical_type: Int64,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 101..107,
+                        },
+                    },
+                    Field {
+                        name: "maximum_status",
+                        logical_type: Int32,
+                        nullability: Nullable,
+                        origin: Derived {
+                            declaration_span: 119..133,
+                        },
+                    },
+                ],
+            },
+        },
+        Stage {
+            kind: Take(
+                10,
+            ),
+            output_relation: Relation {
+                fields: [
+                    Field {
+                        name: "service_name",
+                        logical_type: Utf8,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 58..70,
+                        },
+                    },
+                    Field {
+                        name: "events",
+                        logical_type: Int64,
+                        nullability: NonNull,
+                        origin: Derived {
+                            declaration_span: 101..107,
+                        },
+                    },
+                    Field {
+                        name: "maximum_status",
+                        logical_type: Int32,
+                        nullability: Nullable,
+                        origin: Derived {
+                            declaration_span: 119..133,
+                        },
+                    },
+                ],
+            },
+        },
+    ],
+}

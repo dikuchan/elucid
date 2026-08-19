@@ -9,8 +9,10 @@ workspace = true
 [dependencies]
 ariadne = { workspace = true }
 chumsky = { workspace = true, features = ["pratt"] }
+elucid-catalog = { workspace = true }
 logos = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+uuid = { workspace = true }

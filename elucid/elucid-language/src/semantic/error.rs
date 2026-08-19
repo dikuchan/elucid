@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::Span;
 use crate::parser::ParserError;
 
 /// Errors produced during semantic validation of a parsed query.
@@ -10,29 +11,23 @@ use crate::parser::ParserError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SemanticError {
-    /// The query pipeline contains no stages.
-    EmptyPipeline,
+    /// The source name is absent from the captured catalog.
+    SourceNotFound { name: String, span: Span },
 
-    /// More than one `summarize` command was found in the pipeline.
-    MultipleAggregates,
+    /// The field name is absent from the current relation.
+    FieldNotFound { name: String, span: Span },
 
-    /// A non-sort/take command appeared after a `summarize` command.
-    AggregateAfterAggregate,
+    /// Two outputs in one relation use the same name.
+    DuplicateOutputField { name: String, span: Span },
+
+    /// A stage is forbidden after the preceding stage.
+    StageOrderInvalid { span: Span },
 
     /// The `take` value is negative.
     InvalidLimitValue {
         /// The invalid take value that was provided.
         value: i64,
     },
-
-    /// A `project` command was given with no field names.
-    EmptyFieldList,
-
-    /// A `summarize` command was given with no aggregate expressions.
-    EmptyAggregateMeasures,
-
-    /// A `sort` command was given with no sort expressions.
-    EmptySortSpec,
 
     /// A catch-all for unexpected conversion failures.
     ConversionError(String),
@@ -41,14 +36,16 @@ pub enum SemanticError {
 impl fmt::Display for SemanticError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::EmptyPipeline => write!(f, "query pipeline must contain at least one stage"),
-            Self::MultipleAggregates => {
-                write!(
-                    f,
-                    "pipeline must not contain more than one 'summarize' command"
-                )
+            Self::SourceNotFound { name, .. } => {
+                write!(f, "source {name:?} was not found in the catalog snapshot")
             }
-            Self::AggregateAfterAggregate => {
+            Self::FieldNotFound { name, .. } => {
+                write!(f, "field {name:?} was not found in the current relation")
+            }
+            Self::DuplicateOutputField { name, .. } => {
+                write!(f, "output field {name:?} occurs more than once")
+            }
+            Self::StageOrderInvalid { .. } => {
                 write!(
                     f,
                     "only 'sort' and 'take' commands may follow a 'summarize' command"
@@ -56,18 +53,6 @@ impl fmt::Display for SemanticError {
             }
             Self::InvalidLimitValue { value } => {
                 write!(f, "take value must be a non-negative integer, got {value}")
-            }
-            Self::EmptyFieldList => {
-                write!(f, "'project' command requires at least one field name")
-            }
-            Self::EmptyAggregateMeasures => {
-                write!(
-                    f,
-                    "'summarize' command requires at least one aggregate expression"
-                )
-            }
-            Self::EmptySortSpec => {
-                write!(f, "'sort' command requires at least one sort expression")
             }
             Self::ConversionError(msg) => {
                 write!(f, "conversion error: {msg}")
@@ -145,163 +130,5 @@ impl std::error::Error for AnalyzeError {
             Self::Parse(err) => Some(err),
             Self::Semantic(errors) => errors.first().map(|e| e as &dyn std::error::Error),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_empty_pipeline() {
-        let err = SemanticError::EmptyPipeline;
-        assert_eq!(
-            err.to_string(),
-            "query pipeline must contain at least one stage"
-        );
-    }
-
-    #[test]
-    fn display_multiple_aggregates() {
-        let err = SemanticError::MultipleAggregates;
-        assert_eq!(
-            err.to_string(),
-            "pipeline must not contain more than one 'summarize' command"
-        );
-    }
-
-    #[test]
-    fn display_aggregate_after_aggregate() {
-        let err = SemanticError::AggregateAfterAggregate;
-        assert_eq!(
-            err.to_string(),
-            "only 'sort' and 'take' commands may follow a 'summarize' command"
-        );
-    }
-
-    #[test]
-    fn display_invalid_limit_value() {
-        let err = SemanticError::InvalidLimitValue { value: -3 };
-        assert_eq!(
-            err.to_string(),
-            "take value must be a non-negative integer, got -3"
-        );
-    }
-
-    #[test]
-    fn display_empty_field_list() {
-        let err = SemanticError::EmptyFieldList;
-        assert_eq!(
-            err.to_string(),
-            "'project' command requires at least one field name"
-        );
-    }
-
-    #[test]
-    fn display_empty_aggregate_measures() {
-        let err = SemanticError::EmptyAggregateMeasures;
-        assert_eq!(
-            err.to_string(),
-            "'summarize' command requires at least one aggregate expression"
-        );
-    }
-
-    #[test]
-    fn display_empty_sort_spec() {
-        let err = SemanticError::EmptySortSpec;
-        assert_eq!(
-            err.to_string(),
-            "'sort' command requires at least one sort expression"
-        );
-    }
-
-    #[test]
-    fn display_conversion_error() {
-        let err = SemanticError::ConversionError("unsupported cast from X to Y".into());
-        assert_eq!(
-            err.to_string(),
-            "conversion error: unsupported cast from X to Y"
-        );
-    }
-
-    #[test]
-    fn implements_std_error() {
-        fn assert_error<E: std::error::Error>(_: &E) {}
-        assert_error(&SemanticError::EmptyPipeline);
-        assert_error(&SemanticError::ConversionError("test".into()));
-    }
-
-    #[test]
-    fn equality_works() {
-        assert_eq!(
-            SemanticError::InvalidLimitValue { value: 5 },
-            SemanticError::InvalidLimitValue { value: 5 }
-        );
-        assert_ne!(
-            SemanticError::InvalidLimitValue { value: 5 },
-            SemanticError::InvalidLimitValue { value: 10 }
-        );
-        assert_ne!(SemanticError::EmptyPipeline, SemanticError::EmptyFieldList);
-    }
-
-    #[test]
-    fn analyze_error_display_semantic_single() {
-        let err = AnalyzeError::Semantic(vec![SemanticError::MultipleAggregates]);
-        assert_eq!(
-            err.to_string(),
-            "pipeline must not contain more than one 'summarize' command"
-        );
-    }
-
-    #[test]
-    fn analyze_error_display_semantic_multiple() {
-        let err = AnalyzeError::Semantic(vec![
-            SemanticError::EmptyFieldList,
-            SemanticError::EmptySortSpec,
-        ]);
-        let displayed = err.to_string();
-        assert!(
-            displayed.contains("'project' command requires at least one field name"),
-            "missing project error: {displayed}"
-        );
-        assert!(
-            displayed.contains("'sort' command requires at least one sort expression"),
-            "missing sort error: {displayed}"
-        );
-    }
-
-    #[test]
-    fn analyze_error_source_semantic_returns_first() {
-        let err = AnalyzeError::Semantic(vec![
-            SemanticError::EmptyPipeline,
-            SemanticError::EmptyFieldList,
-        ]);
-        let source = std::error::Error::source(&err);
-        assert!(source.is_some());
-        let msg = source.unwrap().to_string();
-        assert!(msg.contains("at least one stage"));
-    }
-
-    #[test]
-    fn analyze_error_source_parse_returns_inner() {
-        let err = AnalyzeError::Parse(ParseError::from_parser_error(
-            &crate::parser::parse("").unwrap_err(),
-            "",
-        ));
-        let source = std::error::Error::source(&err);
-        assert!(source.is_some());
-    }
-
-    #[test]
-    fn analyze_error_source_semantic_empty_returns_none() {
-        let err = AnalyzeError::Semantic(vec![]);
-        let source = std::error::Error::source(&err);
-        assert!(source.is_none());
-    }
-
-    #[test]
-    fn analyze_error_implements_std_error() {
-        fn assert_error<E: std::error::Error>(_: &E) {}
-        assert_error(&AnalyzeError::Semantic(vec![SemanticError::EmptyPipeline]));
     }
 }

@@ -12,12 +12,15 @@ use elucid_engine::{Context, StorageConfig};
 use elucid_ingest::{
     DeadLetterWriter, LineSource, NoopWal, ObjectStoreSink, SchemaConfig, TableName, ingest,
 };
+use elucid_language::CatalogSnapshot;
 use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use testcontainers_modules::localstack::LocalStack;
 use testcontainers_modules::testcontainers::{ImageExt, runners::AsyncRunner};
 use url::Url;
+
+mod support;
 
 const TEST_DATA: &str = r#"{"timestamp":"2025-01-15T10:00:00Z","source":"nginx","status":200,"path":"/home"}
 {"timestamp":"2025-01-15T10:01:00Z","source":"nginx","status":404,"path":"/missing"}
@@ -160,9 +163,10 @@ async fn s3_ingest_then_query_all_rows() {
         prefix: prefix.to_owned(),
     };
     let ctx = Context::with_storage_config(config);
+    let source = support::test_logs_source();
 
     let df = ctx
-        .execute(&format!("source {table}"))
+        .execute(&format!("source {table}"), &CatalogSnapshot::new(&source))
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -197,9 +201,13 @@ async fn s3_ingest_then_query_filter() {
         prefix: prefix.to_owned(),
     };
     let ctx = Context::with_storage_config(config);
+    let source = support::test_logs_source();
 
     let df = ctx
-        .execute(&format!("source {table} | filter status >= 400"))
+        .execute(
+            &format!("source {table} | filter status >= 400"),
+            &CatalogSnapshot::new(&source),
+        )
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -234,9 +242,13 @@ async fn s3_ingest_then_query_count() {
         prefix: prefix.to_owned(),
     };
     let ctx = Context::with_storage_config(config);
+    let source = support::test_logs_source();
 
     let df = ctx
-        .execute(&format!("source {table} | summarize event_count = count()"))
+        .execute(
+            &format!("source {table} | summarize event_count = count()"),
+            &CatalogSnapshot::new(&source),
+        )
         .await
         .expect("query failed");
 
@@ -311,9 +323,10 @@ async fn s3_ingest_multiple_batches_then_query() {
         prefix: "data".to_owned(),
     };
     let ctx = Context::with_storage_config(config);
+    let source = support::test_logs_source();
 
     let df = ctx
-        .execute(&format!("source {table}"))
+        .execute(&format!("source {table}"), &CatalogSnapshot::new(&source))
         .await
         .expect("query failed");
     let rows = count_rows(df).await;

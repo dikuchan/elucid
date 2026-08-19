@@ -6,6 +6,9 @@ use elucid_engine::Context;
 use elucid_ingest::{
     DeadLetterWriter, LineSource, NoopWal, ParquetSink, SchemaConfig, TableName, ingest,
 };
+use elucid_language::CatalogSnapshot;
+
+mod support;
 
 const TEST_DATA: &str = r#"{"timestamp":"2025-01-15T10:00:00Z","source":"nginx","status":200,"path":"/home"}
 {"timestamp":"2025-01-15T10:01:00Z","source":"nginx","status":404,"path":"/missing"}
@@ -95,7 +98,11 @@ async fn ingest_then_query_all_rows() {
     setup_and_ingest(dir.path()).await;
 
     let ctx = Context::new(dir.path());
-    let df = ctx.execute("source test_logs").await.expect("query failed");
+    let source = support::test_logs_source();
+    let df = ctx
+        .execute("source test_logs", &CatalogSnapshot::new(&source))
+        .await
+        .expect("query failed");
     let rows = count_rows(df).await;
 
     assert_eq!(rows, 5, "unfiltered query should return all 5 rows");
@@ -107,8 +114,12 @@ async fn ingest_then_query_filter_status_gte_400() {
     setup_and_ingest(dir.path()).await;
 
     let ctx = Context::new(dir.path());
+    let source = support::test_logs_source();
     let df = ctx
-        .execute("source test_logs | filter status >= 400")
+        .execute(
+            "source test_logs | filter status >= 400",
+            &CatalogSnapshot::new(&source),
+        )
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -122,8 +133,12 @@ async fn ingest_then_query_filter_source_nginx() {
     setup_and_ingest(dir.path()).await;
 
     let ctx = Context::new(dir.path());
+    let source = support::test_logs_source();
     let df = ctx
-        .execute("source test_logs | filter source == \"nginx\"")
+        .execute(
+            "source test_logs | filter source == \"nginx\"",
+            &CatalogSnapshot::new(&source),
+        )
         .await
         .expect("query failed");
     let rows = count_rows(df).await;
@@ -137,8 +152,12 @@ async fn ingest_then_query_count() {
     setup_and_ingest(dir.path()).await;
 
     let ctx = Context::new(dir.path());
+    let source = support::test_logs_source();
     let df = ctx
-        .execute("source test_logs | summarize event_count = count()")
+        .execute(
+            "source test_logs | summarize event_count = count()",
+            &CatalogSnapshot::new(&source),
+        )
         .await
         .expect("query failed");
 
