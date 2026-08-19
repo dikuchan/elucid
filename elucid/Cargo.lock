@@ -1892,6 +1892,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "elucid-storage"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "bytes",
+ "object_store",
+ "testcontainers-modules",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "elucid-tests"
 version = "0.1.0"
 dependencies = [

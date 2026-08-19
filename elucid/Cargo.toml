@@ -8,6 +8,7 @@ members = [
     "elucid-language",
     "elucid-metastore",
     "elucid-service",
+    "elucid-storage",
     "elucid-tests",
 ]
 
@@ -58,3 +59,4 @@ elucid-ingestion = { path = "elucid-ingestion" }
 elucid-language = { path = "elucid-language" }
 elucid-metastore = { path = "elucid-metastore" }
 elucid-service = { path = "elucid-service" }
+elucid-storage = { path = "elucid-storage" }

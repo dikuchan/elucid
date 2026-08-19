@@ -1,0 +1,20 @@
+//! Exact immutable object access for Elucid-managed storage.
+
+mod descriptor;
+mod error;
+mod identity;
+mod key;
+mod store;
+mod value;
+
+pub use descriptor::ObjectDescriptor;
+pub use error::{StorageError, StorageErrorCode, StorageModelError};
+pub use identity::{BatchId, SegmentId, StoredObjectId};
+pub use key::{ManagedObjectKey, ManagedObjectKind, ManagedRoot, ObjectOwner};
+pub use store::{
+    ImmutableObjectStore, ObjectDeleteOutcome, ObjectUploadOutcome, ObjectVerificationOutcome,
+};
+pub use value::{
+    ObjectByteSize, ObjectDigest, ObjectFormatVersion, ObjectMediaType, ObjectReadRange,
+    TransferLimit,
+};

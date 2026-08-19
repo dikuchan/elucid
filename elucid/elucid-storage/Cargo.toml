@@ -1,0 +1,19 @@
+[package]
+name = "elucid-storage"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3 = { workspace = true }
+bytes = { workspace = true }
+object_store = { workspace = true, features = ["aws"] }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+testcontainers-modules = { workspace = true, features = ["minio"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
+uuid = { workspace = true, features = ["v7"] }
