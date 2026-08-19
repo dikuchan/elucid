@@ -281,6 +281,11 @@ impl CatalogApplicationPlan {
     pub fn ingestion_profile_definitions(&self) -> &[PlannedIngestionProfileDefinition] {
         &self.ingestion_profile_definitions
     }
+
+    #[must_use]
+    pub fn into_source(self) -> Source {
+        self.source
+    }
 }
 
 pub fn plan_catalog_application(

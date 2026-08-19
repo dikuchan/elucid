@@ -1871,10 +1871,13 @@ dependencies = [
 name = "elucid-metastore"
 version = "0.1.0"
 dependencies = [
+ "elucid-catalog",
+ "serde_json",
  "sqlx",
  "testcontainers-modules",
  "thiserror",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4317,6 +4320,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -4349,7 +4353,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx-core",
+ "sqlx-mysql",
  "sqlx-postgres",
+ "sqlx-sqlite",
  "syn",
  "tokio",
  "url",
@@ -4386,6 +4392,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.8.7",
  "rsa",
+ "serde",
  "sha1",
  "sha2",
  "smallvec",
@@ -4393,6 +4400,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4430,6 +4438,7 @@ dependencies = [
  "stringprep",
  "thiserror",
  "tracing",
+ "uuid",
  "whoami",
 ]
 
@@ -4449,11 +4458,13 @@ dependencies = [
  "libsqlite3-sys",
  "log",
  "percent-encoding",
+ "serde",
  "serde_urlencoded",
  "sqlx-core",
  "thiserror",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ mod logical_type;
 mod manifest;
 mod schema;
 mod source;
+mod stored;
 mod value;
 
 pub use application::{
@@ -30,6 +31,10 @@ pub use logical_type::{FieldRole, LogicalType, Nullability, UserLogicalType};
 pub use manifest::CatalogManifest;
 pub use schema::{Field, Schema, UserField};
 pub use source::Source;
+pub use stored::{
+    assemble_stored_input, assemble_stored_source, decode_stored_profile_definition,
+    decode_stored_schema_definition,
+};
 pub use value::{
     DeclarationDigest, DefinitionDigests, FieldOrdinal, InputName, MaterializedDigest,
     MaximumRecordBytes, ProfileRevision, SchemaVersion, SourceName, UserFieldName,
