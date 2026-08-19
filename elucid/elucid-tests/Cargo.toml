@@ -11,7 +11,7 @@ arrow = { workspace = true }
 datafusion = { workspace = true }
 elucid-catalog = { workspace = true }
 elucid-engine = { workspace = true }
-elucid-ingest = { workspace = true }
+elucid-ingestion = { workspace = true }
 elucid-language = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
 tempfile = { workspace = true }

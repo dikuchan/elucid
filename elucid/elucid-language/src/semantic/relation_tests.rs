@@ -28,7 +28,7 @@ fn every_stage_exposes_the_relation_seen_by_the_next_stage() {
         field_names(pipeline.source_relation()),
         [
             "@event_time",
-            "@ingest_time",
+            "@ingestion_time",
             "@event_id",
             "service",
             "status",

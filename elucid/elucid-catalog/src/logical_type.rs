@@ -156,7 +156,7 @@ impl Display for Nullability {
 #[non_exhaustive]
 pub enum FieldRole {
     EventTime,
-    IngestTime,
+    IngestionTime,
     EventId,
     Data,
     Remainder,
@@ -167,7 +167,7 @@ impl FieldRole {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::EventTime => "EVENT_TIME",
-            Self::IngestTime => "INGEST_TIME",
+            Self::IngestionTime => "INGESTION_TIME",
             Self::EventId => "EVENT_ID",
             Self::Data => "DATA",
             Self::Remainder => "REMAINDER",

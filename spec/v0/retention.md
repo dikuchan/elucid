@@ -7,8 +7,8 @@
 
 | Term | Definition |
 |---|---|
-| Idempotency reservation | The expiring association from one input-scoped idempotency-key digest to one ingest request and body identity. |
-| Retry expiry | The durable instant after which a `RETRYABLE` ingest request can no longer create another attempt. |
+| Idempotency reservation | The expiring association from one input-scoped idempotency-key digest to one ingestion request and body identity. |
+| Retry expiry | The durable instant after which a `RETRYABLE` ingestion request can no longer create another attempt. |
 | Data expiry | The earliest durable instant at which an active segment may be removed from new query snapshots. |
 | Dead-letter expiry | The earliest durable instant at which a published dead-letter object may be reclaimed. |
 | Provenance expiry | The earliest durable instant at which terminal metadata may be pruned after every reference and descendant condition is satisfied. |
@@ -20,21 +20,21 @@
 
 Configured retention durations MUST apply uniformly to every source and input. Every duration MUST be positive and converted with checked timestamp arithmetic using PostgreSQL time. Each derived deadline MUST be persisted once and MUST NOT be recomputed from current configuration.
 
-A new ingest request MUST set `retry_expires_at = created_at + idempotency_retention_seconds`. A terminal ingest request MUST set `provenance_expires_at = completed_at + ingest_provenance_retention_seconds`. Its idempotency reservation MUST set `expires_at = completed_at + idempotency_retention_seconds` in the same terminal transition.
+A new ingestion request MUST set `retry_expires_at = created_at + idempotency_retention_seconds`. A terminal ingestion request MUST set `provenance_expires_at = completed_at + ingestion_provenance_retention_seconds`. Its idempotency reservation MUST set `expires_at = completed_at + idempotency_retention_seconds` in the same terminal transition.
 
-An ingestion-origin segment MUST set `data_expires_at = ingest_request.created_at + event_data_retention_seconds` and derive its [data-expiry bucket](storage.md#1-terminology). A compaction run MUST consume one data-expiry bucket. Each output segment MUST retain that bucket and set `data_expires_at` to the maximum input deadline. Compaction therefore MAY extend an input row's deadline by less than one day, MUST NOT extend it into another data-expiry bucket, and MUST NOT shorten it.
+An ingestion-origin segment MUST set `data_expires_at = ingestion_request.created_at + event_data_retention_seconds` and derive its [data-expiry bucket](storage.md#1-terminology). A compaction run MUST consume one data-expiry bucket. Each output segment MUST retain that bucket and set `data_expires_at` to the maximum input deadline. Compaction therefore MAY extend an input row's deadline by less than one day, MUST NOT extend it into another data-expiry bucket, and MUST NOT shorten it.
 
-A published dead-letter object MUST set `retention_expires_at = ingest_commit.committed_at + dead_letter_retention_seconds`. A terminal compaction run MUST set `provenance_expires_at = terminal_at + compaction_provenance_retention_seconds`.
+A published dead-letter object MUST set `retention_expires_at = ingestion_commit.committed_at + dead_letter_retention_seconds`. A terminal compaction run MUST set `provenance_expires_at = terminal_at + compaction_provenance_retention_seconds`.
 
 ## 3. Idempotency and retry expiration
 
-The active idempotency namespace MUST be represented only by `ingest_idempotency_keys`. `ingest_requests` MAY retain body identity for provenance but MUST NOT retain a uniqueness constraint on an idempotency-key digest.
+The active idempotency namespace MUST be represented only by `ingestion_idempotency_keys`. `ingestion_requests` MAY retain body identity for provenance but MUST NOT retain a uniqueness constraint on an idempotency-key digest.
 
 Claim MUST lock the matching reservation. An unexpired reservation MUST apply the [Ingestion claim outcomes](ingestion.md#4-claim-and-idempotency). An expired reservation whose request is terminal MUST be deleted and replaced atomically by `CLAIMED_NEW`; the new request MUST receive a new identity and treat the submitted body as new data.
 
-A `RETRYABLE` request at or after `retry_expires_at` MUST transition atomically to `FAILED` with `INGEST_RETRY_WINDOW_EXPIRED`, terminal time, provenance expiry, and idempotency-reservation expiry. Claim MAY perform this transition before returning `REPLAY_FAILED`. Periodic maintenance MUST claim at most `maximum_retry_expiration_batch_requests` such requests with `FOR UPDATE SKIP LOCKED` and perform the same transition. The transition MUST require no non-terminal attempt; a contradiction MUST produce `RETENTION_REFERENCE_INVARIANT_VIOLATION` without changing the request.
+A `RETRYABLE` request at or after `retry_expires_at` MUST transition atomically to `FAILED` with `INGESTION_RETRY_WINDOW_EXPIRED`, terminal time, provenance expiry, and idempotency-reservation expiry. Claim MAY perform this transition before returning `REPLAY_FAILED`. Periodic maintenance MUST claim at most `maximum_retry_expiration_batch_requests` such requests with `FOR UPDATE SKIP LOCKED` and perform the same transition. The transition MUST require no non-terminal attempt; a contradiction MUST produce `RETENTION_REFERENCE_INVARIANT_VIOLATION` without changing the request.
 
-An idempotency reservation MAY be deleted only when its request is terminal and PostgreSQL time has reached `expires_at`. Deleting it MUST NOT delete or change the ingest request. Periodic maintenance MUST claim at most `maximum_idempotency_expiration_batch_reservations` eligible reservations with their requests by using `FOR UPDATE SKIP LOCKED`, revalidate both rows, and delete only the reservations. A later submission of the same input and key is a new request regardless of body identity.
+An idempotency reservation MAY be deleted only when its request is terminal and PostgreSQL time has reached `expires_at`. Deleting it MUST NOT delete or change the ingestion request. Periodic maintenance MUST claim at most `maximum_idempotency_expiration_batch_reservations` eligible reservations with their requests by using `FOR UPDATE SKIP LOCKED`, revalidate both rows, and delete only the reservations. A later submission of the same input and key is a new request regardless of body identity.
 
 The sender owns the complete body until it receives a successful `COMMITTED` response. A timeout, disconnect, non-success response, or absent response MUST be treated as unacknowledged and retried with the same input, key, and body while the retry window remains open.
 
@@ -48,7 +48,7 @@ Compaction selection MUST reject an input whose `data_expires_at` is not later t
 
 ## 5. Dead-letter expiration and object reclamation
 
-A published dead-letter object becomes reclaimable when PostgreSQL time reaches `retention_expires_at`. Its ingest-commit reference MUST remain as provenance and MUST NOT prevent the object from transitioning through `DELETE_PENDING` to `DELETED`.
+A published dead-letter object becomes reclaimable when PostgreSQL time reaches `retention_expires_at`. Its ingestion-commit reference MUST remain as provenance and MUST NOT prevent the object from transitioning through `DELETE_PENDING` to `DELETED`.
 
 A published Parquet object becomes reclaimable when its direct segment is `SUPERSEDED` or `EXPIRED`, PostgreSQL time has reached `reclamation_not_before`, and no `ACTIVE` segment references it. Reclamation MUST follow the exact-key deletion protocol in [Storage](storage.md#7-garbage-collection).
 
@@ -60,9 +60,9 @@ Pruning MUST operate on at most `maximum_provenance_roots_per_batch` roots selec
 
 A compaction run is eligible only when it is terminal, PostgreSQL time has reached `provenance_expires_at`, every output segment is terminal with a `DELETED` object, and no later compaction input references an output segment. Pruning MUST delete its output stored-object rows, output segment rows, input associations, and run row. It MUST preserve input segments, which become independently eligible through their producers after the associations are removed.
 
-An ingest request is eligible only when it is terminal, PostgreSQL time has reached `provenance_expires_at`, no idempotency reservation references it, every attempt is terminal, every attempt-produced stored object is `DELETED`, every ingestion-origin segment is terminal, and no compaction input references an ingestion-origin segment. Pruning MUST delete its stored-object rows, segment rows, ingest commit, attempts, and request.
+An ingestion request is eligible only when it is terminal, PostgreSQL time has reached `provenance_expires_at`, no idempotency reservation references it, every attempt is terminal, every attempt-produced stored object is `DELETED`, every ingestion-origin segment is terminal, and no compaction input references an ingestion-origin segment. Pruning MUST delete its stored-object rows, segment rows, ingestion commit, attempts, and request.
 
-Pruning MUST proceed from leaf compaction runs toward ingestion roots. It MUST NOT delete an active segment, non-terminal producer, idempotency reservation, catalog definition, migration row, or metadata required by a retained provenance edge. After an ingest-request root is pruned, its API identity is no longer retained and lookup MUST return `INGEST_REQUEST_NOT_FOUND`.
+Pruning MUST proceed from leaf compaction runs toward ingestion roots. It MUST NOT delete an active segment, non-terminal producer, idempotency reservation, catalog definition, migration row, or metadata required by a retained provenance edge. After an ingestion-request root is pruned, its API identity is no longer retained and lookup MUST return `INGESTION_REQUEST_NOT_FOUND`.
 
 ## 7. Ownership and recovery
 
@@ -76,4 +76,4 @@ Expiration and pruning transactions MUST be short and MUST perform no object-sto
 
 Metrics MUST distinguish expired retry windows, deleted idempotency reservations, expired segments, expired rows, expired dead-letter objects, reclaimed Parquet objects, reclaimed dead-letter objects, pruned compaction roots, pruned ingestion roots, skipped referenced roots, retries, and failures. Each periodic task MUST expose its eligible-item backlog count and oldest eligible-item age. Labels MUST use bounded vocabularies.
 
-Stable errors MUST include `INGEST_RETRY_WINDOW_EXPIRED`, `DEAD_LETTER_EXPIRED`, `RETENTION_REFERENCE_INVARIANT_VIOLATION`, and `RETENTION_TIMESTAMP_OVERFLOW`.
+Stable errors MUST include `INGESTION_RETRY_WINDOW_EXPIRED`, `DEAD_LETTER_EXPIRED`, `RETENTION_REFERENCE_INVARIANT_VIOLATION`, and `RETENTION_TIMESTAMP_OVERFLOW`.

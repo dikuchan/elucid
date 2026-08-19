@@ -15,17 +15,17 @@ mod value;
 
 pub use application::{
     CanonicalJson, CatalogApplicationOutcome, CatalogApplicationPlan, CatalogEntityDisposition,
-    CatalogIdentityGenerator, PlannedIngestProfileDefinition, PlannedInputDefinition,
+    CatalogIdentityGenerator, PlannedIngestionProfileDefinition, PlannedInputDefinition,
     PlannedSchemaDefinition, PlannedSourceDefinition, plan_catalog_application,
 };
 pub use application_error::{
     CatalogApplicationError, CatalogErrorCode, CatalogPath, SchemaIncompatibility,
 };
 pub use error::{CatalogModelError, IdentityKind, NameKind, VersionKind};
-pub use identity::{FieldId, IngestProfileRevisionId, InputId, SchemaId, SourceId};
+pub use identity::{FieldId, IngestionProfileRevisionId, InputId, SchemaId, SourceId};
 pub use input::{
-    ConversionPolicy, EventTimeFormat, EventTimeMapping, FieldMapping, IngestProfile,
-    IngestProfileRevision, Input, InputEncoding, InputKind, LineBoundaryPolicy, ParserKind,
+    ConversionPolicy, EventTimeFormat, EventTimeMapping, FieldMapping, IngestionProfile,
+    IngestionProfileRevision, Input, InputEncoding, InputKind, LineBoundaryPolicy, ParserKind,
     UnknownFieldPolicy,
 };
 pub use json_pointer::{JsonPointer, JsonPointerToken};

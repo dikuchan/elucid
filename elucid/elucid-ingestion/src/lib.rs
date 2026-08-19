@@ -1,7 +1,7 @@
 pub mod batcher;
 pub mod dead_letter_writer;
 pub mod event;
-pub mod ingest;
+pub mod ingestion;
 pub mod line_source;
 pub mod normalizer;
 pub mod object_store_sink;
@@ -14,7 +14,7 @@ pub mod wal;
 pub use batcher::Batcher;
 pub use dead_letter_writer::DeadLetterWriter;
 pub use event::{Event, EventContext, EventRow, EventValue, RawEvent};
-pub use ingest::{IngestSummary, ingest};
+pub use ingestion::{IngestionSummary, run_ingestion};
 pub use line_source::{LineSource, LineSourceEventContext};
 pub use normalizer::Normalizer;
 pub use object_store_sink::ObjectStoreSink;

@@ -1,21 +1,21 @@
 use serde_json::{Map, Number, Value};
 
-use crate::manifest::{ManifestIngestProfileRevision, ManifestSchema};
+use crate::manifest::{ManifestIngestionProfileRevision, ManifestSchema};
 use crate::{
     CanonicalJson, CatalogApplicationError, CatalogPath, DeclarationDigest, Field, FieldRole,
-    IngestProfile, IngestProfileRevision, IngestProfileRevisionId, Input, InputId, InputKind,
-    InputName, JsonPointer, LogicalType, MaterializedDigest, ProfileRevision, Schema, SchemaId,
-    SchemaVersion, SourceId, SourceName,
+    IngestionProfile, IngestionProfileRevision, IngestionProfileRevisionId, Input, InputId,
+    InputKind, InputName, JsonPointer, LogicalType, MaterializedDigest, ProfileRevision, Schema,
+    SchemaId, SchemaVersion, SourceId, SourceName,
 };
 
 const SOURCE_DECLARATION_DOMAIN: &[u8] = b"elucid:catalog:source:v1\0";
 const SCHEMA_DECLARATION_DOMAIN: &[u8] = b"elucid:catalog:schema:v1\0";
 const INPUT_DECLARATION_DOMAIN: &[u8] = b"elucid:catalog:input:v1\0";
-const INGEST_PROFILE_DECLARATION_DOMAIN: &[u8] = b"elucid:catalog:ingest-profile:v1\0";
+const INGESTION_PROFILE_DECLARATION_DOMAIN: &[u8] = b"elucid:catalog:ingestion-profile:v1\0";
 const SCHEMA_MATERIALIZED_DOMAIN: &[u8] = b"elucid:catalog:schema-materialized:v1\0";
 const INPUT_MATERIALIZED_DOMAIN: &[u8] = b"elucid:catalog:input-materialized:v1\0";
-const INGEST_PROFILE_MATERIALIZED_DOMAIN: &[u8] =
-    b"elucid:catalog:ingest-profile-materialized:v1\0";
+const INGESTION_PROFILE_MATERIALIZED_DOMAIN: &[u8] =
+    b"elucid:catalog:ingestion-profile-materialized:v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DeclarationDocument {
@@ -172,7 +172,7 @@ pub(crate) fn stored_input_materialized(
 }
 
 pub(crate) fn manifest_profile_declaration(
-    revision: &ManifestIngestProfileRevision,
+    revision: &ManifestIngestionProfileRevision,
     path: &str,
 ) -> Result<DeclarationDocument, CatalogApplicationError> {
     let mappings = revision
@@ -194,7 +194,7 @@ pub(crate) fn manifest_profile_declaration(
 }
 
 pub(crate) fn stored_profile_declaration(
-    revision: &IngestProfileRevision,
+    revision: &IngestionProfileRevision,
     target_schema: &Schema,
     path: &str,
 ) -> Result<DeclarationDocument, CatalogApplicationError> {
@@ -262,11 +262,11 @@ pub(crate) fn stored_profile_declaration(
             string(profile.unknown_field_policy().as_str()),
         ),
     ]);
-    declaration_document(INGEST_PROFILE_DECLARATION_DOMAIN, declaration, path)
+    declaration_document(INGESTION_PROFILE_DECLARATION_DOMAIN, declaration, path)
 }
 
 pub(crate) fn profile_materialized(
-    revision: &IngestProfileRevision,
+    revision: &IngestionProfileRevision,
     path: &str,
 ) -> Result<MaterializedDocument, CatalogApplicationError> {
     profile_materialized_parts(
@@ -280,11 +280,11 @@ pub(crate) fn profile_materialized(
 }
 
 pub(crate) fn profile_materialized_parts(
-    revision_id: IngestProfileRevisionId,
+    revision_id: IngestionProfileRevisionId,
     input_id: InputId,
     revision: ProfileRevision,
     target_schema_id: SchemaId,
-    profile: &IngestProfile,
+    profile: &IngestionProfile,
     path: &str,
 ) -> Result<MaterializedDocument, CatalogApplicationError> {
     let mappings = profile
@@ -305,7 +305,7 @@ pub(crate) fn profile_materialized_parts(
         })
         .collect::<Vec<_>>();
     materialized_document(
-        INGEST_PROFILE_MATERIALIZED_DOMAIN,
+        INGESTION_PROFILE_MATERIALIZED_DOMAIN,
         object([
             (
                 "conversion_policy",
@@ -330,7 +330,7 @@ pub(crate) fn profile_materialized_parts(
                 ]),
             ),
             (
-                "ingest_profile_revision_id",
+                "ingestion_profile_revision_id",
                 string(&revision_id.to_string()),
             ),
             ("input_id", string(&input_id.to_string())),
@@ -356,13 +356,13 @@ pub(crate) fn profile_materialized_parts(
 }
 
 fn profile_declaration(
-    revision: &ManifestIngestProfileRevision,
+    revision: &ManifestIngestionProfileRevision,
     target_schema_version: u64,
     mappings: Vec<Value>,
     path: &str,
 ) -> Result<DeclarationDocument, CatalogApplicationError> {
     declaration_document(
-        INGEST_PROFILE_DECLARATION_DOMAIN,
+        INGESTION_PROFILE_DECLARATION_DOMAIN,
         object([
             (
                 "conversion_policy",

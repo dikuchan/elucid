@@ -308,7 +308,7 @@ fn cross_field_validation_enforces_the_normative_profile() {
                 "idempotency_retention_seconds = 86400",
                 "idempotency_retention_seconds = 2592001",
             )],
-            ConfigurationViolation::IdempotencyRetentionExceedsIngestProvenance,
+            ConfigurationViolation::IdempotencyRetentionExceedsIngestionProvenance,
         ),
         violation_case(
             "event provenance",
@@ -316,7 +316,7 @@ fn cross_field_validation_enforces_the_normative_profile() {
                 "event_data_retention_seconds = 2592000",
                 "event_data_retention_seconds = 2592001",
             )],
-            ConfigurationViolation::EventDataRetentionExceedsIngestProvenance,
+            ConfigurationViolation::EventDataRetentionExceedsIngestionProvenance,
         ),
         violation_case(
             "dead letter provenance",
@@ -324,7 +324,7 @@ fn cross_field_validation_enforces_the_normative_profile() {
                 "dead_letter_retention_seconds = 604800",
                 "dead_letter_retention_seconds = 2592001",
             )],
-            ConfigurationViolation::DeadLetterRetentionExceedsIngestProvenance,
+            ConfigurationViolation::DeadLetterRetentionExceedsIngestionProvenance,
         ),
         violation_case(
             "ingestion staging capacity",

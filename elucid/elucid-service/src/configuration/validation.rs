@@ -144,26 +144,26 @@ pub(super) fn validate(
     if configuration.retention.idempotency_retention_seconds.get()
         > configuration
             .retention
-            .ingest_provenance_retention_seconds
+            .ingestion_provenance_retention_seconds
             .get()
     {
-        return violation(ConfigurationViolation::IdempotencyRetentionExceedsIngestProvenance);
+        return violation(ConfigurationViolation::IdempotencyRetentionExceedsIngestionProvenance);
     }
     if configuration.retention.event_data_retention_seconds.get()
         > configuration
             .retention
-            .ingest_provenance_retention_seconds
+            .ingestion_provenance_retention_seconds
             .get()
     {
-        return violation(ConfigurationViolation::EventDataRetentionExceedsIngestProvenance);
+        return violation(ConfigurationViolation::EventDataRetentionExceedsIngestionProvenance);
     }
     if configuration.retention.dead_letter_retention_seconds.get()
         > configuration
             .retention
-            .ingest_provenance_retention_seconds
+            .ingestion_provenance_retention_seconds
             .get()
     {
-        return violation(ConfigurationViolation::DeadLetterRetentionExceedsIngestProvenance);
+        return violation(ConfigurationViolation::DeadLetterRetentionExceedsIngestionProvenance);
     }
     if configuration.ingestion.staging_capacity_bytes.get()
         < configuration.ingestion.maximum_request_body_bytes.get()

@@ -4,7 +4,7 @@ use anyhow::Context as _;
 use elucid_service::RuntimeConfiguration;
 use tokio::io::AsyncWriteExt as _;
 
-use crate::arguments::{Action, Arguments, CatalogSubcommand, IngestSubcommand, RootCommand};
+use crate::arguments::{Action, Arguments, CatalogSubcommand, IngestionSubcommand, RootCommand};
 use crate::client::{HttpResponse, ProductClient};
 use crate::error::{CliErrorCode, Failure, ProcessExit, RemoteOperation};
 use crate::input::RequestInput;
@@ -44,8 +44,8 @@ async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
                 require_success(RemoteOperation::CatalogApplication, response)
             }
         },
-        RootCommand::Ingest(command) => match command.into_command() {
-            IngestSubcommand::Send(command) => {
+        RootCommand::Ingestion(command) => match command.into_command() {
+            IngestionSubcommand::Submit(command) => {
                 let (
                     endpoint,
                     source,
@@ -58,7 +58,7 @@ async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
                 let client =
                     ProductClient::new(timeout_seconds, token_environment_variable.as_ref())?;
                 let response = client
-                    .send_ingestion(
+                    .submit_ingestion(
                         &endpoint,
                         &source,
                         &input_name,

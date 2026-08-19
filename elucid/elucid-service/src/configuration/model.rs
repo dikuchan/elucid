@@ -831,7 +831,7 @@ pub struct RetentionConfiguration {
     pub(super) idempotency_retention_seconds: Seconds,
     pub(super) event_data_retention_seconds: Seconds,
     pub(super) dead_letter_retention_seconds: Seconds,
-    pub(super) ingest_provenance_retention_seconds: Seconds,
+    pub(super) ingestion_provenance_retention_seconds: Seconds,
     pub(super) compaction_provenance_retention_seconds: Seconds,
     pub(super) scan_interval_seconds: Seconds,
     pub(super) maximum_task_duration_seconds: Seconds,
@@ -858,8 +858,8 @@ impl RetentionConfiguration {
     }
 
     #[must_use]
-    pub const fn ingest_provenance_retention_seconds(&self) -> Seconds {
-        self.ingest_provenance_retention_seconds
+    pub const fn ingestion_provenance_retention_seconds(&self) -> Seconds {
+        self.ingestion_provenance_retention_seconds
     }
 
     #[must_use]

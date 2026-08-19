@@ -5,7 +5,7 @@
 
 ## 1. Outcome
 
-The showcase MUST provide a reviewable Elucid vertical slice that starts with one command, ingests deterministic security events into immutable Parquet segments, compacts small segments without changing query results, executes typed queries in a browser, survives an Elucid restart, and requires no private infrastructure.
+The showcase MUST provide a reviewable Elucid vertical slice that starts with one command, performs ingestion of deterministic security events into immutable Parquet segments, compacts small segments without changing query results, executes typed queries in a browser, survives an Elucid restart, and requires no private infrastructure.
 
 The operator journey MUST be:
 
@@ -14,7 +14,7 @@ The operator journey MUST be:
 3. Wait for readiness.
 4. Apply the demo source manifest through `elucid catalog apply` and the product HTTP API.
 5. Send the demo NDJSON fixture through the HTTP ingestion endpoint with a stable idempotency key.
-6. Observe the ingest request reach `COMMITTED`.
+6. Observe the ingestion request reach `COMMITTED`.
 7. Inspect source, schema, event-time bounds, segments, and event count.
 8. Observe the deployment start the maintenance Elucid instance after pre-compaction verification succeeds.
 9. Observe active segment count decrease without changing event count or event-time bounds.
@@ -83,8 +83,8 @@ source:
   inputs:
     - name: demo_http
       kind: HTTP_NDJSON
-      active_ingest_profile_revision: 1
-      ingest_profile_revisions:
+      active_ingestion_profile_revision: 1
+      ingestion_profile_revisions:
         - revision: 1
           target_schema_version: 1
           parser_kind: NDJSON
@@ -116,7 +116,7 @@ The fixture MUST contain 1,204 framed records and fewer than 8,388,608 bytes: 1,
 
 The fixture MUST contain successful requests, client errors, server errors, authentication failures, two byte-identical accepted records at different positions, and top-level unknown values of string, number, object, array, and JSON-null kinds captured in `@rest`. Exactly one accepted event MUST contain numeric unknown field `experimental_status` with value `503`; every other record MUST omit that key. Exactly one accepted event MUST contain `explicit_null` with JSON null; every other record MUST omit that key.
 
-Under the showcase configuration, ingestion MUST produce one ingest commit, four ingestion-origin Parquet segments, six row groups, one dead-letter object with two entries, 1,200 accepted records, two rejected records, and two ignored blank records. The 16,777,216-byte ingestion-segment target MUST exceed the independently calculated estimate for each 600-row day so the 500-row ingestion target alone determines the four ingestion segments. The 268,435,456-byte compaction target and 1,000,000-row compaction maximum MUST produce one output segment per fixture day.
+Under the showcase configuration, ingestion MUST produce one ingestion commit, four ingestion-origin Parquet segments, six row groups, one dead-letter object with two entries, 1,200 accepted records, two rejected records, and two ignored blank records. The 16,777,216-byte ingestion-segment target MUST exceed the independently calculated estimate for each 600-row day so the 500-row ingestion target alone determines the four ingestion segments. The 268,435,456-byte compaction target and 1,000,000-row compaction maximum MUST produce one output segment per fixture day.
 
 Automatic compaction MUST commit exactly two runs, one for each fixture day. Each run MUST consume one 500-row and one 100-row ingestion segment and publish one 600-row compaction segment with three row groups. After both publications, the source MUST contain two `ACTIVE` compaction segments and four `SUPERSEDED` ingestion segments while preserving 1,200 events and the original event-time bounds.
 
@@ -133,7 +133,7 @@ The application MUST expose one workspace at `/` containing:
 - a Run button and `Cmd+Enter` or `Ctrl+Enter` shortcut;
 - typed result columns, bounded rows, completion, elapsed milliseconds, output rows, selected segments, and selected bytes;
 - source-span error and warning diagnostics rendered as code frames;
-- ingest-request history, committed counts, terminal state, and paginated dead-letter entries.
+- ingestion-request history, committed counts, terminal state, and paginated dead-letter entries.
 
 For a non-empty source, picker start MUST default to source minimum event time and picker end to one millisecond after inclusive source maximum event time. For an empty source, both defaults MUST derive from one captured UTC instant: end is that instant and start is one hour earlier.
 
@@ -191,9 +191,9 @@ The complete showcase MUST pass this clean-state scenario:
 2. Start clean PostgreSQL and MinIO, then start one serving-only Elucid instance and observe `LIVE` before `READY`.
 3. Verify automatic migrations and create-only, exact-read, range-read, and exact-delete object-store capabilities.
 4. Apply the demo manifest twice through `elucid catalog apply` and `POST /api/v1/catalog-applications`, compare persistent identities, and verify that the catalog client has no PostgreSQL or object-store credentials.
-5. Send the fixture to `POST /api/v1/sources/demo_logs/inputs/demo_http/events` with key `showcase-demo-fixture-v1` and verify a new `COMMITTED` ingest request.
+5. Send the fixture to `POST /api/v1/sources/demo_logs/inputs/demo_http/events` with key `showcase-demo-fixture-v1` and verify a new `COMMITTED` ingestion request.
 6. Verify body digest and byte count, committed counts, four ingestion-origin segments, six ingestion row groups, object digests, footer metadata, direct references, computed source summary, and paginated dead-letter entries through the HTTP API.
-7. Verify every `@ingest_time` equals the ingest request's durable creation time and identical records at different positions have distinct event identities.
+7. Verify every `@ingestion_time` equals the ingestion request's durable creation time and identical records at different positions have distinct event identities.
 8. Verify successful pre-compaction verification releases the Compose dependency for one maintenance-only Elucid instance, wait for exactly two committed compaction runs, and verify two active 600-row output segments plus four superseded ingestion segments without changing rows or event-time bounds.
 9. Execute `source demo_logs | filter status >= 400 | project @event_time, service, status, path | sort by -@event_time | take 100` and compare exact typed rows.
 10. Execute `source demo_logs | project dynamic_status = try_cast(experimental_status as int32) | filter dynamic_status >= 500` and verify exactly one non-null `int32` value equal to `503` plus one `QUERY_FIELD_RESOLVED_FROM_REMAINDER` warning at the field span; execute the equivalent expression with `rest("experimental_status")` and verify the same row without that warning. Verify that `rest_exists("explicit_null")` is true and `rest("explicit_null") != null` is true for the present JSON-null value while both expressions distinguish an absent key.
@@ -202,24 +202,24 @@ The complete showcase MUST pass this clean-state scenario:
 13. Reject an unaliased aggregate, an unaliased computed projection, and an unknown system field with exact diagnostic codes and UTF-8 spans.
 14. Verify row and byte truncation, selected-segment and selected-byte limits, query timeout, cancellation cleanup, and typed empty-source aggregation.
 15. Restart Elucid after deleting staging and spill contents and repeat successful queries with identical rows and statistics.
-16. Send the same body and key again and verify a replay with unchanged ingest-request identity, event count, segment count, and stored-object count; send another body under that key and verify `IDEMPOTENCY_KEY_REUSED`.
+16. Send the same body and key again and verify a replay with unchanged ingestion-request identity, event count, segment count, and stored-object count; send another body under that key and verify `IDEMPOTENCY_KEY_REUSED`.
 17. Interrupt ingestion at every [failure-outcome boundary](ingestion.md#12-failure-outcomes), retry the complete body with the same key, and verify the required durable result, publication atomicity, fencing, stable event identities, and exact-key orphan cleanup.
-18. Run two serving Elucid instances against the same PostgreSQL and MinIO services, route concurrent new requests and retries across both, terminate an active owner, and verify one ingest request and at most one commit per active input-scoped idempotency reservation.
+18. Run two serving Elucid instances against the same PostgreSQL and MinIO services, route concurrent new requests and retries across both, terminate an active owner, and verify one ingestion request and at most one commit per active input-scoped idempotency reservation.
 19. Make a required dependency unavailable and verify readiness becomes `NOT_READY` while liveness remains `LIVE`, then recovers without process restart.
 20. Open the application in Chromium, run filtering and aggregation queries, inspect a JSON remainder field and dead-letter entries, verify error and warning code frames, and observe completed ingestion.
-21. In isolated catalog state, apply schema version `1` with non-null `message`, ingest one event, apply active schema version `2` adding nullable `region` while the active profile still targets version `1`, and verify stable `message` field identity plus typed null `region`; then activate profile revision `2` targeting schema version `2`, ingest one event with `region = "eu-west-1"`, and verify one null and one value in a mixed-schema snapshot. An attempted active schema changing `message` from `utf8` to `int64` MUST fail without mutation.
+21. In isolated catalog state, apply schema version `1` with non-null `message`, ingestion one event, apply active schema version `2` adding nullable `region` while the active profile still targets version `1`, and verify stable `message` field identity plus typed null `region`; then activate profile revision `2` targeting schema version `2`, ingestion one event with `region = "eu-west-1"`, and verify one null and one value in a mixed-schema snapshot. An attempted active schema changing `message` from `utf8` to `int64` MUST fail without mutation.
 22. In isolated catalog state, publish one event, capture a query snapshot, publish a second request whose event time precedes the first segment, and verify that the captured snapshot returns only the first event while a new snapshot returns both; the original segment and object MUST remain unchanged and source minimum event time MUST move to the late event.
 23. In isolated storage state, create the four fixture segments under a serving-only instance, capture a query snapshot, then start two maintenance instances and verify exactly two committed compaction runs with disjoint day-scoped inputs. Verify that the captured snapshot reads the four input objects, a new snapshot reads the two output objects, both return identical explicitly sorted rows, and no snapshot observes a partial replacement. In a separate state with four eligible segments sharing one event-time bucket and one data-expiry bucket and `maximum_input_segments = 2`, verify that two runs may concurrently reserve disjoint inputs.
 24. Verify exact compaction provenance, unchanged event identities and field values, equal input and output row counts, four `SUPERSEDED` input segments, two `ACTIVE` output segments, unchanged source event count and bounds, and updated active segment, object, and byte statistics. Under isolated profiles, verify that the uncompressed-byte target and row maximum independently cause output splits. Before each reclamation time, verify every input object remains `PUBLISHED`; for an eligible superseded fixture, verify exact-key deletion and retained PostgreSQL provenance.
 25. Interrupt compaction at every [failure-outcome boundary](compaction.md#8-failure-outcomes), terminate an active maintenance owner, and verify fencing, reservation release, unchanged input visibility before publication, atomic visibility after publication, abandoned-output cleanup, and recovery by another maintenance instance.
 26. In isolated storage state, create compaction candidates for one source, schema, and event-time day across two UTC data-expiry buckets. Verify that no run mixes buckets, each output deadline equals its maximum input deadline, and repeated compaction within one bucket never moves a deadline into the next bucket or extends any input deadline by one day or more.
-27. Pause a new ingest attempt after claim until `server.request_timeout_seconds` expires, verify `408 REQUEST_TIMEOUT` identifies the ingest request while the attempt retains its staging resources and continues, obtain `IN_PROGRESS` from a concurrent same-key retry, release the attempt, and verify one commit plus `REPLAY_COMMITTED` without a replacement attempt.
-28. Under an isolated short attempt timeout, prevent pre-publication progress until `deadline_at`, verify the attempt becomes `FAILED` with `INGEST_ATTEMPT_TIMEOUT`, unpublished outputs and local resources are released, the request becomes `RETRYABLE`, and a same-key retry creates one replacement attempt before retry expiry. Repeat with `deadline_at = retry_expires_at` and verify terminal `INGEST_RETRY_WINDOW_EXPIRED`.
-29. Under an isolated short retention profile, verify a `RETRYABLE` request becomes `FAILED` with `INGEST_RETRY_WINDOW_EXPIRED`, its terminal replay remains stable until idempotency-reservation expiry, maintenance deletes the expired reservation without deleting the request, and the same input and key create a new ingest-request identity.
+27. Pause a new ingestion attempt after claim until `server.request_timeout_seconds` expires, verify `408 REQUEST_TIMEOUT` identifies the ingestion request while the attempt retains its staging resources and continues, obtain `IN_PROGRESS` from a concurrent same-key retry, release the attempt, and verify one commit plus `REPLAY_COMMITTED` without a replacement attempt.
+28. Under an isolated short attempt timeout, prevent pre-publication progress until `deadline_at`, verify the attempt becomes `FAILED` with `INGESTION_ATTEMPT_TIMEOUT`, unpublished outputs and local resources are released, the request becomes `RETRYABLE`, and a same-key retry creates one replacement attempt before retry expiry. Repeat with `deadline_at = retry_expires_at` and verify terminal `INGESTION_RETRY_WINDOW_EXPIRED`.
+29. Under an isolated short retention profile, verify a `RETRYABLE` request becomes `FAILED` with `INGESTION_RETRY_WINDOW_EXPIRED`, its terminal replay remains stable until idempotency-reservation expiry, maintenance deletes the expired reservation without deleting the request, and the same input and key create a new ingestion-request identity.
 30. Under an isolated short retention profile, capture a query snapshot before segment expiration and verify it completes from the original exact object while a later snapshot excludes the atomically expired segment. Verify object reclamation only after the query-snapshot grace period and source summaries derived from remaining `ACTIVE` segments.
 31. Configure each retention batch limit to two and create five eligible items of every kind. Verify one invocation drains each kind through three bounded transactions. Advance a controlled monotonic clock to the task-duration bound after one batch, verify no second batch begins, and verify the next scheduled invocation resumes the backlog.
 32. Verify a dead-letter object remains readable before its retention expiry, returns `DEAD_LETTER_EXPIRED` after `DELETE_PENDING` or `DELETED`, and retains its commit reference until provenance pruning.
-33. Build a closed two-level compaction provenance graph, expire and reclaim every output, then verify bounded leaf-to-root pruning deletes compaction metadata before ingestion metadata, never deletes a referenced or active row, and makes a pruned ingest-request identity return `INGEST_REQUEST_NOT_FOUND`.
+33. Build a closed two-level compaction provenance graph, expire and reclaim every output, then verify bounded leaf-to-root pruning deletes compaction metadata before ingestion metadata, never deletes a referenced or active row, and makes a pruned ingestion-request identity return `INGESTION_REQUEST_NOT_FOUND`.
 34. Validate all network-trust modes. Verify `LOOPBACK_ONLY` rejects a non-loopback bind, `LOCAL_CONTAINER` requires a loopback browser origin, both local modes admit unauthenticated product and metrics requests, and `TRUSTED_NETWORK` requires an HTTPS browser origin plus a bearer secret. Verify missing and invalid bearer credentials produce indistinguishable `AUTHENTICATION_REQUIRED` responses before ingestion body admission and metrics collection, valid credentials admit both, and the documented Prometheus configuration loads the credential through `authorization.credentials_file` without embedding it.
 
 Repository verification MUST run Rust formatting, compiler warnings as errors, Clippy, selected unit tests for pure parsing and boundary logic, PostgreSQL integration tests for ingestion and compaction transactional invariants, MinIO integration tests for object and reclamation semantics, end-to-end API verification, frontend type checking and linting, focused frontend behavior tests, one browser smoke test, deterministic contract generation, and documentation smoke verification.

@@ -10,7 +10,7 @@ use crate::stage_error::StageError;
 
 /// Storage backend configuration.
 ///
-/// Used by callers to decide which sink to construct. The `ingest()` function
+/// Used by callers to decide which sink to construct. The `run_ingestion()` function
 /// itself is generic over any [`futures::Sink<RecordBatch>`]; this type is a
 /// convenience for building the right sink.
 #[derive(Debug)]

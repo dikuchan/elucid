@@ -5,11 +5,11 @@ use crate::canonical::{
     profile_materialized_parts, schema_materialized, schema_materialized_parts,
     stored_input_materialized, stored_profile_declaration, stored_schema_declaration,
 };
-use crate::manifest::{ManifestIngestProfileRevision, ManifestInput};
+use crate::manifest::{ManifestIngestionProfileRevision, ManifestInput};
 use crate::{
     CatalogApplicationError, CatalogManifest, CatalogPath, DeclarationDigest, DefinitionDigests,
-    EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestProfile, IngestProfileRevision,
-    IngestProfileRevisionId, Input, InputId, LogicalType, MaterializedDigest, Nullability,
+    EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestionProfile, IngestionProfileRevision,
+    IngestionProfileRevisionId, Input, InputId, LogicalType, MaterializedDigest, Nullability,
     ProfileRevision, Schema, SchemaId, SchemaIncompatibility, SchemaVersion, Source, SourceId,
     UserField,
 };
@@ -66,7 +66,7 @@ pub trait CatalogIdentityGenerator {
     fn generate_schema_id(&mut self) -> SchemaId;
     fn generate_field_id(&mut self) -> FieldId;
     fn generate_input_id(&mut self) -> InputId;
-    fn generate_ingest_profile_revision_id(&mut self) -> IngestProfileRevisionId;
+    fn generate_ingestion_profile_revision_id(&mut self) -> IngestionProfileRevisionId;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,8 +151,8 @@ impl PlannedSchemaDefinition {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct PlannedIngestProfileDefinition {
-    ingest_profile_revision_id: IngestProfileRevisionId,
+pub struct PlannedIngestionProfileDefinition {
+    ingestion_profile_revision_id: IngestionProfileRevisionId,
     revision: ProfileRevision,
     disposition: CatalogEntityDisposition,
     declaration: CanonicalJson,
@@ -161,10 +161,10 @@ pub struct PlannedIngestProfileDefinition {
     materialized_digest: MaterializedDigest,
 }
 
-impl PlannedIngestProfileDefinition {
+impl PlannedIngestionProfileDefinition {
     #[must_use]
-    pub const fn ingest_profile_revision_id(&self) -> IngestProfileRevisionId {
-        self.ingest_profile_revision_id
+    pub const fn ingestion_profile_revision_id(&self) -> IngestionProfileRevisionId {
+        self.ingestion_profile_revision_id
     }
 
     #[must_use]
@@ -249,7 +249,7 @@ pub struct CatalogApplicationPlan {
     source_definition: PlannedSourceDefinition,
     schema_definitions: Box<[PlannedSchemaDefinition]>,
     input_definitions: Box<[PlannedInputDefinition]>,
-    ingest_profile_definitions: Box<[PlannedIngestProfileDefinition]>,
+    ingestion_profile_definitions: Box<[PlannedIngestionProfileDefinition]>,
 }
 
 impl CatalogApplicationPlan {
@@ -279,8 +279,8 @@ impl CatalogApplicationPlan {
     }
 
     #[must_use]
-    pub fn ingest_profile_definitions(&self) -> &[PlannedIngestProfileDefinition] {
-        &self.ingest_profile_definitions
+    pub fn ingestion_profile_definitions(&self) -> &[PlannedIngestionProfileDefinition] {
+        &self.ingestion_profile_definitions
     }
 }
 
@@ -323,7 +323,7 @@ pub fn plan_catalog_application(
     let PlannedInputs {
         inputs,
         input_definitions,
-        ingest_profile_definitions,
+        ingestion_profile_definitions,
     } = plan_inputs(manifest, current, source_id, &schemas, identities)?;
 
     let mutable_change = current.is_some_and(|source| {
@@ -350,7 +350,7 @@ pub fn plan_catalog_application(
         || input_definitions
             .iter()
             .any(|definition| definition.disposition == CatalogEntityDisposition::Create)
-        || ingest_profile_definitions
+        || ingestion_profile_definitions
             .iter()
             .any(|definition| definition.disposition == CatalogEntityDisposition::Create);
     let outcome = if created_immutable {
@@ -372,7 +372,7 @@ pub fn plan_catalog_application(
         },
         schema_definitions: schema_definitions.into_boxed_slice(),
         input_definitions: input_definitions.into_boxed_slice(),
-        ingest_profile_definitions: ingest_profile_definitions.into_boxed_slice(),
+        ingestion_profile_definitions: ingestion_profile_definitions.into_boxed_slice(),
     })
 }
 
@@ -565,7 +565,7 @@ fn plan_inputs(
             mut definitions,
         } = plan_profiles(
             declared_input,
-            &declarations.ingest_profiles,
+            &declarations.ingestion_profiles,
             stored,
             input_id,
             schemas,
@@ -574,12 +574,14 @@ fn plan_inputs(
         )?;
         let active_profile_revision_id = revisions
             .iter()
-            .find(|revision| revision.revision() == declared_input.active_ingest_profile_revision)
-            .map(IngestProfileRevision::id)
+            .find(|revision| {
+                revision.revision() == declared_input.active_ingestion_profile_revision
+            })
+            .map(IngestionProfileRevision::id)
             .ok_or_else(|| {
                 CatalogApplicationError::corruption(
                     &path,
-                    "validated active ingest profile is absent from materialized history",
+                    "validated active ingestion profile is absent from materialized history",
                 )
             })?;
         let input = Input::new(
@@ -606,14 +608,14 @@ fn plan_inputs(
     Ok(PlannedInputs {
         inputs,
         input_definitions,
-        ingest_profile_definitions: profile_definitions,
+        ingestion_profile_definitions: profile_definitions,
     })
 }
 
 struct PlannedInputs {
     inputs: Vec<Input>,
     input_definitions: Vec<PlannedInputDefinition>,
-    ingest_profile_definitions: Vec<PlannedIngestProfileDefinition>,
+    ingestion_profile_definitions: Vec<PlannedIngestionProfileDefinition>,
 }
 
 fn plan_profiles(
@@ -626,22 +628,26 @@ fn plan_profiles(
     input_path: &str,
 ) -> Result<PlannedProfiles, CatalogApplicationError> {
     let stored_revisions = stored_input.map_or(&[][..], Input::profile_revisions);
-    if stored_revisions.len() > declared_input.ingest_profile_revisions.len() {
+    if stored_revisions.len() > declared_input.ingestion_profile_revisions.len() {
         return Err(CatalogApplicationError::HistoryDiverged {
-            path: CatalogPath::new(format!("{input_path}.ingest_profile_revisions")),
+            path: CatalogPath::new(format!("{input_path}.ingestion_profile_revisions")),
             message: format!(
                 "manifest declares {} revisions but persisted history contains {}",
-                declared_input.ingest_profile_revisions.len(),
+                declared_input.ingestion_profile_revisions.len(),
                 stored_revisions.len()
             )
             .into_boxed_str(),
         });
     }
 
-    let mut revisions = Vec::with_capacity(declared_input.ingest_profile_revisions.len());
-    let mut definitions = Vec::with_capacity(declared_input.ingest_profile_revisions.len());
-    for (index, declared_revision) in declared_input.ingest_profile_revisions.iter().enumerate() {
-        let path = format!("{input_path}.ingest_profile_revisions[{index}]");
+    let mut revisions = Vec::with_capacity(declared_input.ingestion_profile_revisions.len());
+    let mut definitions = Vec::with_capacity(declared_input.ingestion_profile_revisions.len());
+    for (index, declared_revision) in declared_input
+        .ingestion_profile_revisions
+        .iter()
+        .enumerate()
+    {
+        let path = format!("{input_path}.ingestion_profile_revisions[{index}]");
         let declaration = declarations[index].clone();
         let target_schema = schema_by_version(schemas, declared_revision.target_schema_version)
             .ok_or_else(|| {
@@ -678,7 +684,7 @@ fn plan_profiles(
                 )
             }
             None => {
-                let revision_id = identities.generate_ingest_profile_revision_id();
+                let revision_id = identities.generate_ingestion_profile_revision_id();
                 let profile = materialize_profile(declared_revision, target_schema, &path)?;
                 let materialized = profile_materialized_parts(
                     revision_id,
@@ -688,7 +694,7 @@ fn plan_profiles(
                     &profile,
                     &path,
                 )?;
-                let revision = IngestProfileRevision::new(
+                let revision = IngestionProfileRevision::new(
                     revision_id,
                     input_id,
                     declared_revision.revision,
@@ -699,8 +705,8 @@ fn plan_profiles(
                 (revision, materialized, CatalogEntityDisposition::Create)
             }
         };
-        definitions.push(PlannedIngestProfileDefinition {
-            ingest_profile_revision_id: revision.id(),
+        definitions.push(PlannedIngestionProfileDefinition {
+            ingestion_profile_revision_id: revision.id(),
             revision: revision.revision(),
             disposition,
             declaration: declaration.json,
@@ -717,15 +723,15 @@ fn plan_profiles(
 }
 
 struct PlannedProfiles {
-    revisions: Vec<IngestProfileRevision>,
-    definitions: Vec<PlannedIngestProfileDefinition>,
+    revisions: Vec<IngestionProfileRevision>,
+    definitions: Vec<PlannedIngestionProfileDefinition>,
 }
 
 fn materialize_profile(
-    revision: &ManifestIngestProfileRevision,
+    revision: &ManifestIngestionProfileRevision,
     target_schema: &Schema,
     path: &str,
-) -> Result<IngestProfile, CatalogApplicationError> {
+) -> Result<IngestionProfile, CatalogApplicationError> {
     let mappings = revision
         .mappings
         .iter()
@@ -750,7 +756,7 @@ fn materialize_profile(
                 .map_err(|error| CatalogApplicationError::manifest_model(path, error))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    IngestProfile::new(
+    IngestionProfile::new(
         revision.maximum_record_bytes,
         EventTimeMapping::new(
             revision.event_time_mapping.json_pointer.clone(),
@@ -776,7 +782,7 @@ fn verify_stored_input(input: &Input, path: &str) -> Result<(), CatalogApplicati
 }
 
 fn verify_stored_profile(
-    revision: &IngestProfileRevision,
+    revision: &IngestionProfileRevision,
     target_schema: &Schema,
     path: &str,
 ) -> Result<(), CatalogApplicationError> {

@@ -11,21 +11,21 @@ use crate::wal;
 use crate::wal::Wal;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IngestSummary {
+pub struct IngestionSummary {
     pub read_line_count: u64,
-    pub ingested_row_count: u64,
+    pub accepted_row_count: u64,
     pub dead_letter_count: u64,
     pub written_file_count: u64,
 }
 
-pub async fn ingest<I, O, W, DL, C>(
+pub async fn run_ingestion<I, O, W, DL, C>(
     source: I,
     schema: Schema,
     sink: &mut O,
     batch_size: usize,
     wal: &mut W,
     dead_letter_writer: &mut DeadLetterWriter<DL>,
-) -> Result<IngestSummary, StageError>
+) -> Result<IngestionSummary, StageError>
 where
     I: futures::Stream<Item = Result<RawEvent<C>, StageError>> + Unpin,
     O: futures::Sink<RecordBatch, Error = StageError> + Unpin,
@@ -37,7 +37,7 @@ where
     let mut batcher = Batcher::new(schema.clone(), batch_size);
 
     let mut read_line_count: u64 = 0;
-    let mut ingested_row_count: u64 = 0;
+    let mut accepted_row_count: u64 = 0;
     let mut dead_letter_count: u64 = 0;
 
     let mut last_wal_offset = wal::Offset(0);
@@ -67,7 +67,7 @@ where
                 if let Some(batch) = batcher.push(event)? {
                     let row_count = batch.num_rows() as u64;
                     sink.send(batch).await?;
-                    ingested_row_count += row_count;
+                    accepted_row_count += row_count;
                     wal.checkpoint(last_wal_offset)
                         .await
                         .map_err(StageError::Wal)?;
@@ -86,7 +86,7 @@ where
     if let Some(batch) = batcher.flush()? {
         let row_count = batch.num_rows() as u64;
         sink.send(batch).await?;
-        ingested_row_count += row_count;
+        accepted_row_count += row_count;
         wal.checkpoint(last_wal_offset)
             .await
             .map_err(StageError::Wal)?;
@@ -94,9 +94,9 @@ where
 
     sink.close().await?;
 
-    Ok(IngestSummary {
+    Ok(IngestionSummary {
         read_line_count,
-        ingested_row_count,
+        accepted_row_count,
         dead_letter_count,
         written_file_count: 0,
     })
@@ -187,12 +187,12 @@ mod tests {
         let mut wal = NoopWal::new();
         let mut dead_letter = DeadLetterWriter::new(VecWriter::new());
 
-        let summary = ingest(source, schema, &mut sink, 3, &mut wal, &mut dead_letter)
+        let summary = run_ingestion(source, schema, &mut sink, 3, &mut wal, &mut dead_letter)
             .await
             .expect("pipeline");
 
         assert_eq!(summary.read_line_count, 5);
-        assert_eq!(summary.ingested_row_count, 5);
+        assert_eq!(summary.accepted_row_count, 5);
         assert_eq!(summary.dead_letter_count, 0);
         assert_eq!(summary.written_file_count, 0); // TODO: sink doesn't expose count through trait.
         assert_eq!(count_parquet_files(tmp.path()), 2);
@@ -216,12 +216,12 @@ NOT_JSON
         let mut wal = NoopWal::new();
         let mut dead_letter = DeadLetterWriter::new(VecWriter::new());
 
-        let summary = ingest(source, schema, &mut sink, 10, &mut wal, &mut dead_letter)
+        let summary = run_ingestion(source, schema, &mut sink, 10, &mut wal, &mut dead_letter)
             .await
             .expect("pipeline");
 
         assert_eq!(summary.read_line_count, 4);
-        assert_eq!(summary.ingested_row_count, 3);
+        assert_eq!(summary.accepted_row_count, 3);
         assert_eq!(summary.dead_letter_count, 1);
         assert_eq!(count_parquet_files(tmp.path()), 1);
     }
@@ -238,12 +238,12 @@ NOT_JSON
         let mut wal = NoopWal::new();
         let mut dead_letter = DeadLetterWriter::new(VecWriter::new());
 
-        let summary = ingest(source, schema, &mut sink, 10, &mut wal, &mut dead_letter)
+        let summary = run_ingestion(source, schema, &mut sink, 10, &mut wal, &mut dead_letter)
             .await
             .expect("pipeline");
 
         assert_eq!(summary.read_line_count, 0);
-        assert_eq!(summary.ingested_row_count, 0);
+        assert_eq!(summary.accepted_row_count, 0);
         assert_eq!(summary.dead_letter_count, 0);
         assert_eq!(count_parquet_files(tmp.path()), 0);
     }

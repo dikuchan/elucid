@@ -140,7 +140,7 @@ pub enum CatalogApplicationError {
         message: Box<str>,
     },
 
-    #[error("ingest profile target is invalid at {path}: {message}")]
+    #[error("ingestion profile target is invalid at {path}: {message}")]
     ProfileTargetMismatch {
         path: CatalogPath,
         message: Box<str>,

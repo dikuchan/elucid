@@ -537,7 +537,7 @@ struct RawRetentionConfiguration {
     idempotency_retention_seconds: u64,
     event_data_retention_seconds: u64,
     dead_letter_retention_seconds: u64,
-    ingest_provenance_retention_seconds: u64,
+    ingestion_provenance_retention_seconds: u64,
     compaction_provenance_retention_seconds: u64,
     scan_interval_seconds: u64,
     maximum_task_duration_seconds: u64,
@@ -562,9 +562,9 @@ impl RawRetentionConfiguration {
                 self.dead_letter_retention_seconds,
                 field("retention.dead_letter_retention_seconds"),
             )?,
-            ingest_provenance_retention_seconds: Seconds::from_configuration(
-                self.ingest_provenance_retention_seconds,
-                field("retention.ingest_provenance_retention_seconds"),
+            ingestion_provenance_retention_seconds: Seconds::from_configuration(
+                self.ingestion_provenance_retention_seconds,
+                field("retention.ingestion_provenance_retention_seconds"),
             )?,
             compaction_provenance_retention_seconds: Seconds::from_configuration(
                 self.compaction_provenance_retention_seconds,

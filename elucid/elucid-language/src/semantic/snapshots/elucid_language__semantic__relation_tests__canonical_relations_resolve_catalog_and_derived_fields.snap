@@ -29,7 +29,7 @@ Pipeline {
                 },
             },
             Field {
-                name: "@ingest_time",
+                name: "@ingestion_time",
                 logical_type: Datetime,
                 nullability: NonNull,
                 origin: System {
@@ -127,7 +127,7 @@ Pipeline {
                         },
                     },
                     Field {
-                        name: "@ingest_time",
+                        name: "@ingestion_time",
                         logical_type: Datetime,
                         nullability: NonNull,
                         origin: System {

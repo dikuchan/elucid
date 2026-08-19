@@ -174,9 +174,9 @@ pub enum ConfigurationViolation {
     RetentionTaskDurationNotBelowScanInterval,
     AttemptTimeoutNotBelowIdempotencyRetention,
     IdempotencyRetentionDoesNotExceedAttemptStale,
-    IdempotencyRetentionExceedsIngestProvenance,
-    EventDataRetentionExceedsIngestProvenance,
-    DeadLetterRetentionExceedsIngestProvenance,
+    IdempotencyRetentionExceedsIngestionProvenance,
+    EventDataRetentionExceedsIngestionProvenance,
+    DeadLetterRetentionExceedsIngestionProvenance,
     IngestionStagingCapacityBelowMaximumRequest,
     QueryMemoryCapacityBelowMaximumResult,
     QuerySpillCapacityBelowMaximumResult,
@@ -254,14 +254,14 @@ impl std::fmt::Display for ConfigurationViolation {
             Self::IdempotencyRetentionDoesNotExceedAttemptStale => formatter.write_str(
                 "retention.idempotency_retention_seconds must exceed ingestion.attempt_stale_after_seconds",
             ),
-            Self::IdempotencyRetentionExceedsIngestProvenance => formatter.write_str(
-                "retention.idempotency_retention_seconds exceeds retention.ingest_provenance_retention_seconds",
+            Self::IdempotencyRetentionExceedsIngestionProvenance => formatter.write_str(
+                "retention.idempotency_retention_seconds exceeds retention.ingestion_provenance_retention_seconds",
             ),
-            Self::EventDataRetentionExceedsIngestProvenance => formatter.write_str(
-                "retention.event_data_retention_seconds exceeds retention.ingest_provenance_retention_seconds",
+            Self::EventDataRetentionExceedsIngestionProvenance => formatter.write_str(
+                "retention.event_data_retention_seconds exceeds retention.ingestion_provenance_retention_seconds",
             ),
-            Self::DeadLetterRetentionExceedsIngestProvenance => formatter.write_str(
-                "retention.dead_letter_retention_seconds exceeds retention.ingest_provenance_retention_seconds",
+            Self::DeadLetterRetentionExceedsIngestionProvenance => formatter.write_str(
+                "retention.dead_letter_retention_seconds exceeds retention.ingestion_provenance_retention_seconds",
             ),
             Self::IngestionStagingCapacityBelowMaximumRequest => formatter.write_str(
                 "ingestion.staging_capacity_bytes is below ingestion.maximum_request_body_bytes",

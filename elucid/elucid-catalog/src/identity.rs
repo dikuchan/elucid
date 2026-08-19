@@ -44,11 +44,12 @@ catalog_identity!(SourceId, Source);
 catalog_identity!(SchemaId, Schema);
 catalog_identity!(FieldId, Field);
 catalog_identity!(InputId, Input);
-catalog_identity!(IngestProfileRevisionId, IngestProfileRevision);
+catalog_identity!(IngestionProfileRevisionId, IngestionProfileRevision);
 
 impl FieldId {
     pub const EVENT_TIME: Self = Self(Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_0001));
-    pub const INGEST_TIME: Self = Self(Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_0002));
+    pub const INGESTION_TIME: Self =
+        Self(Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_0002));
     pub const EVENT_ID: Self = Self(Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_0003));
     pub const REMAINDER: Self = Self(Uuid::from_u128(0x0000_0000_0000_7000_8000_0000_0000_0004));
 
@@ -56,7 +57,7 @@ impl FieldId {
     pub const fn is_system(self) -> bool {
         matches!(
             self,
-            Self::EVENT_TIME | Self::INGEST_TIME | Self::EVENT_ID | Self::REMAINDER
+            Self::EVENT_TIME | Self::INGESTION_TIME | Self::EVENT_ID | Self::REMAINDER
         )
     }
 }

@@ -227,11 +227,11 @@ impl Schema {
             0,
         )?);
         fields.push(Field::system(
-            FieldId::INGEST_TIME,
-            "@ingest_time",
+            FieldId::INGESTION_TIME,
+            "@ingestion_time",
             LogicalType::Datetime,
             Nullability::NonNull,
-            FieldRole::IngestTime,
+            FieldRole::IngestionTime,
             1,
         )?);
         fields.push(Field::system(

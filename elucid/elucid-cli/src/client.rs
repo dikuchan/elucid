@@ -55,7 +55,7 @@ impl ProductClient {
         send(request).await
     }
 
-    pub(crate) async fn send_ingestion(
+    pub(crate) async fn submit_ingestion(
         &self,
         endpoint: &ProductEndpoint,
         source: &SourceName,

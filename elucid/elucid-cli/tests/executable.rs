@@ -18,7 +18,7 @@ fn executable_exposes_the_supported_command_tree() {
 
     assert!(help.status.success());
     let stdout = String::from_utf8(help.stdout).expect("help is UTF-8");
-    for command in ["server", "catalog", "ingest"] {
+    for command in ["server", "catalog", "ingestion"] {
         assert!(
             stdout
                 .lines()
@@ -116,14 +116,14 @@ fn catalog_apply_sends_exact_file_bytes_and_operator_authorization() {
 }
 
 #[test]
-fn ingest_send_sends_exact_standard_input_and_idempotency_key() {
+fn ingestion_submit_sends_exact_standard_input_and_idempotency_key() {
     let response = br#"{"state":"COMMITTED"}"#;
     let server = TestServer::start("201 Created", response, ResponseTiming::Immediate);
     let body = b"{\"status\":200}\r\n\r\n{\"status\":503}";
     let mut child = Command::new(ELUCID)
         .args([
-            "ingest",
-            "send",
+            "ingestion",
+            "submit",
             "--endpoint",
             server.endpoint(),
             "--source",
@@ -139,14 +139,14 @@ fn ingest_send_sends_exact_standard_input_and_idempotency_key() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("run ingest send");
+        .expect("run ingestion submit");
     child
         .stdin
         .take()
         .expect("child stdin")
         .write_all(body)
         .expect("write child stdin");
-    let output = child.wait_with_output().expect("wait for ingest send");
+    let output = child.wait_with_output().expect("wait for ingestion submit");
 
     assert!(output.status.success());
     assert_eq!(output.stdout, response);
@@ -175,13 +175,13 @@ fn remote_responses_have_stable_exit_categories() {
     assert_remote_exit(
         RemoteOperation::Ingestion,
         "422 Unprocessable Entity",
-        br#"{"error":{"code":"INGEST_REQUEST_FAILED"}}"#,
+        br#"{"error":{"code":"INGESTION_REQUEST_FAILED"}}"#,
         6,
     );
     assert_remote_exit(
         RemoteOperation::Ingestion,
         "409 Conflict",
-        br#"{"error":{"code":"INGEST_REQUEST_IN_PROGRESS"}}"#,
+        br#"{"error":{"code":"INGESTION_REQUEST_IN_PROGRESS"}}"#,
         4,
     );
     assert_remote_exit(
@@ -277,8 +277,8 @@ fn assert_remote_exit(
         }
         RemoteOperation::Ingestion => {
             command.args([
-                "ingest",
-                "send",
+                "ingestion",
+                "submit",
                 "--endpoint",
                 server.endpoint(),
                 "--source",

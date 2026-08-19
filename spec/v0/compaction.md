@@ -20,7 +20,7 @@ A committed compaction run MUST preserve the exact multiset of logical rows and 
 
 Every run MUST contain segments from exactly one source, one stored schema, one UTC event-time day, and one [data-expiry bucket](storage.md#1-terminology). It MUST consume at least `minimum_input_segments`, produce at least one output segment, and produce fewer output segments than it consumes.
 
-Every compaction-provenance edge MUST point to a segment locked as `ACTIVE` by the claim transaction before any output exists for that run. The resulting graph MUST be acyclic, and every path MUST terminate at an ingestion-origin segment and committed ingest commit. Committed runs, input associations, superseded segments, and deleted-object metadata MUST remain available for provenance traversal until eligible [provenance pruning](retention.md#6-provenance-pruning).
+Every compaction-provenance edge MUST point to a segment locked as `ACTIVE` by the claim transaction before any output exists for that run. The resulting graph MUST be acyclic, and every path MUST terminate at an ingestion-origin segment and committed ingestion commit. Committed runs, input associations, superseded segments, and deleted-object metadata MUST remain available for provenance traversal until eligible [provenance pruning](retention.md#6-provenance-pruning).
 
 PostgreSQL state MUST determine run ownership, provenance, reservation, and visibility. Object-store listing, process memory, and local files MUST NOT determine any compaction decision.
 

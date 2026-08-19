@@ -56,7 +56,7 @@ pub(crate) enum RootCommand {
     /// Manage catalog declarations through the product API.
     Catalog(CatalogCommand),
     /// Send events through the product API.
-    Ingest(IngestCommand),
+    Ingestion(IngestionCommand),
 }
 
 #[derive(Debug, Args)]
@@ -128,25 +128,25 @@ impl CatalogApplyCommand {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct IngestCommand {
+pub(crate) struct IngestionCommand {
     #[command(subcommand)]
-    command: IngestSubcommand,
+    command: IngestionSubcommand,
 }
 
-impl IngestCommand {
-    pub(crate) fn into_command(self) -> IngestSubcommand {
+impl IngestionCommand {
+    pub(crate) fn into_command(self) -> IngestionSubcommand {
         self.command
     }
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum IngestSubcommand {
-    /// Send one complete NDJSON entity body.
-    Send(IngestSendCommand),
+pub(crate) enum IngestionSubcommand {
+    /// Submit one complete NDJSON entity body.
+    Submit(IngestionSubmitCommand),
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct IngestSendCommand {
+pub(crate) struct IngestionSubmitCommand {
     /// Elucid HTTP base URL.
     #[arg(long, value_name = "BASE_URL")]
     endpoint: ProductEndpoint,
@@ -176,7 +176,7 @@ pub(crate) struct IngestSendCommand {
     timeout_seconds: ClientTimeoutSeconds,
 }
 
-impl IngestSendCommand {
+impl IngestionSubmitCommand {
     pub(crate) fn into_parts(
         self,
     ) -> (

@@ -4,7 +4,7 @@ members = [
     "elucid-catalog",
     "elucid-cli",
     "elucid-engine",
-    "elucid-ingest",
+    "elucid-ingestion",
     "elucid-language",
     "elucid-service",
     "elucid-tests",
@@ -52,6 +52,6 @@ yaml-rust2 = { version = "0.11.1", default-features = false }
 
 elucid-catalog = { path = "elucid-catalog" }
 elucid-engine = { path = "elucid-engine" }
-elucid-ingest = { path = "elucid-ingest" }
+elucid-ingestion = { path = "elucid-ingestion" }
 elucid-language = { path = "elucid-language" }
 elucid-service = { path = "elucid-service" }

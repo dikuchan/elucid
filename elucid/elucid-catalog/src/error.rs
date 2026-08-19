@@ -1,7 +1,7 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{FieldId, IngestProfileRevisionId, InputId, SchemaId, SourceId};
+use crate::{FieldId, IngestionProfileRevisionId, InputId, SchemaId, SourceId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -10,7 +10,7 @@ pub enum IdentityKind {
     Schema,
     Field,
     Input,
-    IngestProfileRevision,
+    IngestionProfileRevision,
 }
 
 impl std::fmt::Display for IdentityKind {
@@ -20,7 +20,7 @@ impl std::fmt::Display for IdentityKind {
             Self::Schema => "schema",
             Self::Field => "field",
             Self::Input => "input",
-            Self::IngestProfileRevision => "ingest profile revision",
+            Self::IngestionProfileRevision => "ingestion profile revision",
         };
         formatter.write_str(value)
     }
@@ -49,14 +49,14 @@ impl std::fmt::Display for NameKind {
 #[non_exhaustive]
 pub enum VersionKind {
     Schema,
-    IngestProfileRevision,
+    IngestionProfileRevision,
 }
 
 impl std::fmt::Display for VersionKind {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = match self {
             Self::Schema => "schema version",
-            Self::IngestProfileRevision => "ingest profile revision",
+            Self::IngestionProfileRevision => "ingestion profile revision",
         };
         formatter.write_str(value)
     }
@@ -107,30 +107,32 @@ pub enum CatalogModelError {
     #[error("profile maps field identity {field_id} more than once")]
     DuplicateProfileMappingTarget { field_id: FieldId },
 
-    #[error("input {input_id} must contain at least one ingest profile revision")]
+    #[error("input {input_id} must contain at least one ingestion profile revision")]
     EmptyProfileRevisionHistory { input_id: InputId },
 
     #[error(
-        "ingest profile revision {profile_revision_id} belongs to input {actual_input_id}, expected {expected_input_id}"
+        "ingestion profile revision {profile_revision_id} belongs to input {actual_input_id}, expected {expected_input_id}"
     )]
     ProfileRevisionInputMismatch {
-        profile_revision_id: IngestProfileRevisionId,
+        profile_revision_id: IngestionProfileRevisionId,
         expected_input_id: InputId,
         actual_input_id: InputId,
     },
 
-    #[error("ingest profile revisions must be contiguous: expected {expected}, got {actual}")]
+    #[error("ingestion profile revisions must be contiguous: expected {expected}, got {actual}")]
     ProfileRevisionsMustBeContiguous { expected: u64, actual: u64 },
 
-    #[error("ingest profile revision identity {profile_revision_id} occurs more than once")]
+    #[error("ingestion profile revision identity {profile_revision_id} occurs more than once")]
     DuplicateProfileRevisionIdentity {
-        profile_revision_id: IngestProfileRevisionId,
+        profile_revision_id: IngestionProfileRevisionId,
     },
 
-    #[error("active ingest profile revision {profile_revision_id} is absent from input {input_id}")]
+    #[error(
+        "active ingestion profile revision {profile_revision_id} is absent from input {input_id}"
+    )]
     ActiveProfileRevisionNotFound {
         input_id: InputId,
-        profile_revision_id: IngestProfileRevisionId,
+        profile_revision_id: IngestionProfileRevisionId,
     },
 
     #[error("a source must contain at least one schema")]
@@ -189,27 +191,27 @@ pub enum CatalogModelError {
     DuplicateInputName { name: String },
 
     #[error(
-        "ingest profile revision {profile_revision_id} targets schema {schema_id}, which is absent from the source"
+        "ingestion profile revision {profile_revision_id} targets schema {schema_id}, which is absent from the source"
     )]
     ProfileTargetSchemaNotFound {
-        profile_revision_id: IngestProfileRevisionId,
+        profile_revision_id: IngestionProfileRevisionId,
         schema_id: SchemaId,
     },
 
     #[error(
-        "ingest profile revision {profile_revision_id} maps field {field_id}, which is not a data field in schema {schema_id}"
+        "ingestion profile revision {profile_revision_id} maps field {field_id}, which is not a data field in schema {schema_id}"
     )]
     ProfileMappingTargetNotFound {
-        profile_revision_id: IngestProfileRevisionId,
+        profile_revision_id: IngestionProfileRevisionId,
         schema_id: SchemaId,
         field_id: FieldId,
     },
 
     #[error(
-        "ingest profile revision {profile_revision_id} has no mapping for field {field_id} in schema {schema_id}"
+        "ingestion profile revision {profile_revision_id} has no mapping for field {field_id} in schema {schema_id}"
     )]
     ProfileMappingMissing {
-        profile_revision_id: IngestProfileRevisionId,
+        profile_revision_id: IngestionProfileRevisionId,
         schema_id: SchemaId,
         field_id: FieldId,
     },

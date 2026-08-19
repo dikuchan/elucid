@@ -74,12 +74,12 @@ pub(crate) struct ManifestUserField {
 pub(crate) struct ManifestInput {
     pub(crate) name: InputName,
     pub(crate) kind: InputKind,
-    pub(crate) active_ingest_profile_revision: ProfileRevision,
-    pub(crate) ingest_profile_revisions: Box<[ManifestIngestProfileRevision]>,
+    pub(crate) active_ingestion_profile_revision: ProfileRevision,
+    pub(crate) ingestion_profile_revisions: Box<[ManifestIngestionProfileRevision]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ManifestIngestProfileRevision {
+pub(crate) struct ManifestIngestionProfileRevision {
     pub(crate) revision: ProfileRevision,
     pub(crate) target_schema_version: SchemaVersion,
     pub(crate) parser_kind: ParserKind,
@@ -114,7 +114,7 @@ pub(crate) struct ManifestDeclarations {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManifestInputDeclarations {
     pub(crate) input: DeclarationDocument,
-    pub(crate) ingest_profiles: Box<[DeclarationDocument]>,
+    pub(crate) ingestion_profiles: Box<[DeclarationDocument]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,13 +156,13 @@ struct RawUserField {
 struct RawInput {
     name: String,
     kind: RawInputKind,
-    active_ingest_profile_revision: u64,
-    ingest_profile_revisions: Vec<RawIngestProfileRevision>,
+    active_ingestion_profile_revision: u64,
+    ingestion_profile_revisions: Vec<RawIngestionProfileRevision>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawIngestProfileRevision {
+struct RawIngestionProfileRevision {
     revision: u64,
     target_schema_version: u64,
     parser_kind: RawParserKind,
@@ -303,20 +303,20 @@ impl ManifestDeclarations {
             .map(|(input_index, input)| {
                 let path = format!("source.inputs[{input_index}]");
                 let input_declaration = input_declaration(&input.name, input.kind, &path)?;
-                let ingest_profiles = input
-                    .ingest_profile_revisions
+                let ingestion_profiles = input
+                    .ingestion_profile_revisions
                     .iter()
                     .enumerate()
                     .map(|(revision_index, revision)| {
                         manifest_profile_declaration(
                             revision,
-                            &format!("{path}.ingest_profile_revisions[{revision_index}]"),
+                            &format!("{path}.ingestion_profile_revisions[{revision_index}]"),
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ManifestInputDeclarations {
                     input: input_declaration,
-                    ingest_profiles: ingest_profiles.into_boxed_slice(),
+                    ingestion_profiles: ingestion_profiles.into_boxed_slice(),
                 })
             })
             .collect::<Result<Vec<_>, CatalogApplicationError>>()?;
@@ -449,18 +449,18 @@ impl ManifestInput {
         let name = InputName::try_from(raw.name).map_err(|source| {
             CatalogApplicationError::manifest_model(format!("{path}.name"), source)
         })?;
-        if raw.ingest_profile_revisions.is_empty() {
+        if raw.ingestion_profile_revisions.is_empty() {
             return Err(CatalogApplicationError::manifest(
-                format!("{path}.ingest_profile_revisions"),
-                "ingest profile history must not be empty",
+                format!("{path}.ingestion_profile_revisions"),
+                "ingestion profile history must not be empty",
             ));
         }
         let revisions = raw
-            .ingest_profile_revisions
+            .ingestion_profile_revisions
             .into_iter()
             .enumerate()
             .map(|(revision_index, revision)| {
-                ManifestIngestProfileRevision::try_from_raw(
+                ManifestIngestionProfileRevision::try_from_raw(
                     revision,
                     input_index,
                     revision_index,
@@ -468,43 +468,43 @@ impl ManifestInput {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let active_ingest_profile_revision =
-            ProfileRevision::new(raw.active_ingest_profile_revision).map_err(|source| {
+        let active_ingestion_profile_revision =
+            ProfileRevision::new(raw.active_ingestion_profile_revision).map_err(|source| {
                 CatalogApplicationError::manifest_model(
-                    format!("{path}.active_ingest_profile_revision"),
+                    format!("{path}.active_ingestion_profile_revision"),
                     source,
                 )
             })?;
         if !revisions
             .iter()
-            .any(|revision| revision.revision == active_ingest_profile_revision)
+            .any(|revision| revision.revision == active_ingestion_profile_revision)
         {
             return Err(CatalogApplicationError::manifest(
-                format!("{path}.active_ingest_profile_revision"),
+                format!("{path}.active_ingestion_profile_revision"),
                 format!(
-                    "ingest profile revision {} is absent from {path}.ingest_profile_revisions",
-                    active_ingest_profile_revision.get()
+                    "ingestion profile revision {} is absent from {path}.ingestion_profile_revisions",
+                    active_ingestion_profile_revision.get()
                 ),
             ));
         }
         Ok(Self {
             name,
             kind: raw.kind.into(),
-            active_ingest_profile_revision,
-            ingest_profile_revisions: revisions.into_boxed_slice(),
+            active_ingestion_profile_revision,
+            ingestion_profile_revisions: revisions.into_boxed_slice(),
         })
     }
 }
 
-impl ManifestIngestProfileRevision {
+impl ManifestIngestionProfileRevision {
     fn try_from_raw(
-        raw: RawIngestProfileRevision,
+        raw: RawIngestionProfileRevision,
         input_index: usize,
         revision_index: usize,
         schemas: &[ManifestSchema],
     ) -> Result<Self, CatalogApplicationError> {
         let path =
-            format!("source.inputs[{input_index}].ingest_profile_revisions[{revision_index}]");
+            format!("source.inputs[{input_index}].ingestion_profile_revisions[{revision_index}]");
         let revision = ProfileRevision::new(raw.revision).map_err(|source| {
             CatalogApplicationError::manifest_model(format!("{path}.revision"), source)
         })?;
@@ -513,7 +513,7 @@ impl ManifestIngestProfileRevision {
             return Err(CatalogApplicationError::manifest(
                 format!("{path}.revision"),
                 format!(
-                    "ingest profile revisions must be contiguous: expected {expected}, got {}",
+                    "ingestion profile revisions must be contiguous: expected {expected}, got {}",
                     revision.get()
                 ),
             ));

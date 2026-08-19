@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::{
-    CatalogModelError, DeclarationDigest, DefinitionDigests, FieldId, IngestProfileRevisionId,
+    CatalogModelError, DeclarationDigest, DefinitionDigests, FieldId, IngestionProfileRevisionId,
     InputId, InputName, JsonPointer, MaterializedDigest, MaximumRecordBytes, ProfileRevision,
     SchemaId, SourceId, VersionKind,
 };
@@ -176,13 +176,13 @@ impl EventTimeMapping {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct IngestProfile {
+pub struct IngestionProfile {
     maximum_record_bytes: MaximumRecordBytes,
     event_time_mapping: EventTimeMapping,
     mappings: Box<[FieldMapping]>,
 }
 
-impl IngestProfile {
+impl IngestionProfile {
     pub fn new(
         maximum_record_bytes: MaximumRecordBytes,
         event_time_mapping: EventTimeMapping,
@@ -246,24 +246,24 @@ impl IngestProfile {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct IngestProfileRevision {
-    id: IngestProfileRevisionId,
+pub struct IngestionProfileRevision {
+    id: IngestionProfileRevisionId,
     input_id: InputId,
     revision: ProfileRevision,
     target_schema_id: SchemaId,
     digests: DefinitionDigests,
-    profile: IngestProfile,
+    profile: IngestionProfile,
 }
 
-impl IngestProfileRevision {
+impl IngestionProfileRevision {
     #[must_use]
     pub const fn new(
-        id: IngestProfileRevisionId,
+        id: IngestionProfileRevisionId,
         input_id: InputId,
         revision: ProfileRevision,
         target_schema_id: SchemaId,
         digests: DefinitionDigests,
-        profile: IngestProfile,
+        profile: IngestionProfile,
     ) -> Self {
         Self {
             id,
@@ -276,7 +276,7 @@ impl IngestProfileRevision {
     }
 
     #[must_use]
-    pub const fn id(&self) -> IngestProfileRevisionId {
+    pub const fn id(&self) -> IngestionProfileRevisionId {
         self.id
     }
 
@@ -306,7 +306,7 @@ impl IngestProfileRevision {
     }
 
     #[must_use]
-    pub const fn profile(&self) -> &IngestProfile {
+    pub const fn profile(&self) -> &IngestionProfile {
         &self.profile
     }
 }
@@ -319,7 +319,7 @@ pub struct Input {
     name: InputName,
     kind: InputKind,
     digests: DefinitionDigests,
-    profile_revisions: Box<[IngestProfileRevision]>,
+    profile_revisions: Box<[IngestionProfileRevision]>,
     active_profile_revision_index: usize,
 }
 
@@ -330,8 +330,8 @@ impl Input {
         name: InputName,
         kind: InputKind,
         digests: DefinitionDigests,
-        active_profile_revision_id: IngestProfileRevisionId,
-        profile_revisions: Vec<IngestProfileRevision>,
+        active_profile_revision_id: IngestionProfileRevisionId,
+        profile_revisions: Vec<IngestionProfileRevision>,
     ) -> Result<Self, CatalogModelError> {
         if profile_revisions.is_empty() {
             return Err(CatalogModelError::EmptyProfileRevisionHistory { input_id: id });
@@ -413,12 +413,12 @@ impl Input {
     }
 
     #[must_use]
-    pub fn profile_revisions(&self) -> &[IngestProfileRevision] {
+    pub fn profile_revisions(&self) -> &[IngestionProfileRevision] {
         &self.profile_revisions
     }
 
     #[must_use]
-    pub fn active_profile_revision(&self) -> &IngestProfileRevision {
+    pub fn active_profile_revision(&self) -> &IngestionProfileRevision {
         &self.profile_revisions[self.active_profile_revision_index]
     }
 }
@@ -428,6 +428,6 @@ fn expected_sequence_value(index: usize) -> Result<u64, CatalogModelError> {
         .ok()
         .and_then(|value| value.checked_add(1))
         .ok_or(CatalogModelError::HistoryLengthExceedsVersionRange {
-            kind: VersionKind::IngestProfileRevision,
+            kind: VersionKind::IngestionProfileRevision,
         })
 }

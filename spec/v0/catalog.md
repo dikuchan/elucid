@@ -11,8 +11,8 @@
 | Schema | An immutable ordered field definition identified by `schema_id` and a source-scoped positive `schema_version`. |
 | Active schema | The schema referenced by a source for query field resolution and adaptation of stored segments. |
 | Field | A resolved schema member with stable identity, name, logical type, nullability, role, and ordinal. |
-| Input | A named HTTP ingestion endpoint configuration owned by one source, with immutable ingest-profile history and one active revision. |
-| Ingest-profile revision | An immutable framing, mapping, conversion, and rejection contract that targets one schema. |
+| Input | A named HTTP ingestion endpoint configuration owned by one source, with immutable ingestion-profile history and one active revision. |
+| Ingestion-profile revision | An immutable framing, mapping, conversion, and rejection contract that targets one schema. |
 | Catalog manifest | The complete declarative catalog history and active pointers for exactly one source. |
 
 ## 2. Identity and names
@@ -23,7 +23,7 @@ Source, input, and user-field names MUST match `[A-Za-z_][A-Za-z0-9_]*`. A sourc
 
 Catalog validation MUST NOT reject a valid name because it is a query-language keyword. A reserved name MUST remain addressable through the [quoted-identifier syntax](query-language.md#2-lexical-grammar).
 
-Schema versions and ingest-profile revisions MUST begin at `1`, increase by `1`, and remain immutable. Removing an existing version or revision from catalog history is invalid.
+Schema versions and ingestion-profile revisions MUST begin at `1`, increase by `1`, and remain immutable. Removing an existing version or revision from catalog history is invalid.
 
 ## 3. Logical types
 
@@ -54,7 +54,7 @@ Every schema MUST contain the following system fields and MAY contain ordered us
 | Ordinal | Field identity | Name | Logical type | Nullability | Role |
 |---|---|---|---|---|---|
 | `0` | `00000000-0000-7000-8000-000000000001` | `@event_time` | `datetime` | `NON_NULL` | `EVENT_TIME` |
-| `1` | `00000000-0000-7000-8000-000000000002` | `@ingest_time` | `datetime` | `NON_NULL` | `INGEST_TIME` |
+| `1` | `00000000-0000-7000-8000-000000000002` | `@ingestion_time` | `datetime` | `NON_NULL` | `INGESTION_TIME` |
 | `2` | `00000000-0000-7000-8000-000000000003` | `@event_id` | `eid` | `NON_NULL` | `EVENT_ID` |
 | Final | `00000000-0000-7000-8000-000000000004` | `@rest` | `json` | `NULLABLE` | `REMAINDER` |
 
@@ -76,17 +76,17 @@ Compatibility MUST be validated from every declared occurrence of a field to the
 
 Every source MUST reference one active schema owned by that source. Activating a schema MUST prove that every declared schema can be adapted to it according to the [Query Engine schema-adaptation contract](query-engine.md#3-schema-adaptation). Activation MUST be atomic and MUST NOT remove immutable history.
 
-## 5. Inputs and ingest profiles
+## 5. Inputs and ingestion profiles
 
-Every input MUST contain `input_id`, `source_id`, name, input kind, immutable declaration and digest, one ordered ingest-profile history, and one active ingest-profile revision identity. Input kind MUST be `HTTP_NDJSON`.
+Every input MUST contain `input_id`, `source_id`, name, input kind, immutable declaration and digest, one ordered ingestion-profile history, and one active ingestion-profile revision identity. Input kind MUST be `HTTP_NDJSON`.
 
-Every ingest-profile revision MUST contain `ingest_profile_revision_id`, `input_id`, positive revision, target schema identity, parser kind `NDJSON`, encoding `UTF8`, line-boundary policy `LF_WITH_OPTIONAL_CR`, positive maximum record bytes, ordered mappings, event-time mapping, unknown-field policy, conversion policy, canonical declaration and digest, materialized definition and digest, and creation time.
+Every ingestion-profile revision MUST contain `ingestion_profile_revision_id`, `input_id`, positive revision, target schema identity, parser kind `NDJSON`, encoding `UTF8`, line-boundary policy `LF_WITH_OPTIONAL_CR`, positive maximum record bytes, ordered mappings, event-time mapping, unknown-field policy, conversion policy, canonical declaration and digest, materialized definition and digest, and creation time.
 
-Each promoted target field MUST have exactly one mapping from an RFC 6901 JSON Pointer to its target `field_id`. Two targets MAY read the same pointer. The separate event-time mapping MUST supply `@event_time`. `@ingest_time`, `@event_id`, and `@rest` MUST be produced by ingestion and MUST NOT be mapped from input JSON.
+Each promoted target field MUST have exactly one mapping from an RFC 6901 JSON Pointer to its target `field_id`. Two targets MAY read the same pointer. The separate event-time mapping MUST supply `@event_time`. `@ingestion_time`, `@event_id`, and `@rest` MUST be produced by ingestion and MUST NOT be mapped from input JSON.
 
 The unknown-field policy MUST be `CAPTURE_TOP_LEVEL_REMAINDER`. The conversion policy MUST be `STRICT`. The event-time format MUST be `RFC3339` or `UNIX_MILLISECONDS`.
 
-An input MUST have exactly one active ingest-profile revision. The active revision MUST target any declared schema owned by the source that can be adapted to the source's active schema. Schema activation MUST NOT require a new profile revision when that adapter remains valid. Profile activation MUST change only the pointer and MUST leave every revision immutable. Ingest-request claim MUST pin the active revision and its target schema; later schema or profile activation MUST NOT alter an existing ingest request.
+An input MUST have exactly one active ingestion-profile revision. The active revision MUST target any declared schema owned by the source that can be adapted to the source's active schema. Schema activation MUST NOT require a new profile revision when that adapter remains valid. Profile activation MUST change only the pointer and MUST leave every revision immutable. Ingestion-request claim MUST pin the active revision and its target schema; later schema or profile activation MUST NOT alter an existing ingestion request.
 
 ## 6. Manifest
 
@@ -108,8 +108,8 @@ source:
   inputs:
     - name: example_http
       kind: HTTP_NDJSON
-      active_ingest_profile_revision: 1
-      ingest_profile_revisions:
+      active_ingestion_profile_revision: 1
+      ingestion_profile_revisions:
         - revision: 1
           target_schema_version: 1
           parser_kind: NDJSON
@@ -126,17 +126,17 @@ source:
               json_pointer: /message
 ```
 
-`description` is the only optional property shown. `schemas` and each `ingest_profile_revisions` array MUST be non-empty; `fields`, `inputs`, and `mappings` MAY be empty. Schema field declarations describe only user fields because catalog application materializes the four system fields. Array order is significant where the owning contract defines an ordinal.
+`description` is the only optional property shown. `schemas` and each `ingestion_profile_revisions` array MUST be non-empty; `fields`, `inputs`, and `mappings` MAY be empty. Schema field declarations describe only user fields because catalog application materializes the four system fields. Array order is significant where the owning contract defines an ordinal.
 
 The loader MUST reject duplicate keys, aliases, merge keys, explicit tags, non-string mapping keys, unknown properties, invalid names, non-contiguous histories, unresolved pointers, and unresolved active values before mutation.
 
 Generated identities, derived roles and ordinals, system-field declarations, materialized definitions, digests, and timestamps MUST be absent from the manifest. One source MUST have one current manifest file in a version-controlled catalog set. Runtime query and ingestion execution MUST use PostgreSQL state and MUST NOT read manifest files.
 
-Canonical declarations and materialized definitions MUST use deterministic UTF-8 JSON with lexicographically ordered object keys, exact array order, no insignificant whitespace, and exact numeric tokens. A declaration digest MUST be the 32-byte BLAKE3 value over its declaration domain separator followed by canonical declaration bytes. Declaration domain separators MUST be `elucid:catalog:source:v1\0`, `elucid:catalog:schema:v1\0`, `elucid:catalog:input:v1\0`, and `elucid:catalog:ingest-profile:v1\0`.
+Canonical declarations and materialized definitions MUST use deterministic UTF-8 JSON with lexicographically ordered object keys, exact array order, no insignificant whitespace, and exact numeric tokens. A declaration digest MUST be the 32-byte BLAKE3 value over its declaration domain separator followed by canonical declaration bytes. Declaration domain separators MUST be `elucid:catalog:source:v1\0`, `elucid:catalog:schema:v1\0`, `elucid:catalog:input:v1\0`, and `elucid:catalog:ingestion-profile:v1\0`.
 
-A materialized digest MUST be the 32-byte BLAKE3 value over its materialized domain separator followed by canonical materialized-definition bytes. Materialized domain separators MUST be `elucid:catalog:schema-materialized:v1\0`, `elucid:catalog:input-materialized:v1\0`, and `elucid:catalog:ingest-profile-materialized:v1\0`. A schema materialization MUST cover resolved schema and field identities, derived roles and ordinals, logical metadata, and the Arrow schema descriptor. An input materialization MUST cover resolved source identity. An ingest-profile materialization MUST cover resolved input, target-schema, and target-field identities plus parsed JSON Pointer tokens.
+A materialized digest MUST be the 32-byte BLAKE3 value over its materialized domain separator followed by canonical materialized-definition bytes. Materialized domain separators MUST be `elucid:catalog:schema-materialized:v1\0`, `elucid:catalog:input-materialized:v1\0`, and `elucid:catalog:ingestion-profile-materialized:v1\0`. A schema materialization MUST cover resolved schema and field identities, derived roles and ordinals, logical metadata, and the Arrow schema descriptor. An input materialization MUST cover resolved source identity. An ingestion-profile materialization MUST cover resolved input, target-schema, and target-field identities plus parsed JSON Pointer tokens.
 
-The source declaration digest MUST cover exact name. The schema declaration digest MUST cover format version, schema version, and ordered field names, logical types, nullability, roles, and descriptions. The input declaration digest MUST cover name and kind. The ingest-profile declaration digest MUST cover revision, target schema version, framing, limits, conversion, remainder policy, event-time policy, and ordered mappings. Mutable display metadata, active pointers, generated identities, and timestamps MUST NOT participate in immutable declaration digests.
+The source declaration digest MUST cover exact name. The schema declaration digest MUST cover format version, schema version, and ordered field names, logical types, nullability, roles, and descriptions. The input declaration digest MUST cover name and kind. The ingestion-profile declaration digest MUST cover revision, target schema version, framing, limits, conversion, remainder policy, event-time policy, and ordered mappings. Mutable display metadata, active pointers, generated identities, and timestamps MUST NOT participate in immutable declaration digests.
 
 ## 7. Catalog application
 
@@ -149,12 +149,12 @@ A catalog application MUST validate and canonicalize the complete manifest befor
 5. Compare persisted and declared input sets and profile histories with the same omission and digest rules.
 6. Allocate missing input and profile identities and resolve schemas, target fields, and pointers into materialized definitions.
 7. Validate every stored-to-active schema adapter and the adapter from each active profile's target schema to the active schema.
-8. Update `display_name`, `active_schema_id`, and active ingest-profile pointers.
+8. Update `display_name`, `active_schema_id`, and active ingestion-profile pointers.
 9. Commit.
 
 Failure MUST leave no partial history or pointer update. Reapplying a manifest whose complete declared state is already current MUST preserve every identity and return `UNCHANGED`. Repeating an application after an indeterminate transport result MUST NOT duplicate immutable history; it MAY return `CREATED`, `UPDATED`, `UNCHANGED`, or a catalog conflict according to the current durable state. Creating an immutable entity MUST return `CREATED`. Changing mutable display metadata or an active pointer MUST return `UPDATED`.
 
-Successful JSON output MUST contain `outcome`, `source_id`, `active_schema_id`, `active_schema_version`, every declared schema identity and version, and every input identity with its active ingest-profile revision identity and number. Outcome MUST be `CREATED`, `UPDATED`, or `UNCHANGED`.
+Successful JSON output MUST contain `outcome`, `source_id`, `active_schema_id`, `active_schema_version`, every declared schema identity and version, and every input identity with its active ingestion-profile revision identity and number. Outcome MUST be `CREATED`, `UPDATED`, or `UNCHANGED`.
 
 ## 8. Errors
 

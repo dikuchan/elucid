@@ -74,7 +74,7 @@ fn relation_from_schema(schema: &Schema) -> Result<ir::Relation, Vec<SemanticErr
                 field_id: field.id(),
             },
             FieldRole::EventTime
-            | FieldRole::IngestTime
+            | FieldRole::IngestionTime
             | FieldRole::EventId
             | FieldRole::Remainder => ir::FieldOrigin::System {
                 field_id: field.id(),

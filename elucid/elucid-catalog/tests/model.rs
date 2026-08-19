@@ -3,8 +3,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use elucid_catalog::{
     CatalogModelError, ConversionPolicy, DeclarationDigest, DefinitionDigests, EventTimeFormat,
-    EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestProfile, IngestProfileRevision,
-    IngestProfileRevisionId, Input, InputEncoding, InputId, InputKind, InputName, JsonPointer,
+    EventTimeMapping, FieldId, FieldMapping, FieldRole, IngestionProfile, IngestionProfileRevision,
+    IngestionProfileRevisionId, Input, InputEncoding, InputId, InputKind, InputName, JsonPointer,
     LineBoundaryPolicy, LogicalType, MaterializedDigest, MaximumRecordBytes, Nullability,
     ParserKind, ProfileRevision, Schema, SchemaId, SchemaVersion, Source, SourceId, SourceName,
     UnknownFieldPolicy, UserField, UserFieldName, UserLogicalType,
@@ -197,7 +197,7 @@ fn profile_rejects_system_and_duplicate_mapping_targets() {
     let target_field_id = field_id(18);
     let mapping = FieldMapping::new(target_field_id, pointer)
         .expect("the user field mapping target is valid");
-    let profile = IngestProfile::new(
+    let profile = IngestionProfile::new(
         MaximumRecordBytes::new(1024).expect("the limit is positive"),
         EventTimeMapping::new(
             JsonPointer::parse("/timestamp").expect("the JSON Pointer is valid"),
@@ -378,8 +378,8 @@ fn input_id(value: u64) -> InputId {
     InputId::try_from(uuid_v7(value)).expect("the input identity is UUIDv7")
 }
 
-fn profile_revision_id(value: u64) -> IngestProfileRevisionId {
-    IngestProfileRevisionId::try_from(uuid_v7(value))
+fn profile_revision_id(value: u64) -> IngestionProfileRevisionId {
+    IngestionProfileRevisionId::try_from(uuid_v7(value))
         .expect("the profile revision identity is UUIDv7")
 }
 
@@ -415,12 +415,12 @@ fn required_utf8(field_id: FieldId, name: &str) -> UserField {
 
 fn profile_revision(
     input_id: InputId,
-    id: IngestProfileRevisionId,
+    id: IngestionProfileRevisionId,
     revision: u64,
     target_schema_id: SchemaId,
     mappings: Vec<FieldMapping>,
-) -> IngestProfileRevision {
-    let profile = IngestProfile::new(
+) -> IngestionProfileRevision {
+    let profile = IngestionProfile::new(
         MaximumRecordBytes::new(10 * 1024 * 1024).expect("the limit is positive"),
         EventTimeMapping::new(
             JsonPointer::parse("/timestamp").expect("the JSON Pointer is valid"),
@@ -430,7 +430,7 @@ fn profile_revision(
     )
     .expect("the profile is valid");
 
-    IngestProfileRevision::new(
+    IngestionProfileRevision::new(
         id,
         input_id,
         ProfileRevision::new(revision).expect("the revision is positive"),

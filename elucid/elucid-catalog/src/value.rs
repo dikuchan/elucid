@@ -99,7 +99,7 @@ impl ProfileRevision {
         NonZeroU64::new(value)
             .map(Self)
             .ok_or(CatalogModelError::VersionMustBePositive {
-                kind: VersionKind::IngestProfileRevision,
+                kind: VersionKind::IngestionProfileRevision,
             })
     }
 

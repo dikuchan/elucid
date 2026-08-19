@@ -1772,7 +1772,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "elucid-ingest"
+name = "elucid-ingestion"
 version = "0.1.0"
 dependencies = [
  "arrow",
@@ -1825,7 +1825,7 @@ dependencies = [
  "datafusion",
  "elucid-catalog",
  "elucid-engine",
- "elucid-ingest",
+ "elucid-ingestion",
  "elucid-language",
  "futures",
  "object_store",

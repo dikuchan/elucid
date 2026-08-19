@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
 
 use elucid_engine::Context;
-use elucid_ingest::{
-    DeadLetterWriter, LineSource, NoopWal, ParquetSink, SchemaConfig, TableName, ingest,
+use elucid_ingestion::{
+    DeadLetterWriter, LineSource, NoopWal, ParquetSink, SchemaConfig, TableName, run_ingestion,
 };
 use elucid_language::CatalogSnapshot;
 
@@ -60,8 +60,8 @@ async fn count_rows(df: datafusion::dataframe::DataFrame) -> usize {
         .sum()
 }
 
-/// Register schema and ingest test data.
-async fn setup_and_ingest(data_dir: &std::path::Path) {
+/// Register schema and ingestion test data.
+async fn setup_and_ingestion(data_dir: &std::path::Path) {
     let schema = SchemaConfig::from_yaml(SCHEMA_YAML).expect("schema parse failed");
     schema
         .register(data_dir)
@@ -76,7 +76,7 @@ async fn setup_and_ingest(data_dir: &std::path::Path) {
     let mut wal = NoopWal::new();
     let mut dead_letter = DeadLetterWriter::new(VecWriter(Vec::new()));
 
-    let summary = ingest(
+    let summary = run_ingestion(
         source,
         arrow_schema,
         &mut sink,
@@ -88,14 +88,14 @@ async fn setup_and_ingest(data_dir: &std::path::Path) {
     .expect("ingestion failed");
 
     assert_eq!(summary.read_line_count, 5, "should read 5 lines");
-    assert_eq!(summary.ingested_row_count, 5, "should ingest 5 rows");
+    assert_eq!(summary.accepted_row_count, 5, "should accept 5 rows");
     assert_eq!(summary.dead_letter_count, 0, "no dead-letter entries");
 }
 
 #[tokio::test]
-async fn ingest_then_query_all_rows() {
+async fn ingestion_then_query_all_rows() {
     let dir = tempfile::tempdir().expect("temp dir creation failed");
-    setup_and_ingest(dir.path()).await;
+    setup_and_ingestion(dir.path()).await;
 
     let ctx = Context::new(dir.path());
     let source = support::test_logs_source();
@@ -109,9 +109,9 @@ async fn ingest_then_query_all_rows() {
 }
 
 #[tokio::test]
-async fn ingest_then_query_filter_status_gte_400() {
+async fn ingestion_then_query_filter_status_gte_400() {
     let dir = tempfile::tempdir().expect("temp dir creation failed");
-    setup_and_ingest(dir.path()).await;
+    setup_and_ingestion(dir.path()).await;
 
     let ctx = Context::new(dir.path());
     let source = support::test_logs_source();
@@ -128,9 +128,9 @@ async fn ingest_then_query_filter_status_gte_400() {
 }
 
 #[tokio::test]
-async fn ingest_then_query_filter_source_nginx() {
+async fn ingestion_then_query_filter_source_nginx() {
     let dir = tempfile::tempdir().expect("temp dir creation failed");
-    setup_and_ingest(dir.path()).await;
+    setup_and_ingestion(dir.path()).await;
 
     let ctx = Context::new(dir.path());
     let source = support::test_logs_source();
@@ -147,9 +147,9 @@ async fn ingest_then_query_filter_source_nginx() {
 }
 
 #[tokio::test]
-async fn ingest_then_query_count() {
+async fn ingestion_then_query_count() {
     let dir = tempfile::tempdir().expect("temp dir creation failed");
-    setup_and_ingest(dir.path()).await;
+    setup_and_ingestion(dir.path()).await;
 
     let ctx = Context::new(dir.path());
     let source = support::test_logs_source();

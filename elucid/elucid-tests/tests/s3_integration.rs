@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll};
 
 use elucid_engine::{Context, StorageConfig};
-use elucid_ingest::{
-    DeadLetterWriter, LineSource, NoopWal, ObjectStoreSink, SchemaConfig, TableName, ingest,
+use elucid_ingestion::{
+    DeadLetterWriter, LineSource, NoopWal, ObjectStoreSink, SchemaConfig, TableName, run_ingestion,
 };
 use elucid_language::CatalogSnapshot;
 use object_store::ObjectStore;
@@ -104,8 +104,8 @@ async fn create_bucket(endpoint: &str, bucket: &str) {
     );
 }
 
-/// Ingest test data into S3 via ObjectStoreSink.
-async fn ingest_to_s3(store: Arc<dyn ObjectStore>, prefix: &str, table: &str) {
+/// Ingestion test data into S3 via ObjectStoreSink.
+async fn run_ingestion_to_s3(store: Arc<dyn ObjectStore>, prefix: &str, table: &str) {
     let schema = SchemaConfig::from_yaml(SCHEMA_YAML).expect("schema parse failed");
     let arrow_schema = schema.compile();
     let table_name = TableName::new(table).expect("table name");
@@ -118,7 +118,7 @@ async fn ingest_to_s3(store: Arc<dyn ObjectStore>, prefix: &str, table: &str) {
     let mut wal = NoopWal::new();
     let mut dead_letter = DeadLetterWriter::new(VecWriter(Vec::new()));
 
-    let summary = ingest(
+    let summary = run_ingestion(
         source,
         arrow_schema,
         &mut sink,
@@ -130,13 +130,13 @@ async fn ingest_to_s3(store: Arc<dyn ObjectStore>, prefix: &str, table: &str) {
     .expect("ingestion failed");
 
     assert_eq!(summary.read_line_count, 5, "should read 5 lines");
-    assert_eq!(summary.ingested_row_count, 5, "should ingest 5 rows");
+    assert_eq!(summary.accepted_row_count, 5, "should accept 5 rows");
     assert_eq!(summary.dead_letter_count, 0, "no dead-letter entries");
 }
 
 #[tokio::test]
 #[ignore]
-async fn s3_ingest_then_query_all_rows() {
+async fn s3_ingestion_then_query_all_rows() {
     let container = LocalStack::default()
         .with_env_var("SERVICES", "s3")
         .start()
@@ -153,7 +153,7 @@ async fn s3_ingest_then_query_all_rows() {
 
     let prefix = "data";
     let table = "test_logs";
-    ingest_to_s3(store.clone(), prefix, table).await;
+    run_ingestion_to_s3(store.clone(), prefix, table).await;
 
     // Query via engine
     let url = Url::parse(&format!("s3://{bucket}/{prefix}")).expect("url parse");
@@ -175,7 +175,7 @@ async fn s3_ingest_then_query_all_rows() {
 
 #[tokio::test]
 #[ignore]
-async fn s3_ingest_then_query_filter() {
+async fn s3_ingestion_then_query_filter() {
     let container = LocalStack::default()
         .with_env_var("SERVICES", "s3")
         .start()
@@ -192,7 +192,7 @@ async fn s3_ingest_then_query_filter() {
 
     let prefix = "data";
     let table = "test_logs";
-    ingest_to_s3(store.clone(), prefix, table).await;
+    run_ingestion_to_s3(store.clone(), prefix, table).await;
 
     let url = Url::parse(&format!("s3://{bucket}/{prefix}")).expect("url parse");
     let config = StorageConfig::ObjectStore {
@@ -216,7 +216,7 @@ async fn s3_ingest_then_query_filter() {
 
 #[tokio::test]
 #[ignore]
-async fn s3_ingest_then_query_count() {
+async fn s3_ingestion_then_query_count() {
     let container = LocalStack::default()
         .with_env_var("SERVICES", "s3")
         .start()
@@ -233,7 +233,7 @@ async fn s3_ingest_then_query_count() {
 
     let prefix = "data";
     let table = "test_logs";
-    ingest_to_s3(store.clone(), prefix, table).await;
+    run_ingestion_to_s3(store.clone(), prefix, table).await;
 
     let url = Url::parse(&format!("s3://{bucket}/{prefix}")).expect("url parse");
     let config = StorageConfig::ObjectStore {
@@ -273,7 +273,7 @@ async fn s3_ingest_then_query_count() {
 
 #[tokio::test]
 #[ignore]
-async fn s3_ingest_multiple_batches_then_query() {
+async fn s3_ingestion_multiple_batches_then_query() {
     let container = LocalStack::default()
         .with_env_var("SERVICES", "s3")
         .start()
@@ -302,7 +302,7 @@ async fn s3_ingest_multiple_batches_then_query() {
     let mut wal = NoopWal::new();
     let mut dead_letter = DeadLetterWriter::new(VecWriter(Vec::new()));
 
-    let summary = ingest(
+    let summary = run_ingestion(
         source,
         arrow_schema,
         &mut sink,
@@ -314,7 +314,7 @@ async fn s3_ingest_multiple_batches_then_query() {
     .expect("ingestion failed");
 
     assert_eq!(summary.read_line_count, 5);
-    assert_eq!(summary.ingested_row_count, 5);
+    assert_eq!(summary.accepted_row_count, 5);
 
     let url = Url::parse(&format!("s3://{bucket}/data")).expect("url parse");
     let config = StorageConfig::ObjectStore {

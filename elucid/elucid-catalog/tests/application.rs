@@ -1,7 +1,7 @@
 use elucid_catalog::{
     CatalogApplicationOutcome, CatalogEntityDisposition, CatalogErrorCode,
-    CatalogIdentityGenerator, CatalogManifest, FieldId, IngestProfileRevisionId, InputId, SchemaId,
-    SourceId, plan_catalog_application,
+    CatalogIdentityGenerator, CatalogManifest, FieldId, IngestionProfileRevisionId, InputId,
+    SchemaId, SourceId, plan_catalog_application,
 };
 use uuid::Uuid;
 
@@ -21,8 +21,8 @@ source:
   inputs:
     - name: http
       kind: HTTP_NDJSON
-      active_ingest_profile_revision: 1
-      ingest_profile_revisions:
+      active_ingestion_profile_revision: 1
+      ingestion_profile_revisions:
         - revision: 1
           target_schema_version: 1
           parser_kind: NDJSON
@@ -64,8 +64,8 @@ source:
   inputs:
     - name: http
       kind: HTTP_NDJSON
-      active_ingest_profile_revision: 1
-      ingest_profile_revisions:
+      active_ingestion_profile_revision: 1
+      ingestion_profile_revisions:
         - revision: 1
           target_schema_version: 1
           parser_kind: NDJSON
@@ -188,7 +188,7 @@ fn reconciliation_is_canonical_idempotent_and_identity_preserving() {
         schema_one_definition.materialized_digest().as_bytes(),
     );
 
-    let profile_definition = &created.ingest_profile_definitions()[0];
+    let profile_definition = &created.ingestion_profile_definitions()[0];
     let profile_materialized: serde_json::Value =
         serde_json::from_str(profile_definition.materialized_definition().as_str())
             .expect("materialized definition is JSON");
@@ -368,8 +368,8 @@ impl CatalogIdentityGenerator for SequentialIdentities {
         InputId::try_from(self.next_uuid()).expect("generated input identity is UUIDv7")
     }
 
-    fn generate_ingest_profile_revision_id(&mut self) -> IngestProfileRevisionId {
-        IngestProfileRevisionId::try_from(self.next_uuid())
-            .expect("generated ingest profile revision identity is UUIDv7")
+    fn generate_ingestion_profile_revision_id(&mut self) -> IngestionProfileRevisionId {
+        IngestionProfileRevisionId::try_from(self.next_uuid())
+            .expect("generated ingestion profile revision identity is UUIDv7")
     }
 }

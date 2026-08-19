@@ -222,8 +222,8 @@ enum RemoteErrorCode {
     CatalogProfileTargetMismatch,
     CatalogSchemaIncompatible,
     IdempotencyKeyReused,
-    IngestRequestFailed,
-    IngestRequestInProgress,
+    IngestionRequestFailed,
+    IngestionRequestInProgress,
     MetastoreUnavailable,
     ObjectStoreUnavailable,
     RequestTimeout,
@@ -248,7 +248,7 @@ fn classify_remote_response(
             RemoteErrorCode::MetastoreUnavailable
             | RemoteErrorCode::ObjectStoreUnavailable
             | RemoteErrorCode::ServerDraining
-            | RemoteErrorCode::IngestRequestInProgress
+            | RemoteErrorCode::IngestionRequestInProgress
             | RemoteErrorCode::RequestTimeout,
         ) => return ProcessExit::RemoteServiceUnavailable,
         Some(
@@ -259,7 +259,7 @@ fn classify_remote_response(
         ) if matches!(operation, RemoteOperation::CatalogApplication) => {
             return ProcessExit::CatalogConflict;
         }
-        Some(RemoteErrorCode::IngestRequestFailed | RemoteErrorCode::IdempotencyKeyReused)
+        Some(RemoteErrorCode::IngestionRequestFailed | RemoteErrorCode::IdempotencyKeyReused)
             if matches!(operation, RemoteOperation::Ingestion) =>
         {
             return ProcessExit::TerminalIngestionFailure;
@@ -270,7 +270,7 @@ fn classify_remote_response(
             | RemoteErrorCode::CatalogProfileTargetMismatch
             | RemoteErrorCode::CatalogSchemaIncompatible
             | RemoteErrorCode::IdempotencyKeyReused
-            | RemoteErrorCode::IngestRequestFailed
+            | RemoteErrorCode::IngestionRequestFailed
             | RemoteErrorCode::Other,
         )
         | None => {}
