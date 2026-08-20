@@ -1,0 +1,39 @@
+[server]
+listen_address = "127.0.0.1:58080"
+request_timeout_seconds = 60
+shutdown_timeout_seconds = 15
+
+[metastore]
+maximum_connections = 10
+
+[object_store]
+endpoint = "http://127.0.0.1:59000"
+bucket = "elucid"
+root_prefix = "validation"
+request_timeout_seconds = 5
+
+[local_storage]
+spool_path = "/tmp/elucid-validation/spool"
+spool_capacity_bytes = 2147483648
+scratch_path = "/tmp/elucid-validation/scratch"
+scratch_capacity_bytes = 2147483648
+
+[ingestion]
+maximum_http_batch_bytes = 16777216
+maximum_concurrent_requests = 4
+
+[query]
+maximum_concurrent_queries = 2
+timeout_seconds = 30
+maximum_scan_bytes = 107374182400
+memory_bytes = 536870912
+maximum_result_rows = 10000
+maximum_result_bytes = 16777216
+
+[maintenance]
+mode = "AUTOMATIC"
+event_retention_seconds = 2592000
+dead_letter_retention_seconds = 604800
+
+[telemetry]
+log_format = "PRETTY"
