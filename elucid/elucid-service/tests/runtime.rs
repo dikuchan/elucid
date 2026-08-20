@@ -263,6 +263,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(status["admission"], "OPEN");
     assert_eq!(status["limits"]["maximum_http_batch_bytes"], 1_048_576);
     assert_eq!(status["limits"]["maximum_http_batch_records"], 100_000);
+    assert_eq!(status["limits"]["maximum_batch_event_days"], 32);
     assert_eq!(status["spool"]["used_bytes"], 0);
     assert_eq!(status["maintenance"]["ownership"], "OWNED");
 

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr as _;
 
@@ -14,9 +15,12 @@ use crate::{BatchId, BatchMetadata, IngestionTime};
 
 const EVENT_ID_DOMAIN: &[u8] = b"elucid:event\0";
 const MAXIMUM_JSON_CONTAINER_DEPTH: usize = 128;
+const MILLISECONDS_PER_DAY: i64 = 86_400_000;
 
 /// Maximum number of original payload bytes retained in a dead-letter entry.
 pub const DEAD_LETTER_PAYLOAD_PREFIX_BYTES: usize = 4 * 1024;
+/// Maximum distinct UTC event days admitted from one durable batch.
+pub const MAXIMUM_BATCH_EVENT_DAYS: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
@@ -398,6 +402,10 @@ impl NormalizedBatch {
     pub const fn ignored_records(&self) -> u64 {
         self.ignored_records
     }
+
+    pub(crate) fn into_records(self) -> Vec<NormalizedRecord> {
+        self.records
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -462,6 +470,7 @@ pub fn normalize_records(
 
     let mut records = Vec::new();
     let mut ignored_records = 0_u64;
+    let mut admitted_event_days = HashSet::with_capacity(MAXIMUM_BATCH_EVENT_DAYS);
     let mut record_start = 0_usize;
     let mut line_number = 1_u64;
 
@@ -482,6 +491,7 @@ pub fn normalize_records(
             line_number,
             &mut records,
             &mut ignored_records,
+            &mut admitted_event_days,
         )?;
         record_start = delimiter_position + 1;
         line_number = line_number
@@ -497,6 +507,7 @@ pub fn normalize_records(
             line_number,
             &mut records,
             &mut ignored_records,
+            &mut admitted_event_days,
         )?;
     }
 
@@ -655,6 +666,7 @@ fn normalize_occurrence(
     line_number: u64,
     records: &mut Vec<NormalizedRecord>,
     ignored_records: &mut u64,
+    admitted_event_days: &mut HashSet<i64>,
 ) -> Result<(), NormalizationError> {
     if record.iter().all(u8::is_ascii_whitespace) {
         *ignored_records = ignored_records
@@ -687,7 +699,26 @@ fn normalize_occurrence(
         ))
     } else {
         match normalize_record(plan, record, location) {
-            Ok(row) => NormalizedRecord::Accepted(row),
+            Ok(row) => {
+                let event_day = row
+                    .event_time()
+                    .unix_milliseconds()
+                    .div_euclid(MILLISECONDS_PER_DAY);
+                if admitted_event_days.contains(&event_day)
+                    || admitted_event_days.len() < MAXIMUM_BATCH_EVENT_DAYS
+                {
+                    admitted_event_days.insert(event_day);
+                    NormalizedRecord::Accepted(row)
+                } else {
+                    NormalizedRecord::DeadLetter(DeadLetterEntry::new(
+                        plan.metadata.batch_id(),
+                        location,
+                        DeadLetterCode::EventDayLimitExceeded,
+                        record,
+                        payload_byte_count,
+                    ))
+                }
+            }
             Err(code) => NormalizedRecord::DeadLetter(DeadLetterEntry::new(
                 plan.metadata.batch_id(),
                 location,

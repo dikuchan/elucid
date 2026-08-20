@@ -23,7 +23,8 @@ use elucid_catalog::{
     Input, InputName, Schema, Source, SourceId, SourceName,
 };
 use elucid_ingestion::{
-    BatchId, BatchMetadata, IngestionTime, PinnedCatalogIdentities, SpoolErrorCode,
+    BatchId, BatchMetadata, IngestionTime, MAXIMUM_BATCH_EVENT_DAYS, PinnedCatalogIdentities,
+    SpoolErrorCode,
 };
 use elucid_metastore::{CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind};
 
@@ -689,6 +690,7 @@ struct StatusResponse {
 struct EffectiveLimits {
     maximum_http_batch_bytes: u64,
     maximum_http_batch_records: u64,
+    maximum_batch_event_days: usize,
     maximum_concurrent_ingestion_requests: u64,
     maximum_concurrent_queries: u64,
     query_timeout_seconds: u64,
@@ -705,6 +707,7 @@ impl EffectiveLimits {
         Self {
             maximum_http_batch_bytes: configuration.ingestion().maximum_http_batch_bytes().get(),
             maximum_http_batch_records: MAXIMUM_HTTP_BATCH_RECORDS,
+            maximum_batch_event_days: MAXIMUM_BATCH_EVENT_DAYS,
             maximum_concurrent_ingestion_requests: configuration
                 .ingestion()
                 .maximum_concurrent_requests()

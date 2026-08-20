@@ -7,8 +7,8 @@ use elucid_catalog::{
 };
 use elucid_ingestion::{
     BatchId, BatchMetadata, DEAD_LETTER_PAYLOAD_PREFIX_BYTES, DeadLetterCode, IngestionTime,
-    NormalizedRecord, NormalizedValue, PayloadEncoding, PayloadExtent, PinnedCatalogIdentities,
-    RecordLocation, normalize_records,
+    MAXIMUM_BATCH_EVENT_DAYS, NormalizedRecord, NormalizedValue, PayloadEncoding, PayloadExtent,
+    PinnedCatalogIdentities, RecordLocation, normalize_records,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -292,6 +292,64 @@ fn every_declared_scalar_type_is_converted_directly_to_its_target_type() {
     assert_eq!(values[7], &NormalizedValue::Utf8("value".to_owned()));
     assert_eq!(values[8], &NormalizedValue::Datetime(-1));
     assert_eq!(values[9], &NormalizedValue::Null);
+}
+
+#[test]
+fn event_day_fan_out_rejects_only_days_not_admitted_in_first_occurrence_order() {
+    let message_id = field_id(60);
+    let fixture = fixture(
+        256,
+        EventTimeFormat::Rfc3339,
+        vec![field(
+            message_id,
+            "message",
+            UserLogicalType::Utf8,
+            Nullability::NonNull,
+        )],
+        vec![mapping(message_id, "/message")],
+    );
+    let first_day = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("first event day");
+    let mut records = (0..=MAXIMUM_BATCH_EVENT_DAYS)
+        .map(|offset| {
+            let day = first_day
+                .checked_add_days(chrono::Days::new(
+                    u64::try_from(offset).expect("event-day test offset fits u64"),
+                ))
+                .expect("bounded event day");
+            format!("{{\"timestamp\":\"{day}T00:00:00Z\",\"message\":\"day-{offset}\"}}")
+        })
+        .collect::<Vec<_>>();
+    records.push(format!(
+        "{{\"timestamp\":\"{first_day}T12:00:00Z\",\"message\":\"known-day\"}}"
+    ));
+    let rejected_day = first_day
+        .checked_add_days(chrono::Days::new(
+            u64::try_from(MAXIMUM_BATCH_EVENT_DAYS).expect("event-day limit fits u64"),
+        ))
+        .expect("rejected event day");
+    records.push(format!(
+        "{{\"timestamp\":\"{rejected_day}T12:00:00Z\",\"message\":\"still-unseen\"}}"
+    ));
+    let body = records.join("\n");
+
+    let normalized = normalize_records(fixture.metadata, body.as_bytes(), &fixture.source)
+        .expect("the pinned catalog exists");
+
+    assert_eq!(normalized.records().len(), MAXIMUM_BATCH_EVENT_DAYS + 3);
+    assert!(matches!(
+        normalized.records()[MAXIMUM_BATCH_EVENT_DAYS],
+        NormalizedRecord::DeadLetter(ref entry)
+            if entry.code() == DeadLetterCode::EventDayLimitExceeded
+    ));
+    assert!(matches!(
+        normalized.records()[MAXIMUM_BATCH_EVENT_DAYS + 1],
+        NormalizedRecord::Accepted(_)
+    ));
+    assert!(matches!(
+        normalized.records()[MAXIMUM_BATCH_EVENT_DAYS + 2],
+        NormalizedRecord::DeadLetter(ref entry)
+            if entry.code() == DeadLetterCode::EventDayLimitExceeded
+    ));
 }
 
 fn fixture(
