@@ -1845,20 +1845,14 @@ dependencies = [
 name = "elucid-ingestion"
 version = "0.1.0"
 dependencies = [
- "arrow",
+ "blake3",
  "bytes",
  "chrono",
- "futures",
- "object_store",
- "parquet",
- "serde",
- "serde_json",
- "serde_yaml",
+ "elucid-catalog",
+ "elucid-storage",
  "tempfile",
  "thiserror",
  "tokio",
- "tokio-stream",
- "url",
  "uuid",
 ]
 
@@ -1923,27 +1917,6 @@ dependencies = [
  "testcontainers-modules",
  "thiserror",
  "tokio",
- "uuid",
-]
-
-[[package]]
-name = "elucid-tests"
-version = "0.1.0"
-dependencies = [
- "arrow",
- "bytes",
- "datafusion",
- "elucid-catalog",
- "elucid-engine",
- "elucid-ingestion",
- "elucid-language",
- "futures",
- "object_store",
- "reqwest",
- "tempfile",
- "testcontainers-modules",
- "tokio",
- "url",
  "uuid",
 ]
 

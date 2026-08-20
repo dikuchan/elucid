@@ -7,20 +7,15 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
-arrow = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
-futures = { workspace = true }
-object_store = { workspace = true, features = ["fs"] }
-parquet = { workspace = true, features = ["arrow", "async"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+elucid-catalog = { workspace = true }
+elucid-storage = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "fs", "rt", "macros"] }
-tokio-stream = { workspace = true, features = ["io-util"] }
-url = { workspace = true }
-uuid = { workspace = true, features = ["v7"] }
+tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+uuid = { workspace = true }

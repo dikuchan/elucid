@@ -1,27 +1,14 @@
-pub mod batcher;
-pub mod dead_letter_writer;
-pub mod event;
-pub mod ingestion;
-pub mod line_source;
-pub mod normalizer;
-pub mod object_store_sink;
-pub mod parquet_sink;
-pub mod schema;
-pub mod stage_error;
-pub mod storage;
-pub mod wal;
+//! Durable local admission spool.
 
-pub use batcher::Batcher;
-pub use dead_letter_writer::DeadLetterWriter;
-pub use event::{Event, EventContext, EventRow, EventValue, RawEvent};
-pub use ingestion::{IngestionSummary, run_ingestion};
-pub use line_source::{LineSource, LineSourceEventContext};
-pub use normalizer::Normalizer;
-pub use object_store_sink::ObjectStoreSink;
-pub use parquet_sink::ParquetSink;
-pub use schema::{
-    ColumnDescriptor, ColumnType, SchemaConfig, SchemaError, TableName, ValidationErrors,
+mod error;
+mod frame;
+mod model;
+mod spool;
+
+pub use elucid_storage::BatchId;
+pub use error::{SpoolError, SpoolErrorCode, SpoolModelError};
+pub use model::{
+    AppendBodyLimit, BatchByteSize, BatchMetadata, BodyDigest, DurableAppend, IngestionTime,
+    PinnedCatalogIdentities, SpoolCapacity, SpoolUsage,
 };
-pub use stage_error::StageError;
-pub use storage::StorageConfig;
-pub use wal::{NoopWal, Wal};
+pub use spool::{Spool, SpoolReservation};

@@ -9,7 +9,6 @@ members = [
     "elucid-metastore",
     "elucid-service",
     "elucid-storage",
-    "elucid-tests",
 ]
 
 [workspace.package]
