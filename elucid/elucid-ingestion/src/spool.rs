@@ -6,10 +6,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::Bytes;
 
+use crate::checkpoint;
 use crate::frame::{PreparedFrame, reserved_frame_bytes};
-use crate::{AppendBodyLimit, BatchMetadata, DurableAppend, SpoolCapacity, SpoolError, SpoolUsage};
+use crate::{
+    AppendBodyLimit, BatchMetadata, DurableAppend, SpoolCapacity, SpoolError, SpoolRecovery,
+    SpoolUsage,
+};
 
-const DATA_FILE_NAME: &str = "spool.data";
+pub(crate) const DATA_FILE_NAME: &str = "spool.data";
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -37,26 +41,51 @@ impl Spool {
     /// # Errors
     ///
     /// Returns `SPOOL_UNAVAILABLE` if the directory is inaccessible, is not a directory, or
-    /// already contains the spool data file.
+    /// already contains spool data or checkpoint state.
     pub async fn create_new(
         directory: impl AsRef<Path>,
         capacity: SpoolCapacity,
     ) -> Result<Self, SpoolError> {
         let directory = directory.as_ref().to_owned();
-        let writer = tokio::task::spawn_blocking(move || create_spool_file(&directory))
+        let writer = tokio::task::spawn_blocking(move || create_spool_files(&directory))
             .await
             .map_err(SpoolError::task)??;
-        Ok(Self {
+        Ok(Self::from_recovered(writer, capacity, 0))
+    }
+
+    /// Recovers a previously created append-only spool and its pending committed batches.
+    ///
+    /// Recovery scans the complete file with bounded memory, validates every committed frame and
+    /// the durable checkpoint, and discards only a valid incomplete final append.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SPOOL_CORRUPT` for invalid committed data or checkpoint state and
+    /// `SPOOL_UNAVAILABLE` when recovery cannot access or synchronize the spool.
+    pub async fn recover(
+        directory: impl AsRef<Path>,
+        capacity: SpoolCapacity,
+        maximum_batch: AppendBodyLimit,
+    ) -> Result<SpoolRecovery, SpoolError> {
+        crate::recovery::recover(directory.as_ref(), capacity, maximum_batch).await
+    }
+
+    pub(crate) fn from_recovered(
+        writer: File,
+        capacity: SpoolCapacity,
+        committed_bytes: u64,
+    ) -> Self {
+        Self {
             inner: Arc::new(SpoolInner {
                 capacity,
                 writer: Mutex::new(writer),
                 accounting: Mutex::new(Accounting {
-                    committed_bytes: 0,
+                    committed_bytes,
                     reserved_bytes: 0,
                 }),
                 failed: AtomicBool::new(false),
             }),
-        })
+        }
     }
 
     /// Reserves the worst-case physical spool space before the caller reads a request body.
@@ -142,11 +171,7 @@ impl SpoolInner {
             .committed_bytes
             .checked_add(accounting.reserved_bytes)
             .ok_or_else(|| SpoolError::invariant("spool accounting overflow"))?;
-        let available_bytes = self
-            .capacity
-            .get()
-            .checked_sub(occupied_bytes)
-            .ok_or_else(|| SpoolError::invariant("spool accounting exceeds capacity"))?;
+        let available_bytes = self.capacity.get().saturating_sub(occupied_bytes);
         if required_bytes > available_bytes {
             return Err(SpoolError::capacity(required_bytes, available_bytes));
         }
@@ -293,7 +318,7 @@ impl SpoolInner {
     }
 }
 
-fn create_spool_file(directory: &Path) -> Result<File, SpoolError> {
+fn create_spool_files(directory: &Path) -> Result<File, SpoolError> {
     let metadata = std::fs::metadata(directory)
         .map_err(|source| SpoolError::io("inspect the spool directory", source))?;
     if !metadata.is_dir() {
@@ -312,6 +337,7 @@ fn create_spool_file(directory: &Path) -> Result<File, SpoolError> {
     writer
         .sync_all()
         .map_err(|source| SpoolError::io("synchronize the new spool data file", source))?;
+    checkpoint::create_new(directory)?;
     File::open(directory)
         .and_then(|directory| directory.sync_all())
         .map_err(|source| SpoolError::io("synchronize the spool directory", source))?;

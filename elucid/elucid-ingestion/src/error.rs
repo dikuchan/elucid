@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 pub enum SpoolErrorCode {
     CapacityExhausted,
     BatchLimitExceeded,
+    Corrupt,
     Unavailable,
 }
 
@@ -15,6 +16,7 @@ impl SpoolErrorCode {
         match self {
             Self::CapacityExhausted => "CAPACITY_EXHAUSTED",
             Self::BatchLimitExceeded => "INGESTION_BATCH_LIMIT_EXCEEDED",
+            Self::Corrupt => "SPOOL_CORRUPT",
             Self::Unavailable => "SPOOL_UNAVAILABLE",
         }
     }
@@ -66,6 +68,13 @@ impl SpoolError {
         }
     }
 
+    pub(crate) fn corrupt(message: &'static str) -> Self {
+        Self {
+            code: SpoolErrorCode::Corrupt,
+            source: SpoolErrorSource::Corrupt(message),
+        }
+    }
+
     pub(crate) fn invariant(message: &'static str) -> Self {
         Self {
             code: SpoolErrorCode::Unavailable,
@@ -106,6 +115,9 @@ enum SpoolErrorSource {
         actual_bytes: u64,
         maximum_bytes: u64,
     },
+
+    #[error("{0}")]
+    Corrupt(&'static str),
 
     #[error("cannot {operation} the spool")]
     Io {

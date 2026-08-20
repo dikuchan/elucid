@@ -39,8 +39,12 @@ async fn durable_append_persists_the_exact_body_and_pinned_metadata() {
         .expect("read spool directory")
         .collect::<Result<Vec<_>, _>>()
         .expect("read spool entries");
-    assert_eq!(files.len(), 1, "one append-only spool file");
-    let persisted = fs::read(files[0].path()).expect("read committed spool bytes");
+    assert_eq!(files.len(), 2, "data and checkpoint files");
+    let persisted = files
+        .iter()
+        .map(|entry| fs::read(entry.path()).expect("read spool file"))
+        .find(|bytes| contains(bytes, &body))
+        .expect("append-only data file");
     let usage = spool.usage().expect("spool usage");
     assert_eq!(usage.committed_bytes(), persisted.len() as u64);
     assert_eq!(usage.reserved_bytes(), 0);
