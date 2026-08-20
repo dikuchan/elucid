@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use url::Url;
 
+use elucid_storage::ManagedRoot;
+
 use super::error::{ConfigurationError, ConfigurationField, InvalidValueReason};
 
 macro_rules! positive_measurement {
@@ -220,7 +222,7 @@ impl MetastoreConfiguration {
 pub struct ObjectStoreConfiguration {
     pub(super) endpoint: Url,
     pub(super) bucket: String,
-    pub(super) root_prefix: String,
+    pub(super) root_prefix: ManagedRoot,
     pub(super) request_timeout_seconds: Seconds,
 }
 
@@ -237,6 +239,11 @@ impl ObjectStoreConfiguration {
 
     #[must_use]
     pub fn root_prefix(&self) -> &str {
+        self.root_prefix.as_str()
+    }
+
+    #[must_use]
+    pub const fn managed_root(&self) -> &ManagedRoot {
         &self.root_prefix
     }
 

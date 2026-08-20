@@ -274,6 +274,21 @@ fn required_positive_values_and_absolute_paths_are_enforced() {
     let path_error = RuntimeConfiguration::from_toml(&relative_spool, &environment())
         .expect_err("local state paths must be absolute");
     assert_eq!(path_error.code(), ConfigurationErrorCode::ValueInvalid);
+
+    let noncanonical_root =
+        changed_profile(&[("root_prefix = \"showcase\"", "root_prefix = \"/showcase\"")]);
+    let root_error = RuntimeConfiguration::from_toml(&noncanonical_root, &environment())
+        .expect_err("managed object prefixes must be canonical before dependency access");
+    assert_eq!(root_error.code(), ConfigurationErrorCode::ValueInvalid);
+}
+
+#[test]
+fn automatic_maintenance_requires_a_pool_connection_beyond_its_lock_owner() {
+    let single_connection =
+        changed_profile(&[("maximum_connections = 10", "maximum_connections = 1")]);
+    let error = RuntimeConfiguration::from_toml(&single_connection, &environment())
+        .expect_err("automatic maintenance must not exhaust the PostgreSQL pool");
+    assert_eq!(error.code(), ConfigurationErrorCode::ConstraintViolation);
 }
 
 #[test]

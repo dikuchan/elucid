@@ -79,6 +79,78 @@ fn invalid_server_configuration_exits_with_configuration_failure() {
     assert!(stderr.contains("CONFIGURATION_DOCUMENT_MALFORMED"));
 }
 
+#[cfg(unix)]
+#[test]
+fn server_exits_cleanly_on_sigterm() {
+    let dependency = TcpListener::bind("127.0.0.1:0").expect("bind stalled dependency");
+    let dependency_address = dependency.local_addr().expect("dependency address");
+    let (accepted_sender, accepted_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let dependency_thread = thread::spawn(move || {
+        let (_connection, _) = dependency.accept().expect("accept PostgreSQL probe");
+        accepted_sender.send(()).expect("report accepted probe");
+        let _ = release_receiver.recv_timeout(Duration::from_secs(10));
+    });
+
+    let local = tempfile::tempdir().expect("create local storage root");
+    let mut configuration = tempfile::NamedTempFile::new().expect("temporary configuration");
+    write!(
+        configuration,
+        r#"
+[server]
+listen_address = "127.0.0.1:0"
+shutdown_timeout_seconds = 2
+
+[object_store]
+endpoint = "http://127.0.0.1:9"
+
+[local_storage]
+spool_path = "{}"
+scratch_path = "{}"
+"#,
+        local.path().join("spool").display(),
+        local.path().join("scratch").display(),
+    )
+    .expect("write runtime configuration");
+    let mut child = Command::new(ELUCID)
+        .args(["server", "--config"])
+        .arg(configuration.path())
+        .env(
+            "ELUCID_METASTORE__POSTGRESQL_URL",
+            format!("postgresql://postgres:postgres@{dependency_address}/postgres"),
+        )
+        .env("ELUCID_OBJECT_STORE__ACCESS_KEY_ID", "unused")
+        .env("ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY", "unused")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start elucid server");
+    accepted_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("server reached PostgreSQL initialization");
+    thread::sleep(Duration::from_millis(100));
+
+    let signal = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .expect("send SIGTERM");
+    assert!(signal.success());
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll elucid server") {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().expect("force-stop stuck server");
+            panic!("server did not stop after SIGTERM");
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    release_sender.send(()).expect("release stalled dependency");
+    dependency_thread.join().expect("join stalled dependency");
+    assert!(status.success(), "server exited with {status}");
+}
+
 #[test]
 fn server_is_the_foreground_entrypoint_without_a_run_subcommand() {
     let output = Command::new(ELUCID)

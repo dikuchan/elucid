@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context as _;
-use elucid_service::RuntimeConfiguration;
+use elucid_service::{RuntimeConfiguration, start};
 use tokio::io::AsyncWriteExt as _;
 
 use crate::arguments::{Action, Arguments, CatalogSubcommand, IngestionSubcommand, RootCommand};
@@ -33,7 +33,7 @@ async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
     match command {
         RootCommand::Server(command) => {
             let configuration_path = command.into_config_path();
-            execute_server(configuration_path.as_deref())
+            execute_server(configuration_path.as_deref()).await
         }
         RootCommand::Catalog(command) => match command.into_command() {
             CatalogSubcommand::Apply(command) => {
@@ -63,13 +63,12 @@ async fn execute_command(command: RootCommand) -> Result<Vec<u8>, Failure> {
     }
 }
 
-fn execute_server(configuration_path: Option<&Path>) -> Result<Vec<u8>, Failure> {
-    let _configuration =
+async fn execute_server(configuration_path: Option<&Path>) -> Result<Vec<u8>, Failure> {
+    let configuration =
         RuntimeConfiguration::load(configuration_path).map_err(Failure::configuration)?;
-    Err(Failure::internal(
-        CliErrorCode::ServerRuntimeUnavailable,
-        anyhow::anyhow!("server runtime is not implemented in this build"),
-    ))
+    let server = start(configuration).await.map_err(Failure::server)?;
+    server.wait_for_signal().await.map_err(Failure::server)?;
+    Ok(Vec::new())
 }
 
 fn require_success(operation: RemoteOperation, response: HttpResponse) -> Result<Vec<u8>, Failure> {

@@ -71,6 +71,7 @@ pub enum InvalidValueReason {
     UrlSchemeUnsupported,
     UrlAuthorityMissing,
     UrlMustBeOrigin,
+    InvalidObjectStorePrefix,
     RequiredNonEmpty,
     TooLong,
     PathMustBeAbsolute,
@@ -86,6 +87,9 @@ impl Display for InvalidValueReason {
             Self::UrlAuthorityMissing => "must contain a host",
             Self::UrlMustBeOrigin => {
                 "must not contain credentials, a non-root path, a query, or a fragment"
+            }
+            Self::InvalidObjectStorePrefix => {
+                "must be a canonical object-store prefix that leaves room for managed keys"
             }
             Self::RequiredNonEmpty => "must not be empty",
             Self::TooLong => "exceeds the implementation limit",
@@ -117,6 +121,7 @@ impl Display for EnvironmentOverrideInvalidReason {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ConfigurationViolation {
+    AutomaticMaintenanceRequiresTwoConnections,
     MaximumHttpBatchExceedsSpoolCapacity,
     MaximumHttpBatchExceedsScratchCapacity,
     MaximumResultExceedsQueryMemory,
@@ -127,6 +132,9 @@ pub enum ConfigurationViolation {
 impl Display for ConfigurationViolation {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         let message = match self {
+            Self::AutomaticMaintenanceRequiresTwoConnections => {
+                "metastore.maximum_connections must be at least 2 when maintenance.mode is AUTOMATIC"
+            }
             Self::MaximumHttpBatchExceedsSpoolCapacity => {
                 "ingestion.maximum_http_batch_bytes exceeds local_storage.spool_capacity_bytes"
             }

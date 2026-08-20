@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::process::ExitCode;
 
 use anyhow::Error;
-use elucid_service::{ConfigurationError, ConfigurationErrorCode};
+use elucid_service::{ConfigurationError, ConfigurationErrorCode, ServiceError, ServiceErrorCode};
 use reqwest::StatusCode;
 use serde::Deserialize;
 
@@ -36,7 +36,6 @@ pub(crate) enum CliErrorCode {
     RemoteResponseInvalid,
     RemoteResponseTooLarge,
     RemoteServiceUnavailable,
-    ServerRuntimeUnavailable,
     StandardOutputWriteFailed,
     VersionEncodingFailed,
 }
@@ -54,7 +53,6 @@ impl CliErrorCode {
             Self::RemoteResponseInvalid => "REMOTE_RESPONSE_INVALID",
             Self::RemoteResponseTooLarge => "REMOTE_RESPONSE_TOO_LARGE",
             Self::RemoteServiceUnavailable => "REMOTE_SERVICE_UNAVAILABLE",
-            Self::ServerRuntimeUnavailable => "SERVER_RUNTIME_UNAVAILABLE",
             Self::StandardOutputWriteFailed => "STANDARD_OUTPUT_WRITE_FAILED",
             Self::VersionEncodingFailed => "VERSION_ENCODING_FAILED",
         }
@@ -89,6 +87,7 @@ enum FailurePresentation {
 enum FailureCode {
     Cli(CliErrorCode),
     Configuration(ConfigurationErrorCode),
+    Service(ServiceErrorCode),
 }
 
 impl Display for FailureCode {
@@ -96,6 +95,7 @@ impl Display for FailureCode {
         match self {
             Self::Cli(code) => Display::fmt(code, formatter),
             Self::Configuration(code) => Display::fmt(code, formatter),
+            Self::Service(code) => Display::fmt(code, formatter),
         }
     }
 }
@@ -115,6 +115,15 @@ impl Failure {
             ProcessExit::ConfigurationFailure,
             FailureCode::Configuration(code),
             error,
+        )
+    }
+
+    pub(crate) fn server(error: ServiceError) -> Self {
+        let code = error.code();
+        Self::message(
+            ProcessExit::UncategorizedInternalFailure,
+            FailureCode::Service(code),
+            anyhow::anyhow!(error.to_string()),
         )
     }
 

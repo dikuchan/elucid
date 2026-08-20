@@ -5,6 +5,8 @@ use serde::Deserialize;
 use toml_edit::DocumentMut;
 use url::Url;
 
+use elucid_storage::ManagedRoot;
+
 use super::environment::{
     DIRECT_OBJECT_STORE_ACCESS_KEY_ID, DIRECT_OBJECT_STORE_SECRET_ACCESS_KEY,
     DIRECT_OBJECT_STORE_SESSION_TOKEN, DIRECT_POSTGRESQL_URL, Environment, EnvironmentLookup,
@@ -21,7 +23,6 @@ use super::model::{
 use super::validation;
 
 const MAXIMUM_BUCKET_BYTES: usize = 255;
-const MAXIMUM_ROOT_PREFIX_BYTES: usize = 1_024;
 const MAXIMUM_POSTGRESQL_URL_BYTES: usize = 4_096;
 const MAXIMUM_CREDENTIAL_BYTES: usize = 4_096;
 
@@ -181,11 +182,12 @@ impl RawObjectStoreConfiguration {
                 field("object_store.bucket"),
                 MAXIMUM_BUCKET_BYTES,
             )?,
-            root_prefix: bounded_string(
-                self.root_prefix,
-                field("object_store.root_prefix"),
-                MAXIMUM_ROOT_PREFIX_BYTES,
-            )?,
+            root_prefix: ManagedRoot::parse(&self.root_prefix).map_err(|_| {
+                ConfigurationError::ValueInvalid {
+                    field: field("object_store.root_prefix"),
+                    reason: InvalidValueReason::InvalidObjectStorePrefix,
+                }
+            })?,
             request_timeout_seconds: Seconds::from_configuration(
                 self.request_timeout_seconds,
                 field("object_store.request_timeout_seconds"),

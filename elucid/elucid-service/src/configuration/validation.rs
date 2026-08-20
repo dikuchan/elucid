@@ -1,4 +1,5 @@
 use super::error::{ConfigurationError, ConfigurationViolation};
+use super::model::MaintenanceMode;
 use super::raw::RuntimeConfigurationCandidate;
 
 pub(super) fn validate(
@@ -9,6 +10,11 @@ pub(super) fn validate(
     let scratch_bytes = configuration.local_storage.scratch_capacity_bytes.get();
     let result_bytes = configuration.query.maximum_result_bytes.get();
 
+    if configuration.maintenance.mode == MaintenanceMode::Automatic
+        && configuration.metastore.maximum_connections.get() < 2
+    {
+        return violation(ConfigurationViolation::AutomaticMaintenanceRequiresTwoConnections);
+    }
     if batch_bytes > spool_bytes {
         return violation(ConfigurationViolation::MaximumHttpBatchExceedsSpoolCapacity);
     }
