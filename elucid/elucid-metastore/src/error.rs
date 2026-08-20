@@ -47,6 +47,168 @@ impl MetastoreMigrationError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
+pub enum PublicationErrorKind {
+    Conflict,
+    Unavailable,
+    Corrupt,
+}
+
+impl Display for PublicationErrorKind {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Conflict => "publication state conflict",
+            Self::Unavailable => "publication state unavailable",
+            Self::Corrupt => "publication state corrupt",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PublicationModelError {
+    #[error("segment event-time bounds are not ordered")]
+    EventTimeBoundsNotOrdered,
+
+    #[error("segment ingestion-time bounds are not ordered")]
+    IngestionTimeBoundsNotOrdered,
+
+    #[error("segment event-time bounds do not belong to its UTC event day")]
+    EventDayMismatch,
+
+    #[error("segment timestamps exceed PostgreSQL microsecond precision")]
+    TimestampPrecisionUnsupported,
+
+    #[error("segment row count exceeds the PostgreSQL BIGINT range")]
+    RowCountOutOfRange,
+
+    #[error("segment uncompressed byte count exceeds the PostgreSQL BIGINT range")]
+    UncompressedByteCountOutOfRange,
+
+    #[error("object byte size exceeds the PostgreSQL BIGINT range")]
+    ObjectByteSizeOutOfRange,
+
+    #[error("object format version exceeds the PostgreSQL BIGINT range")]
+    ObjectFormatVersionOutOfRange,
+
+    #[error("Parquet object owner does not match the segment identity")]
+    SegmentObjectOwnerMismatch,
+
+    #[error("dead-letter object owner does not match the batch identity")]
+    DeadLetterObjectOwnerMismatch,
+
+    #[error("retention period must be positive")]
+    RetentionPeriodMustBePositive,
+
+    #[error("retention period exceeds the PostgreSQL BIGINT range")]
+    RetentionPeriodOutOfRange,
+}
+
+#[derive(Debug)]
+pub struct PublicationError {
+    kind: PublicationErrorKind,
+    source: PublicationErrorSource,
+}
+
+impl PublicationError {
+    #[must_use]
+    pub const fn kind(&self) -> PublicationErrorKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn code(&self) -> MetastoreErrorCode {
+        match self.kind {
+            PublicationErrorKind::Conflict => MetastoreErrorCode::Conflict,
+            PublicationErrorKind::Unavailable => MetastoreErrorCode::Unavailable,
+            PublicationErrorKind::Corrupt => MetastoreErrorCode::Corrupt,
+        }
+    }
+
+    #[must_use]
+    pub const fn model_error(&self) -> Option<PublicationModelError> {
+        match &self.source {
+            PublicationErrorSource::Model(source) => Some(*source),
+            PublicationErrorSource::Database(_) | PublicationErrorSource::Invariant(_) => None,
+        }
+    }
+
+    pub(crate) fn from_model(source: PublicationModelError) -> Self {
+        Self {
+            kind: PublicationErrorKind::Conflict,
+            source: PublicationErrorSource::Model(source),
+        }
+    }
+
+    pub(crate) fn unavailable(source: sqlx::Error) -> Self {
+        Self {
+            kind: PublicationErrorKind::Unavailable,
+            source: PublicationErrorSource::Database(source),
+        }
+    }
+
+    pub(crate) fn read(source: sqlx::Error) -> Self {
+        let kind = if is_row_decode_error(&source) {
+            PublicationErrorKind::Corrupt
+        } else {
+            PublicationErrorKind::Unavailable
+        };
+        Self {
+            kind,
+            source: PublicationErrorSource::Database(source),
+        }
+    }
+
+    pub(crate) fn write(source: sqlx::Error) -> Self {
+        let kind = if is_database_conflict(&source) {
+            PublicationErrorKind::Conflict
+        } else {
+            PublicationErrorKind::Unavailable
+        };
+        Self {
+            kind,
+            source: PublicationErrorSource::Database(source),
+        }
+    }
+
+    pub(crate) fn conflict(message: &'static str) -> Self {
+        Self {
+            kind: PublicationErrorKind::Conflict,
+            source: PublicationErrorSource::Invariant(message),
+        }
+    }
+
+    pub(crate) fn corrupt(message: &'static str) -> Self {
+        Self {
+            kind: PublicationErrorKind::Corrupt,
+            source: PublicationErrorSource::Invariant(message),
+        }
+    }
+}
+
+impl Display for PublicationError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.kind, formatter)
+    }
+}
+
+impl Error for PublicationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PublicationErrorSource {
+    #[error("publication metadata is invalid")]
+    Model(#[source] PublicationModelError),
+    #[error("PostgreSQL operation failed")]
+    Database(#[source] sqlx::Error),
+    #[error("{0}")]
+    Invariant(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum CatalogPersistenceErrorKind {
     Conflict,
     Unavailable,
@@ -200,5 +362,12 @@ fn is_database_conflict(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .and_then(sqlx::error::DatabaseError::code)
-        .is_some_and(|code| code.starts_with("23") || code == "40001" || code == "40P01")
+        .is_some_and(|code| {
+            code.starts_with("23")
+                || code == "22003"
+                || code == "22008"
+                || code == "22015"
+                || code == "40001"
+                || code == "40P01"
+        })
 }

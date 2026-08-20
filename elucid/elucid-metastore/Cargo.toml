@@ -7,9 +7,11 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 elucid-catalog = { workspace = true }
+elucid-storage = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { workspace = true, features = ["json", "uuid"] }
+sqlx = { workspace = true, features = ["chrono", "json", "uuid"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 uuid = { workspace = true, features = ["v7"] }
