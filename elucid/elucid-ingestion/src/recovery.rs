@@ -110,15 +110,19 @@ pub(crate) async fn recover(
     maximum_batch: AppendBodyLimit,
 ) -> Result<SpoolRecovery, SpoolError> {
     let directory = directory.to_owned();
-    let recovered =
-        tokio::task::spawn_blocking(move || recover_files(&directory, capacity, maximum_batch))
-            .await
-            .map_err(SpoolError::task)??;
+    let recovery_directory = directory.clone();
+    let recovered = tokio::task::spawn_blocking(move || {
+        recover_files(&recovery_directory, capacity, maximum_batch)
+    })
+    .await
+    .map_err(SpoolError::task)??;
 
     let spool = Spool::from_recovered(
         recovered.writer,
+        directory,
         capacity,
         recovered.report.committed_bytes(),
+        recovered.report.checkpoint(),
     );
     let batches = RecoveredBatches {
         reader: Arc::new(Mutex::new(recovered.reader)),
@@ -355,7 +359,12 @@ fn read_recovered_batch(
     let frame_digest = *frame_hasher.finalize().as_bytes();
     validate_digests_and_footer(&header, body_digest, frame_digest, &footer)?;
     Ok((
-        RecoveredBatch::new(header.metadata(), Bytes::from(body), header.body_digest()),
+        RecoveredBatch::new(
+            header.metadata(),
+            Bytes::from(body),
+            header.body_digest(),
+            crate::SpoolBatchRange::new(position, next_position)?,
+        ),
         next_position,
     ))
 }

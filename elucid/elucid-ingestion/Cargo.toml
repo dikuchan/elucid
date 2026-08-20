@@ -13,7 +13,9 @@ blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 elucid-catalog = { workspace = true }
+elucid-metastore = { workspace = true }
 elucid-storage = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

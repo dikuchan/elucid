@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::Write as _;
+use std::io::{Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -26,6 +26,8 @@ struct SpoolInner {
     capacity: SpoolCapacity,
     writer: Mutex<File>,
     accounting: Mutex<Accounting>,
+    checkpoint: Mutex<crate::SpoolCheckpoint>,
+    directory: PathBuf,
     failed: AtomicBool,
 }
 
@@ -78,10 +80,17 @@ impl Spool {
         capacity: SpoolCapacity,
     ) -> Result<Self, SpoolError> {
         let directory = directory.as_ref().to_owned();
-        let writer = tokio::task::spawn_blocking(move || create_spool_files(&directory))
+        let creation_directory = directory.clone();
+        let writer = tokio::task::spawn_blocking(move || create_spool_files(&creation_directory))
             .await
             .map_err(SpoolError::task)??;
-        Ok(Self::from_recovered(writer, capacity, 0))
+        Ok(Self::from_recovered(
+            writer,
+            directory,
+            capacity,
+            0,
+            crate::SpoolCheckpoint::INITIAL,
+        ))
     }
 
     /// Recovers a previously created append-only spool and its pending committed batches.
@@ -103,8 +112,10 @@ impl Spool {
 
     pub(crate) fn from_recovered(
         writer: File,
+        directory: PathBuf,
         capacity: SpoolCapacity,
         committed_bytes: u64,
+        checkpoint: crate::SpoolCheckpoint,
     ) -> Self {
         Self {
             inner: Arc::new(SpoolInner {
@@ -114,6 +125,8 @@ impl Spool {
                     committed_bytes,
                     reserved_bytes: 0,
                 }),
+                checkpoint: Mutex::new(checkpoint),
+                directory,
                 failed: AtomicBool::new(false),
             }),
         }
@@ -150,6 +163,52 @@ impl Spool {
         body_limit: AppendBodyLimit,
     ) -> Result<MaximumBatchAdmission, SpoolError> {
         self.inner.maximum_batch_admission(body_limit)
+    }
+
+    /// Returns the checkpoint durably installed by this spool instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SPOOL_UNAVAILABLE` when local synchronization state cannot be trusted.
+    pub fn checkpoint(&self) -> Result<crate::SpoolCheckpoint, SpoolError> {
+        self.inner.checkpoint()
+    }
+
+    /// Durably advances the checkpoint described by an exact completion plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SPOOL_UNAVAILABLE` if the plan is stale, exceeds committed data, or cannot be
+    /// synchronized. A failed spool requires restart and recovery before further writes.
+    pub async fn advance_checkpoint(
+        &self,
+        plan: crate::CheckpointPlan,
+    ) -> Result<crate::SpoolCheckpoint, SpoolError> {
+        let inner = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || inner.advance_checkpoint(plan))
+            .await
+            .map_err(|source| {
+                self.inner.mark_failed();
+                SpoolError::task(source)
+            })?
+    }
+
+    /// Reclaims the complete data file only when every committed frame is checkpointed.
+    ///
+    /// Partial-prefix rewriting is intentionally deferred because it would renumber live recovery
+    /// ranges. A deferred result leaves data and capacity accounting unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SPOOL_UNAVAILABLE` when local state cannot be synchronized safely.
+    pub async fn reclaim_checkpointed(&self) -> Result<crate::SpoolReclamation, SpoolError> {
+        let inner = Arc::clone(&self.inner);
+        tokio::task::spawn_blocking(move || inner.reclaim_checkpointed())
+            .await
+            .map_err(|source| {
+                self.inner.mark_failed();
+                SpoolError::task(source)
+            })?
     }
 }
 
@@ -288,12 +347,13 @@ impl SpoolInner {
     ) -> Result<DurableAppend, SpoolError> {
         let result = self.write_frame(metadata, &body);
         match result {
-            Ok(prepared) => {
+            Ok((prepared, range)) => {
                 self.commit_reservation(reserved_bytes, prepared.stored_bytes())?;
                 Ok(DurableAppend::new(
                     metadata,
                     prepared.body_bytes(),
                     prepared.body_digest(),
+                    range,
                 ))
             }
             Err(error) => {
@@ -308,11 +368,15 @@ impl SpoolInner {
         &self,
         metadata: BatchMetadata,
         body: &[u8],
-    ) -> Result<PreparedFrame, SpoolError> {
+    ) -> Result<(PreparedFrame, crate::SpoolBatchRange), SpoolError> {
         self.ensure_writable()?;
         let prepared = PreparedFrame::new(metadata, body)?;
         let mut writer = self.lock_writer()?;
         self.ensure_writable()?;
+        let start = writer
+            .metadata()
+            .map_err(|source| self.fail_io("inspect before append", source))?
+            .len();
         writer
             .write_all(prepared.header())
             .map_err(|source| self.fail_io("write", source))?;
@@ -325,7 +389,10 @@ impl SpoolInner {
         writer
             .sync_all()
             .map_err(|source| self.fail_io("synchronize", source))?;
-        Ok(prepared)
+        let end = start
+            .checked_add(prepared.stored_bytes())
+            .ok_or_else(|| SpoolError::invariant("spool append position overflow"))?;
+        Ok((prepared, crate::SpoolBatchRange::new(start, end)?))
     }
 
     fn commit_reservation(
@@ -382,6 +449,72 @@ impl SpoolInner {
         })
     }
 
+    fn lock_checkpoint(&self) -> Result<MutexGuard<'_, crate::SpoolCheckpoint>, SpoolError> {
+        self.checkpoint.lock().map_err(|_| {
+            self.mark_failed();
+            SpoolError::invariant("spool checkpoint lock is poisoned")
+        })
+    }
+
+    fn checkpoint(&self) -> Result<crate::SpoolCheckpoint, SpoolError> {
+        self.ensure_writable()?;
+        let checkpoint = *self.lock_checkpoint()?;
+        self.ensure_writable()?;
+        Ok(checkpoint)
+    }
+
+    fn advance_checkpoint(
+        &self,
+        plan: crate::CheckpointPlan,
+    ) -> Result<crate::SpoolCheckpoint, SpoolError> {
+        self.ensure_writable()?;
+        let accounting = self.lock_accounting()?;
+        let mut checkpoint = self.lock_checkpoint()?;
+        if plan.current() != *checkpoint {
+            return Err(SpoolError::invariant("checkpoint plan is stale"));
+        }
+        if plan.target().position() > accounting.committed_bytes {
+            return Err(SpoolError::invariant(
+                "checkpoint plan exceeds committed spool data",
+            ));
+        }
+        checkpoint::store(&self.directory, plan.target())
+            .map_err(|error| self.fail_existing(error))?;
+        *checkpoint = plan.target();
+        Ok(*checkpoint)
+    }
+
+    fn reclaim_checkpointed(&self) -> Result<crate::SpoolReclamation, SpoolError> {
+        self.ensure_writable()?;
+        let mut writer = self.lock_writer()?;
+        let mut accounting = self.lock_accounting()?;
+        let mut checkpoint = self.lock_checkpoint()?;
+        if accounting.reserved_bytes != 0
+            || checkpoint.position() == 0
+            || checkpoint.position() != accounting.committed_bytes
+        {
+            return Ok(crate::SpoolReclamation::DEFERRED);
+        }
+        let reclaimed_bytes = accounting.committed_bytes;
+
+        // Reset first. A crash before truncation replays already-published occurrences through
+        // retained output records; truncating first could leave the durable checkpoint beyond EOF.
+        checkpoint::store(&self.directory, crate::SpoolCheckpoint::INITIAL)
+            .map_err(|error| self.fail_existing(error))?;
+        *checkpoint = crate::SpoolCheckpoint::INITIAL;
+        writer
+            .set_len(0)
+            .map_err(|source| self.fail_io("truncate checkpointed spool data", source))?;
+        writer
+            .seek(SeekFrom::Start(0))
+            .map_err(|source| self.fail_io("reset the spool writer position", source))?;
+        writer
+            .sync_all()
+            .map_err(|source| self.fail_io("synchronize reclaimed spool data", source))?;
+        accounting.committed_bytes = 0;
+        Ok(crate::SpoolReclamation::reclaimed(reclaimed_bytes))
+    }
+
     fn ensure_writable(&self) -> Result<(), SpoolError> {
         if self.failed.load(Ordering::Acquire) {
             return Err(SpoolError::invariant(
@@ -394,6 +527,11 @@ impl SpoolInner {
     fn fail_io(&self, operation: &'static str, source: std::io::Error) -> SpoolError {
         self.mark_failed();
         SpoolError::io(operation, source)
+    }
+
+    fn fail_existing(&self, error: SpoolError) -> SpoolError {
+        self.mark_failed();
+        error
     }
 
     fn mark_failed(&self) {

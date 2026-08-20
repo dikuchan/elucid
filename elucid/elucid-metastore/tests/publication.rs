@@ -4,9 +4,11 @@ use std::time::Duration;
 use chrono::{NaiveDate, TimeZone as _, Utc};
 use elucid_catalog::CatalogManifest;
 use elucid_metastore::{
-    CatalogApplyOutcome, CatalogStore, DeadLetterRegistration, IngestionSegmentRegistration,
-    IngestionSegmentTimes, ObjectUploadRecordOutcome, PublicationErrorKind, PublicationOutcome,
-    PublicationStore, RegistrationOutcome, RetentionPeriod, StoredObjectState, install,
+    AbandonmentOutcome, CatalogApplyOutcome, CatalogStore, DeadLetterRegistration,
+    IngestionSegmentRegistration, IngestionSegmentTimes, ObjectPublicationState,
+    ObjectUploadRecordOutcome, OrphanGracePeriod, PublicationErrorKind, PublicationOutcome,
+    PublicationStore, ReconciliationLimit, RegistrationOutcome, RetentionPeriod, StoredObjectState,
+    install,
 };
 use elucid_storage::{
     BatchId, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
@@ -120,10 +122,25 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
 
     assert_eq!(
         publication
+            .ingestion_output_state(&segment)
+            .await
+            .expect("resolve unregistered segment"),
+        ObjectPublicationState::Unregistered
+    );
+
+    assert_eq!(
+        publication
             .register_ingestion_segment(&segment)
             .await
             .expect("register segment"),
         RegistrationOutcome::Registered
+    );
+    assert_eq!(
+        publication
+            .ingestion_output_state(&segment)
+            .await
+            .expect("resolve planned segment"),
+        ObjectPublicationState::Planned
     );
     assert_eq!(visible_segment_count(&pool, segment_id).await, 0);
     assert_eq!(
@@ -185,6 +202,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
     );
     assert_eq!(
         publication
+            .ingestion_output_state(&segment)
+            .await
+            .expect("resolve uploaded segment"),
+        ObjectPublicationState::Uploaded
+    );
+    assert_eq!(
+        publication
             .record_verified_upload(&segment_descriptor)
             .await
             .expect("retry verified segment upload"),
@@ -196,6 +220,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
             .await
             .expect("publish segment"),
         PublicationOutcome::Published
+    );
+    assert_eq!(
+        publication
+            .ingestion_output_state(&segment)
+            .await
+            .expect("resolve published segment"),
+        ObjectPublicationState::Published
     );
     assert_eq!(visible_segment_count(&pool, segment_id).await, 1);
     assert_eq!(segment_retention_seconds(&pool, segment_id).await, 3_600);
@@ -228,10 +259,24 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
             .expect("valid dead-letter registration");
     assert_eq!(
         publication
+            .dead_letter_output_state(&dead_letter)
+            .await
+            .expect("resolve unregistered dead letter"),
+        ObjectPublicationState::Unregistered
+    );
+    assert_eq!(
+        publication
             .register_dead_letter(&dead_letter)
             .await
             .expect("register dead letter"),
         RegistrationOutcome::Registered
+    );
+    assert_eq!(
+        publication
+            .dead_letter_output_state(&dead_letter)
+            .await
+            .expect("resolve planned dead letter"),
+        ObjectPublicationState::Planned
     );
     assert_eq!(
         publication
@@ -257,6 +302,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
     );
     assert_eq!(
         publication
+            .dead_letter_output_state(&dead_letter)
+            .await
+            .expect("resolve uploaded dead letter"),
+        ObjectPublicationState::Uploaded
+    );
+    assert_eq!(
+        publication
             .publish_dead_letter(
                 dead_letter_object_id,
                 RetentionPeriod::new(600).expect("retention"),
@@ -264,6 +316,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
             .await
             .expect("publish dead letter"),
         PublicationOutcome::Published
+    );
+    assert_eq!(
+        publication
+            .dead_letter_output_state(&dead_letter)
+            .await
+            .expect("resolve published dead letter"),
+        ObjectPublicationState::Published
     );
     assert_eq!(
         dead_letter_retention_seconds(&pool, dead_letter_object_id).await,
@@ -282,6 +341,112 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
     assert_eq!(
         dead_letter_retention_seconds(&pool, dead_letter_object_id).await,
         600
+    );
+
+    let rebuild_segment_id = SegmentId::from(uuid(35));
+    let rebuild_segment = IngestionSegmentRegistration::new(
+        rebuild_segment_id,
+        source.id(),
+        source.active_schema().id(),
+        times,
+        NonZeroU64::new(1).expect("positive rows"),
+        NonZeroU64::new(128).expect("positive bytes"),
+        descriptor(
+            ManagedObjectKey::parquet(&root, rebuild_segment_id, StoredObjectId::from(uuid(36))),
+            b"missing staged parquet",
+            ObjectMediaType::ParquetData,
+        ),
+    )
+    .expect("rebuild segment registration");
+    publication
+        .register_ingestion_segment(&rebuild_segment)
+        .await
+        .expect("register rebuild segment");
+    assert_eq!(
+        publication
+            .abandon_ingestion_output(
+                &rebuild_segment,
+                OrphanGracePeriod::new(300).expect("orphan grace"),
+            )
+            .await
+            .expect("abandon missing rebuild output"),
+        AbandonmentOutcome::Abandoned
+    );
+    assert_eq!(
+        publication
+            .abandon_ingestion_output(
+                &rebuild_segment,
+                OrphanGracePeriod::new(600).expect("orphan grace"),
+            )
+            .await
+            .expect("retry output abandonment"),
+        AbandonmentOutcome::AlreadyAbandoned
+    );
+
+    let orphan_segment_id = SegmentId::from(uuid(40));
+    let orphan_segment_object_id = StoredObjectId::from(uuid(41));
+    let orphan_segment = IngestionSegmentRegistration::new(
+        orphan_segment_id,
+        source.id(),
+        source.active_schema().id(),
+        times,
+        NonZeroU64::new(1).expect("positive rows"),
+        NonZeroU64::new(128).expect("positive bytes"),
+        descriptor(
+            ManagedObjectKey::parquet(&root, orphan_segment_id, orphan_segment_object_id),
+            b"orphan parquet",
+            ObjectMediaType::ParquetData,
+        ),
+    )
+    .expect("orphan segment registration");
+    publication
+        .register_ingestion_segment(&orphan_segment)
+        .await
+        .expect("register orphan segment");
+    let orphan_batch_id = BatchId::try_from(uuid(42)).expect("orphan batch identity");
+    let orphan_dead_letter_object_id = StoredObjectId::from(uuid(43));
+    let orphan_dead_letter = DeadLetterRegistration::new(
+        input.id(),
+        orphan_batch_id,
+        descriptor(
+            ManagedObjectKey::dead_letter(&root, orphan_batch_id, orphan_dead_letter_object_id),
+            b"{\"error\":\"orphan\"}\n",
+            ObjectMediaType::DeadLetter,
+        ),
+    )
+    .expect("orphan dead-letter registration");
+    publication
+        .register_dead_letter(&orphan_dead_letter)
+        .await
+        .expect("register orphan dead letter");
+
+    let reconciled = publication
+        .reconcile_unreferenced_outputs(
+            &[segment_id],
+            &[dead_letter_object_id],
+            OrphanGracePeriod::new(300).expect("orphan grace"),
+            ReconciliationLimit::new(10).expect("reconciliation limit"),
+        )
+        .await
+        .expect("reconcile unreferenced outputs");
+    assert_eq!(reconciled.abandoned_segments(), &[orphan_segment_id]);
+    assert_eq!(
+        reconciled.scheduled_dead_letters(),
+        &[orphan_dead_letter_object_id]
+    );
+    assert_eq!(
+        publication
+            .ingestion_output_state(&orphan_segment)
+            .await
+            .expect("resolve abandoned segment"),
+        ObjectPublicationState::Abandoned
+    );
+    assert_eq!(
+        publication
+            .dead_letter_output_state(&orphan_dead_letter)
+            .await
+            .expect("resolve scheduled dead letter"),
+        ObjectPublicationState::Abandoned
     );
 }
 

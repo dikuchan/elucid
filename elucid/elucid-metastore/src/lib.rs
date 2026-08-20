@@ -14,7 +14,8 @@ pub use migration::{
     MAXIMUM_SUPPORTED_MIGRATION_VERSION, MINIMUM_SUPPORTED_MIGRATION_VERSION, install,
 };
 pub use publication::{
-    DeadLetterRegistration, IngestionSegmentRegistration, IngestionSegmentTimes,
-    ObjectUploadRecordOutcome, PublicationOutcome, PublicationStore, RegistrationOutcome,
-    RetentionPeriod, StoredObjectState,
+    AbandonmentOutcome, DeadLetterRegistration, IngestionSegmentRegistration,
+    IngestionSegmentTimes, ObjectPublicationState, ObjectUploadRecordOutcome, OrphanGracePeriod,
+    PublicationOutcome, PublicationStore, ReconciliationLimit, RegistrationOutcome,
+    RetentionPeriod, StoredObjectState, UnreferencedOutputReconciliation,
 };

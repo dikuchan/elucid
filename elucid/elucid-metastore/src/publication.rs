@@ -69,6 +69,43 @@ const LOAD_SEGMENT_OBJECT_FOR_UPDATE: &str = r#"
     FOR UPDATE
 "#;
 
+const LOAD_SEGMENT: &str = r#"
+    SELECT
+        segment_id,
+        source_id,
+        schema_id,
+        origin,
+        event_day,
+        minimum_event_time,
+        maximum_event_time,
+        minimum_ingestion_time,
+        maximum_ingestion_time,
+        row_count,
+        uncompressed_bytes,
+        state,
+        published_at
+    FROM segments
+    WHERE segment_id = $1
+"#;
+
+const LOAD_OBJECT: &str = r#"
+    SELECT
+        object_id,
+        kind,
+        segment_id,
+        input_id,
+        batch_id,
+        object_key,
+        expected_byte_size,
+        blake3_digest,
+        media_type,
+        format_version,
+        state,
+        published_at
+    FROM stored_objects
+    WHERE object_id = $1
+"#;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct IngestionSegmentTimes {
@@ -116,6 +153,31 @@ impl IngestionSegmentTimes {
             minimum_ingestion_time,
             maximum_ingestion_time,
         })
+    }
+
+    #[must_use]
+    pub const fn event_day(self) -> NaiveDate {
+        self.event_day
+    }
+
+    #[must_use]
+    pub const fn minimum_event_time(self) -> DateTime<Utc> {
+        self.minimum_event_time
+    }
+
+    #[must_use]
+    pub const fn maximum_event_time(self) -> DateTime<Utc> {
+        self.maximum_event_time
+    }
+
+    #[must_use]
+    pub const fn minimum_ingestion_time(self) -> DateTime<Utc> {
+        self.minimum_ingestion_time
+    }
+
+    #[must_use]
+    pub const fn maximum_ingestion_time(self) -> DateTime<Utc> {
+        self.maximum_ingestion_time
     }
 }
 
@@ -168,6 +230,31 @@ impl IngestionSegmentRegistration {
     }
 
     #[must_use]
+    pub const fn source_id(&self) -> SourceId {
+        self.source_id
+    }
+
+    #[must_use]
+    pub const fn schema_id(&self) -> SchemaId {
+        self.schema_id
+    }
+
+    #[must_use]
+    pub const fn times(&self) -> IngestionSegmentTimes {
+        self.times
+    }
+
+    #[must_use]
+    pub const fn row_count(&self) -> u64 {
+        self.row_count.unsigned_abs()
+    }
+
+    #[must_use]
+    pub const fn uncompressed_bytes(&self) -> u64 {
+        self.uncompressed_bytes.unsigned_abs()
+    }
+
+    #[must_use]
     pub const fn object(&self) -> &ObjectDescriptor {
         &self.object
     }
@@ -204,6 +291,16 @@ impl DeadLetterRegistration {
     pub const fn object(&self) -> &ObjectDescriptor {
         &self.object
     }
+
+    #[must_use]
+    pub const fn input_id(&self) -> InputId {
+        self.input_id
+    }
+
+    #[must_use]
+    pub const fn batch_id(&self) -> BatchId {
+        self.batch_id
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,6 +325,53 @@ impl RetentionPeriod {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
+pub struct OrphanGracePeriod(i64);
+
+impl OrphanGracePeriod {
+    pub fn new(seconds: u64) -> Result<Self, PublicationModelError> {
+        if seconds == 0 {
+            return Err(PublicationModelError::OrphanGracePeriodMustBePositive);
+        }
+        i64::try_from(seconds)
+            .map(Self)
+            .map_err(|_| PublicationModelError::OrphanGracePeriodOutOfRange)
+    }
+
+    #[must_use]
+    const fn seconds(self) -> i64 {
+        self.0
+    }
+}
+
+const MAXIMUM_RECONCILIATION_ITEMS: u64 = 10_000;
+const MAXIMUM_RECONCILIATION_REFERENCES: usize = 1_000_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ReconciliationLimit(i64);
+
+impl ReconciliationLimit {
+    pub fn new(items: u64) -> Result<Self, PublicationModelError> {
+        if items == 0 || items > MAXIMUM_RECONCILIATION_ITEMS {
+            return Err(PublicationModelError::ReconciliationLimitOutOfRange {
+                maximum: MAXIMUM_RECONCILIATION_ITEMS,
+            });
+        }
+        i64::try_from(items).map(Self).map_err(|_| {
+            PublicationModelError::ReconciliationLimitOutOfRange {
+                maximum: MAXIMUM_RECONCILIATION_ITEMS,
+            }
+        })
+    }
+
+    #[must_use]
+    const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RegistrationOutcome {
     Registered,
     AlreadyRegistered,
@@ -245,6 +389,42 @@ pub enum ObjectUploadRecordOutcome {
 pub enum PublicationOutcome {
     Published,
     AlreadyPublished,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ObjectPublicationState {
+    Unregistered,
+    Planned,
+    Uploaded,
+    Published,
+    Abandoned,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AbandonmentOutcome {
+    Abandoned,
+    AlreadyAbandoned,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct UnreferencedOutputReconciliation {
+    abandoned_segments: Vec<SegmentId>,
+    scheduled_dead_letters: Vec<StoredObjectId>,
+}
+
+impl UnreferencedOutputReconciliation {
+    #[must_use]
+    pub fn abandoned_segments(&self) -> &[SegmentId] {
+        &self.abandoned_segments
+    }
+
+    #[must_use]
+    pub fn scheduled_dead_letters(&self) -> &[StoredObjectId] {
+        &self.scheduled_dead_letters
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -743,6 +923,304 @@ impl PublicationStore {
         }
     }
 
+    /// Resolves one retained ingestion output against an exact immutable registration snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict when an identity was reused for different immutable metadata, corrupt
+    /// when linked lifecycle rows disagree, or unavailable when PostgreSQL cannot serve the
+    /// repeatable-read snapshot.
+    pub async fn ingestion_output_state(
+        &self,
+        registration: &IngestionSegmentRegistration,
+    ) -> Result<ObjectPublicationState, PublicationError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(PublicationError::unavailable)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            .execute(&mut *transaction)
+            .await
+            .map_err(PublicationError::unavailable)?;
+        let segment = load_segment(&mut transaction, registration.segment_id()).await?;
+        let object = load_object(&mut transaction, registration.object().key().object_id()).await?;
+        let state = match (segment, object) {
+            (None, None) => ObjectPublicationState::Unregistered,
+            (Some(segment), Some(object)) => {
+                if !segment_matches_registration(&segment, registration)?
+                    || !object_matches_descriptor(
+                        &object,
+                        registration.object(),
+                        ObjectDatabaseOwner::Segment(registration.segment_id()),
+                    )?
+                {
+                    return rollback_with(
+                        transaction,
+                        PublicationError::conflict(
+                            "retained ingestion output metadata conflicts with PostgreSQL",
+                        ),
+                    )
+                    .await;
+                }
+                resolved_ingestion_state(&segment, &object)?
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return rollback_with(
+                    transaction,
+                    PublicationError::corrupt(
+                        "retained ingestion segment and object are only partially registered",
+                    ),
+                )
+                .await;
+            }
+        };
+        transaction
+            .commit()
+            .await
+            .map_err(PublicationError::unavailable)?;
+        Ok(state)
+    }
+
+    /// Resolves one retained dead-letter output against its exact immutable registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict for identity or metadata reuse, corrupt for an invalid lifecycle row,
+    /// or unavailable when PostgreSQL cannot serve the read.
+    pub async fn dead_letter_output_state(
+        &self,
+        registration: &DeadLetterRegistration,
+    ) -> Result<ObjectPublicationState, PublicationError> {
+        let object = sqlx::query_as::<_, StoredObjectRow>(LOAD_OBJECT)
+            .bind(registration.object().key().object_id().as_uuid())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PublicationError::read)?;
+        let Some(object) = object else {
+            return Ok(ObjectPublicationState::Unregistered);
+        };
+        if !object_matches_descriptor(
+            &object,
+            registration.object(),
+            ObjectDatabaseOwner::DeadLetter {
+                input_id: registration.input_id(),
+                batch_id: registration.batch_id(),
+            },
+        )? {
+            return Err(PublicationError::conflict(
+                "retained dead-letter metadata conflicts with PostgreSQL",
+            ));
+        }
+        resolved_dead_letter_state(&object)
+    }
+
+    /// Abandons one exact prepared ingestion output before rebuilding it with fresh identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict when the exact registration is missing, changed, or already published;
+    /// corrupt for inconsistent lifecycle rows; or unavailable when the transaction fails.
+    pub async fn abandon_ingestion_output(
+        &self,
+        registration: &IngestionSegmentRegistration,
+        grace: OrphanGracePeriod,
+    ) -> Result<AbandonmentOutcome, PublicationError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(PublicationError::unavailable)?;
+        let segment = load_segment_for_update(&mut transaction, registration.segment_id())
+            .await?
+            .ok_or_else(|| PublicationError::conflict("ingestion output is not registered"))?;
+        let object =
+            load_object_for_update(&mut transaction, registration.object().key().object_id())
+                .await?
+                .ok_or_else(|| PublicationError::corrupt("ingestion output object is missing"))?;
+        if !segment_matches_registration(&segment, registration)?
+            || !object_matches_descriptor(
+                &object,
+                registration.object(),
+                ObjectDatabaseOwner::Segment(registration.segment_id()),
+            )?
+        {
+            return rollback_with(
+                transaction,
+                PublicationError::conflict(
+                    "ingestion output metadata conflicts with abandonment request",
+                ),
+            )
+            .await;
+        }
+        let outcome = match resolved_ingestion_state(&segment, &object)? {
+            ObjectPublicationState::Planned | ObjectPublicationState::Uploaded => {
+                require_one_row(
+                    sqlx::query(
+                        "UPDATE segments SET state = 'ABANDONED', retired_at = CURRENT_TIMESTAMP, reclaim_after = CURRENT_TIMESTAMP + make_interval(secs => $2::double precision), updated_at = CURRENT_TIMESTAMP WHERE segment_id = $1 AND origin = 'INGESTION' AND state = 'PREPARED'",
+                    )
+                    .bind(registration.segment_id().as_uuid())
+                    .bind(grace.seconds())
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(PublicationError::write)?,
+                    "locked prepared ingestion segment was not abandoned",
+                )?;
+                AbandonmentOutcome::Abandoned
+            }
+            ObjectPublicationState::Abandoned => AbandonmentOutcome::AlreadyAbandoned,
+            ObjectPublicationState::Published => {
+                return rollback_with(
+                    transaction,
+                    PublicationError::conflict("published ingestion output cannot be abandoned"),
+                )
+                .await;
+            }
+            ObjectPublicationState::Unregistered => {
+                return rollback_with(
+                    transaction,
+                    PublicationError::corrupt(
+                        "locked ingestion output unexpectedly became unregistered",
+                    ),
+                )
+                .await;
+            }
+        };
+        transaction
+            .commit()
+            .await
+            .map_err(PublicationError::write)?;
+        Ok(outcome)
+    }
+
+    /// Abandons bounded startup orphans that are not referenced by recovered local metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conflict for an excessive reference set, corrupt for impossible affected-row
+    /// counts, or unavailable when PostgreSQL cannot complete the transaction.
+    pub async fn reconcile_unreferenced_outputs(
+        &self,
+        referenced_segments: &[SegmentId],
+        referenced_dead_letters: &[StoredObjectId],
+        grace: OrphanGracePeriod,
+        limit: ReconciliationLimit,
+    ) -> Result<UnreferencedOutputReconciliation, PublicationError> {
+        if referenced_segments.len() > MAXIMUM_RECONCILIATION_REFERENCES
+            || referenced_dead_letters.len() > MAXIMUM_RECONCILIATION_REFERENCES
+        {
+            return Err(PublicationError::conflict(
+                "output reconciliation reference set exceeds its bound",
+            ));
+        }
+        let segment_references = referenced_segments
+            .iter()
+            .map(|identity| identity.as_uuid())
+            .collect::<Vec<_>>();
+        let dead_letter_references = referenced_dead_letters
+            .iter()
+            .map(|identity| identity.as_uuid())
+            .collect::<Vec<_>>();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(PublicationError::unavailable)?;
+        let segment_ids = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT segment_id
+            FROM segments
+            WHERE origin = 'INGESTION'
+              AND state = 'PREPARED'
+              AND NOT (segment_id = ANY($1::uuid[]))
+            ORDER BY created_at, segment_id
+            LIMIT $2
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .bind(&segment_references)
+        .bind(limit.get())
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(PublicationError::read)?;
+        if !segment_ids.is_empty() {
+            let updated = sqlx::query(
+                "UPDATE segments SET state = 'ABANDONED', retired_at = CURRENT_TIMESTAMP, reclaim_after = CURRENT_TIMESTAMP + make_interval(secs => $2::double precision), updated_at = CURRENT_TIMESTAMP WHERE segment_id = ANY($1::uuid[]) AND origin = 'INGESTION' AND state = 'PREPARED'",
+            )
+            .bind(&segment_ids)
+            .bind(grace.seconds())
+            .execute(&mut *transaction)
+            .await
+            .map_err(PublicationError::write)?;
+            if updated.rows_affected() != segment_ids.len() as u64 {
+                return rollback_with(
+                    transaction,
+                    PublicationError::corrupt(
+                        "locked unreferenced segments were not abandoned exactly once",
+                    ),
+                )
+                .await;
+            }
+        }
+
+        let remaining = limit
+            .get()
+            .checked_sub(segment_ids.len() as i64)
+            .ok_or_else(|| {
+                PublicationError::corrupt("reconciliation item accounting underflowed")
+            })?;
+        let dead_letter_ids = if remaining == 0 {
+            Vec::new()
+        } else {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT object_id
+                FROM stored_objects
+                WHERE kind = 'DEAD_LETTER'
+                  AND state IN ('PLANNED', 'UPLOADED')
+                  AND NOT (object_id = ANY($1::uuid[]))
+                ORDER BY created_at, object_id
+                LIMIT $2
+                FOR UPDATE SKIP LOCKED
+                "#,
+            )
+            .bind(&dead_letter_references)
+            .bind(remaining)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(PublicationError::read)?
+        };
+        if !dead_letter_ids.is_empty() {
+            let updated = sqlx::query(
+                "UPDATE stored_objects SET state = 'DELETE_PENDING', delete_requested_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE object_id = ANY($1::uuid[]) AND kind = 'DEAD_LETTER' AND state IN ('PLANNED', 'UPLOADED')",
+            )
+            .bind(&dead_letter_ids)
+            .execute(&mut *transaction)
+            .await
+            .map_err(PublicationError::write)?;
+            if updated.rows_affected() != dead_letter_ids.len() as u64 {
+                return rollback_with(
+                    transaction,
+                    PublicationError::corrupt(
+                        "locked unreferenced dead letters were not scheduled exactly once",
+                    ),
+                )
+                .await;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(PublicationError::write)?;
+        Ok(UnreferencedOutputReconciliation {
+            abandoned_segments: segment_ids.into_iter().map(SegmentId::from).collect(),
+            scheduled_dead_letters: dead_letter_ids
+                .into_iter()
+                .map(StoredObjectId::from)
+                .collect(),
+        })
+    }
+
     pub async fn stored_object_state(
         &self,
         object_id: StoredObjectId,
@@ -880,11 +1358,33 @@ async fn load_segment_for_update(
         .map_err(PublicationError::read)
 }
 
+async fn load_segment(
+    transaction: &mut Transaction<'_, Postgres>,
+    segment_id: SegmentId,
+) -> Result<Option<SegmentRow>, PublicationError> {
+    sqlx::query_as::<_, SegmentRow>(LOAD_SEGMENT)
+        .bind(segment_id.as_uuid())
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(PublicationError::read)
+}
+
 async fn load_object_for_update(
     transaction: &mut Transaction<'_, Postgres>,
     object_id: StoredObjectId,
 ) -> Result<Option<StoredObjectRow>, PublicationError> {
     sqlx::query_as::<_, StoredObjectRow>(LOAD_OBJECT_FOR_UPDATE)
+        .bind(object_id.as_uuid())
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(PublicationError::read)
+}
+
+async fn load_object(
+    transaction: &mut Transaction<'_, Postgres>,
+    object_id: StoredObjectId,
+) -> Result<Option<StoredObjectRow>, PublicationError> {
+    sqlx::query_as::<_, StoredObjectRow>(LOAD_OBJECT)
         .bind(object_id.as_uuid())
         .fetch_optional(&mut **transaction)
         .await
@@ -1005,6 +1505,59 @@ fn validate_registered_ingestion_states(
         _ => Err(PublicationError::corrupt(
             "registered segment and object lifecycle states are inconsistent",
         )),
+    }
+}
+
+fn resolved_ingestion_state(
+    segment: &SegmentRow,
+    object: &StoredObjectRow,
+) -> Result<ObjectPublicationState, PublicationError> {
+    match (segment.state()?, object.state()?) {
+        (SegmentState::Prepared, StoredObjectState::Planned) => Ok(ObjectPublicationState::Planned),
+        (SegmentState::Prepared, StoredObjectState::Uploaded) => {
+            Ok(ObjectPublicationState::Uploaded)
+        }
+        (SegmentState::Active, StoredObjectState::Published)
+            if publication_times_match(segment, object) =>
+        {
+            Ok(ObjectPublicationState::Published)
+        }
+        (
+            SegmentState::Superseded | SegmentState::Expired,
+            StoredObjectState::Published
+            | StoredObjectState::DeletePending
+            | StoredObjectState::Deleted,
+        ) if publication_times_match(segment, object) => Ok(ObjectPublicationState::Published),
+        (
+            SegmentState::Abandoned,
+            StoredObjectState::Planned
+            | StoredObjectState::Uploaded
+            | StoredObjectState::DeletePending
+            | StoredObjectState::Deleted,
+        ) if segment.published_at.is_none() && object.published_at.is_none() => {
+            Ok(ObjectPublicationState::Abandoned)
+        }
+        _ => Err(PublicationError::corrupt(
+            "ingestion segment and object lifecycle states are inconsistent",
+        )),
+    }
+}
+
+fn resolved_dead_letter_state(
+    object: &StoredObjectRow,
+) -> Result<ObjectPublicationState, PublicationError> {
+    match object.state()? {
+        StoredObjectState::Planned => Ok(ObjectPublicationState::Planned),
+        StoredObjectState::Uploaded => Ok(ObjectPublicationState::Uploaded),
+        StoredObjectState::Published => Ok(ObjectPublicationState::Published),
+        StoredObjectState::DeletePending | StoredObjectState::Deleted
+            if object.published_at.is_some() =>
+        {
+            Ok(ObjectPublicationState::Published)
+        }
+        StoredObjectState::DeletePending | StoredObjectState::Deleted => {
+            Ok(ObjectPublicationState::Abandoned)
+        }
     }
 }
 

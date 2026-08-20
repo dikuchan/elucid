@@ -101,6 +101,15 @@ pub enum PublicationModelError {
 
     #[error("retention period exceeds the PostgreSQL BIGINT range")]
     RetentionPeriodOutOfRange,
+
+    #[error("orphan grace period must be positive")]
+    OrphanGracePeriodMustBePositive,
+
+    #[error("orphan grace period exceeds the PostgreSQL BIGINT range")]
+    OrphanGracePeriodOutOfRange,
+
+    #[error("reconciliation limit must be between 1 and {maximum} items")]
+    ReconciliationLimitOutOfRange { maximum: u64 },
 }
 
 #[derive(Debug)]

@@ -115,6 +115,11 @@ impl ParquetSegmentExpectation {
     pub const fn row_count(&self) -> u64 {
         self.row_count
     }
+
+    #[must_use]
+    pub fn staging_path(&self, root: impl AsRef<Path>) -> PathBuf {
+        staging_path(root.as_ref(), self)
+    }
 }
 
 #[derive(Debug)]

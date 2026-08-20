@@ -191,6 +191,7 @@ pub struct DurableAppend {
     metadata: BatchMetadata,
     body_bytes: BatchByteSize,
     body_digest: BodyDigest,
+    range: SpoolBatchRange,
 }
 
 impl DurableAppend {
@@ -198,11 +199,13 @@ impl DurableAppend {
         metadata: BatchMetadata,
         body_bytes: BatchByteSize,
         body_digest: BodyDigest,
+        range: SpoolBatchRange,
     ) -> Self {
         Self {
             metadata,
             body_bytes,
             body_digest,
+            range,
         }
     }
 
@@ -219,6 +222,11 @@ impl DurableAppend {
     #[must_use]
     pub const fn body_digest(self) -> BodyDigest {
         self.body_digest
+    }
+
+    #[must_use]
+    pub const fn range(self) -> SpoolBatchRange {
+        self.range
     }
 }
 
@@ -284,6 +292,60 @@ impl SpoolCheckpoint {
     #[must_use]
     pub const fn position(self) -> u64 {
         self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub struct SpoolBatchRange {
+    start: SpoolCheckpoint,
+    end: SpoolCheckpoint,
+}
+
+impl SpoolBatchRange {
+    pub(crate) fn new(start: u64, end: u64) -> Result<Self, crate::SpoolError> {
+        if start >= end {
+            return Err(crate::SpoolError::invariant(
+                "spool batch range must be non-empty and ordered",
+            ));
+        }
+        Ok(Self {
+            start: SpoolCheckpoint::from_position(start),
+            end: SpoolCheckpoint::from_position(end),
+        })
+    }
+
+    #[must_use]
+    pub const fn start(self) -> SpoolCheckpoint {
+        self.start
+    }
+
+    #[must_use]
+    pub const fn end(self) -> SpoolCheckpoint {
+        self.end
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct SpoolReclamation {
+    reclaimed_bytes: Option<u64>,
+}
+
+impl SpoolReclamation {
+    pub(crate) const DEFERRED: Self = Self {
+        reclaimed_bytes: None,
+    };
+
+    pub(crate) const fn reclaimed(bytes: u64) -> Self {
+        Self {
+            reclaimed_bytes: Some(bytes),
+        }
+    }
+
+    #[must_use]
+    pub const fn reclaimed_bytes(self) -> Option<u64> {
+        self.reclaimed_bytes
     }
 }
 
@@ -361,14 +423,21 @@ pub struct RecoveredBatch {
     metadata: BatchMetadata,
     body: Bytes,
     body_digest: BodyDigest,
+    range: SpoolBatchRange,
 }
 
 impl RecoveredBatch {
-    pub(crate) const fn new(metadata: BatchMetadata, body: Bytes, body_digest: BodyDigest) -> Self {
+    pub(crate) const fn new(
+        metadata: BatchMetadata,
+        body: Bytes,
+        body_digest: BodyDigest,
+        range: SpoolBatchRange,
+    ) -> Self {
         Self {
             metadata,
             body,
             body_digest,
+            range,
         }
     }
 
@@ -385,5 +454,10 @@ impl RecoveredBatch {
     #[must_use]
     pub const fn body_digest(&self) -> BodyDigest {
         self.body_digest
+    }
+
+    #[must_use]
+    pub const fn range(&self) -> SpoolBatchRange {
+        self.range
     }
 }

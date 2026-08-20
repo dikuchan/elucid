@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::{SpoolCheckpoint, SpoolError};
 
 const CHECKPOINT_FILE_NAME: &str = "spool.checkpoint";
+const NEXT_CHECKPOINT_FILE_NAME: &str = "spool.checkpoint.next";
 const CHECKPOINT_MAGIC: &[u8; 8] = b"ELUCKP01";
 const CHECKPOINT_VERSION: u16 = 1;
 const CHECKPOINT_PREFIX_BYTES: usize = 20;
@@ -41,6 +42,27 @@ pub(crate) fn load(directory: &Path) -> Result<SpoolCheckpoint, SpoolError> {
         .and_then(|mut file| file.read_exact(&mut bytes))
         .map_err(|source| SpoolError::io("read the spool checkpoint", source))?;
     decode(&bytes)
+}
+
+pub(crate) fn store(directory: &Path, checkpoint: SpoolCheckpoint) -> Result<(), SpoolError> {
+    let next_path = directory.join(NEXT_CHECKPOINT_FILE_NAME);
+    let bytes = encode(checkpoint);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&next_path)
+        .map_err(|source| SpoolError::io("create the next spool checkpoint", source))?;
+    file.write_all(&bytes)
+        .map_err(|source| SpoolError::io("write the next spool checkpoint", source))?;
+    file.sync_all()
+        .map_err(|source| SpoolError::io("synchronize the next spool checkpoint", source))?;
+    drop(file);
+    std::fs::rename(next_path, path(directory))
+        .map_err(|source| SpoolError::io("replace the spool checkpoint", source))?;
+    File::open(directory)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| SpoolError::io("synchronize the spool directory", source))
 }
 
 pub(crate) fn exists(directory: &Path) -> Result<bool, SpoolError> {
