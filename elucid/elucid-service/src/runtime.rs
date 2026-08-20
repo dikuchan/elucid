@@ -102,6 +102,11 @@ impl RuntimeSnapshot {
     }
 
     #[must_use]
+    pub(crate) const fn is_draining(&self) -> bool {
+        matches!(self, Self::Draining { .. })
+    }
+
+    #[must_use]
     pub(crate) fn dependencies(&self) -> Option<&Arc<Dependencies>> {
         match self {
             Self::Operational { dependencies, .. } => Some(dependencies),
@@ -371,13 +376,22 @@ async fn supervise(
     let health = initialized_health(&dependencies);
     let dependencies = Arc::new(dependencies);
     state.become_operational(Arc::clone(&dependencies), health);
-    let mut health_checks = Box::pin(run_health_checks(Arc::clone(&state), dependencies));
+    let mut health_checks = Box::pin(run_health_checks(
+        Arc::clone(&state),
+        Arc::clone(&dependencies),
+    ));
 
     tokio::select! {
         () = cancellation.cancelled() => {
             state.begin_draining();
+            dependencies.ingestion.begin_shutdown();
             http_cancellation.cancel();
-            finish_http(&mut http, shutdown_timeout).await
+            finish_http_and_ingestion(
+                &mut http,
+                &dependencies.ingestion,
+                shutdown_timeout,
+            )
+            .await
         }
         result = http.as_mut() => unexpected_http_result(result),
         () = health_checks.as_mut() => Err(ServiceError::HttpRuntime {
@@ -650,6 +664,25 @@ where
 {
     match tokio::time::timeout(shutdown_timeout, http.as_mut()).await {
         Ok(result) => result.map_err(|source| ServiceError::HttpRuntime { source }),
+        Err(_) => Err(ServiceError::ShutdownTimedOut),
+    }
+}
+
+async fn finish_http_and_ingestion<F>(
+    http: &mut Pin<Box<F>>,
+    ingestion: &IngestionBoundary,
+    shutdown_timeout: Duration,
+) -> Result<(), ServiceError>
+where
+    F: Future<Output = Result<(), std::io::Error>>,
+{
+    let finish = async {
+        let (http_result, ()) =
+            tokio::join!(http.as_mut(), ingestion.wait_for_admitted_requests(),);
+        http_result.map_err(|source| ServiceError::HttpRuntime { source })
+    };
+    match tokio::time::timeout(shutdown_timeout, finish).await {
+        Ok(result) => result,
         Err(_) => Err(ServiceError::ShutdownTimedOut),
     }
 }

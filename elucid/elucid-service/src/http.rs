@@ -13,6 +13,9 @@ use axum::{Json, Router};
 use chrono::{SecondsFormat, Utc};
 use futures::StreamExt as _;
 use serde::Serialize;
+use tokio::sync::oneshot;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use elucid_catalog::{
@@ -24,7 +27,9 @@ use elucid_ingestion::{
 };
 use elucid_metastore::{CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind};
 
-use crate::ingestion::{AdmissionFailure, IngestionAvailability, MAXIMUM_HTTP_BATCH_RECORDS};
+use crate::ingestion::{
+    AdmissionFailure, AdmittedAppend, IngestionAvailability, MAXIMUM_HTTP_BATCH_RECORDS,
+};
 use crate::runtime::{
     ApplicationState, ComponentHealth, ComponentStatus, MaintenanceOwnership, RuntimeSnapshot,
 };
@@ -51,10 +56,6 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
             post(apply_catalog).layer(DefaultBodyLimit::max(MAXIMUM_CATALOG_DOCUMENT_BYTES)),
         )
         .route("/api/v1/sources", get(list_sources))
-        .route(
-            "/api/v1/sources/{source_name}/inputs/{input_name}/events",
-            post(ingest_events),
-        )
         .route("/api/v1/sources/{source_id}", get(get_source))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
@@ -62,6 +63,10 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
             request_timeout,
             enforce_request_timeout,
         ))
+        .route(
+            "/api/v1/sources/{source_name}/inputs/{input_name}/events",
+            post(ingest_events),
+        )
         .layer(middleware::from_fn(request_identity))
         .with_state(state)
 }
@@ -168,6 +173,14 @@ async fn ingest_events(
     Path((source_name, input_name)): Path<(String, String)>,
     request: Request,
 ) -> Response {
+    let request_timeout = Duration::from_secs(
+        state
+            .configuration()
+            .server()
+            .request_timeout_seconds()
+            .get(),
+    );
+    let request_deadline = Instant::now() + request_timeout;
     if !has_ndjson_content_type(request.headers()) {
         return ApiError::unsupported_ingestion_media_type().into_response();
     }
@@ -189,6 +202,9 @@ async fn ingest_events(
 
     let snapshot = state.snapshot();
     if !snapshot.is_ready() {
+        if snapshot.is_draining() {
+            return ApiError::server_draining().into_response();
+        }
         return ApiError::server_not_ready(readiness_details(&snapshot)).into_response();
     }
     let Some(dependencies) = snapshot.dependencies() else {
@@ -225,6 +241,9 @@ async fn ingest_events(
         Err(AdmissionFailure::CapacityExhausted) => {
             return ApiError::capacity_exhausted().into_response();
         }
+        Err(AdmissionFailure::Draining) => {
+            return ApiError::server_draining().into_response();
+        }
         Err(AdmissionFailure::Unavailable) => {
             return ApiError::server_not_ready(spool_unavailable_details(&snapshot))
                 .into_response();
@@ -242,39 +261,105 @@ async fn ingest_events(
             Err(_) => return ApiError::internal().into_response(),
         };
     let metadata = BatchMetadata::new(batch_id, pinned_catalog, ingestion_time);
-    let body = match read_bounded_ndjson(
-        request.into_body(),
+    let shutdown = dependencies.ingestion.shutdown_token();
+    let (outcome_sender, outcome_receiver) = oneshot::channel();
+    let _supervised_request = tokio::spawn(supervise_admitted_request(
+        AdmittedRequest {
+            append: admitted,
+            metadata,
+            captured_time,
+            body: request.into_body(),
+            content_length,
+            maximum_body_bytes,
+            deadline: request_deadline,
+            shutdown,
+        },
+        outcome_sender,
+    ));
+    match outcome_receiver.await {
+        Ok(outcome) => outcome.into_response(),
+        Err(_) => ApiError::internal().into_response(),
+    }
+}
+
+struct AdmittedRequest {
+    append: AdmittedAppend,
+    metadata: BatchMetadata,
+    captured_time: chrono::DateTime<Utc>,
+    body: Body,
+    content_length: Option<u64>,
+    maximum_body_bytes: u64,
+    deadline: Instant,
+    shutdown: CancellationToken,
+}
+
+async fn supervise_admitted_request(
+    request: AdmittedRequest,
+    outcome_sender: oneshot::Sender<AdmittedIngestionOutcome>,
+) {
+    let AdmittedRequest {
+        append,
+        metadata,
+        captured_time,
+        body,
         content_length,
         maximum_body_bytes,
-        MAXIMUM_HTTP_BATCH_RECORDS,
-    )
-    .await
-    {
-        Ok(body) => body,
-        Err(BodyReadFailure::Invalid) => return ApiError::invalid_request().into_response(),
-        Err(BodyReadFailure::LimitExceeded) => {
-            return ApiError::ingestion_batch_limit_exceeded().into_response();
-        }
-        Err(BodyReadFailure::Internal) => return ApiError::internal().into_response(),
+        deadline,
+        shutdown,
+    } = request;
+    let request_timeout = tokio::time::sleep_until(deadline);
+    tokio::pin!(request_timeout);
+    let body = tokio::select! {
+        biased;
+        result = read_bounded_ndjson(
+            body,
+            content_length,
+            maximum_body_bytes,
+            MAXIMUM_HTTP_BATCH_RECORDS,
+        ) => result.map_err(AdmittedIngestionOutcome::from),
+        () = shutdown.cancelled() => Err(AdmittedIngestionOutcome::ServerDraining),
+        () = &mut request_timeout => Err(AdmittedIngestionOutcome::RequestTimedOut),
     };
-    let durable = match admitted.append(metadata, body).await {
-        Ok(durable) => durable,
-        Err(error) if error.code() == SpoolErrorCode::BatchLimitExceeded => {
-            return ApiError::ingestion_batch_limit_exceeded().into_response();
+    let body = match body {
+        Ok(body) => body,
+        Err(outcome) => {
+            deliver_admitted_outcome(outcome_sender, outcome);
+            return;
         }
-        Err(_) => return ApiError::internal().into_response(),
     };
 
-    (
-        StatusCode::ACCEPTED,
-        Json(IngestionAcceptedResponse {
-            batch_id: durable.metadata().batch_id().to_string(),
-            state: IngestionAcceptedState::DurablyQueued,
-            ingestion_time: captured_time.to_rfc3339_opts(SecondsFormat::Millis, true),
-            body_bytes: durable.body_bytes().get(),
-        }),
-    )
-        .into_response()
+    let append_operation = append.append(metadata, body);
+    tokio::pin!(append_operation);
+    let append_result = tokio::select! {
+        biased;
+        result = &mut append_operation => Some(result),
+        () = &mut request_timeout => None,
+    };
+    match append_result {
+        Some(result) => deliver_admitted_outcome(
+            outcome_sender,
+            AdmittedIngestionOutcome::from_append(result, captured_time),
+        ),
+        None => {
+            deliver_admitted_outcome(
+                outcome_sender,
+                AdmittedIngestionOutcome::AppendOutcomeAmbiguous,
+            );
+            // The client has its ambiguous 500. The spool records any later append failure in its
+            // health state, and the supervised request still owns the append until it settles.
+            drop(append_operation.await);
+        }
+    }
+}
+
+fn deliver_admitted_outcome(
+    sender: oneshot::Sender<AdmittedIngestionOutcome>,
+    outcome: AdmittedIngestionOutcome,
+) {
+    if let Err(_unobserved_outcome) = sender.send(outcome) {
+        // The HTTP request disappeared. The append is deliberately not cancelled, so the caller's
+        // outcome is ambiguous and a retry can duplicate the batch.
+    }
 }
 
 async fn read_bounded_ndjson(
@@ -333,6 +418,55 @@ enum BodyReadFailure {
     Invalid,
     LimitExceeded,
     Internal,
+}
+
+enum AdmittedIngestionOutcome {
+    Accepted(IngestionAcceptedResponse),
+    InvalidBody,
+    LimitExceeded,
+    RequestTimedOut,
+    ServerDraining,
+    AppendOutcomeAmbiguous,
+    Internal,
+}
+
+impl AdmittedIngestionOutcome {
+    fn from_append(
+        result: Result<elucid_ingestion::DurableAppend, elucid_ingestion::SpoolError>,
+        captured_time: chrono::DateTime<Utc>,
+    ) -> Self {
+        match result {
+            Ok(durable) => Self::Accepted(IngestionAcceptedResponse {
+                batch_id: durable.metadata().batch_id().to_string(),
+                state: IngestionAcceptedState::DurablyQueued,
+                ingestion_time: captured_time.to_rfc3339_opts(SecondsFormat::Millis, true),
+                body_bytes: durable.body_bytes().get(),
+            }),
+            Err(error) if error.code() == SpoolErrorCode::BatchLimitExceeded => Self::LimitExceeded,
+            Err(_) => Self::Internal,
+        }
+    }
+
+    fn into_response(self) -> Response {
+        match self {
+            Self::Accepted(response) => (StatusCode::ACCEPTED, Json(response)).into_response(),
+            Self::InvalidBody => ApiError::invalid_request().into_response(),
+            Self::LimitExceeded => ApiError::ingestion_batch_limit_exceeded().into_response(),
+            Self::RequestTimedOut => ApiError::request_timed_out().into_response(),
+            Self::ServerDraining => ApiError::server_draining().into_response(),
+            Self::AppendOutcomeAmbiguous | Self::Internal => ApiError::internal().into_response(),
+        }
+    }
+}
+
+impl From<BodyReadFailure> for AdmittedIngestionOutcome {
+    fn from(value: BodyReadFailure) -> Self {
+        match value {
+            BodyReadFailure::Invalid => Self::InvalidBody,
+            BodyReadFailure::LimitExceeded => Self::LimitExceeded,
+            BodyReadFailure::Internal => Self::Internal,
+        }
+    }
 }
 
 async fn list_sources(State(state): State<Arc<ApplicationState>>) -> Response {
@@ -963,6 +1097,16 @@ impl ApiError {
             code: "SERVER_NOT_READY",
             message: "Server is not ready",
             details: ErrorDetails::Readiness(details),
+            retry_after_seconds: Some(RETRY_AFTER_SECONDS),
+        }
+    }
+
+    fn server_draining() -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "SERVER_DRAINING",
+            message: "Server is draining",
+            details: ErrorDetails::Empty(EmptyDetails {}),
             retry_after_seconds: Some(RETRY_AFTER_SECONDS),
         }
     }

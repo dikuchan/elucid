@@ -11,6 +11,7 @@ use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::GenericImage;
 use testcontainers_modules::testcontainers::core::{ImageExt as _, WaitFor};
 use testcontainers_modules::testcontainers::runners::AsyncRunner as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
@@ -355,31 +356,28 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
         "{\"timestamp\":\"2026-08-20T12:00:00.000Z\",\"message\":\"first\"}\n",
         "{\"timestamp\":\"2026-08-20T12:00:01.000Z\",\"message\":\"second\"}\n",
     );
-    let accepted = client
-        .post(format!(
-            "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
-        ))
-        .header("Content-Type", "application/x-ndjson; charset=utf-8")
-        .header("Content-Encoding", "identity")
-        .body(body)
-        .send()
+    let mut admitted_request = TcpStream::connect(server.local_address())
         .await
-        .expect("ingest NDJSON batch");
-    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
-    let accepted = json(accepted).await;
-    assert_eq!(accepted["state"], "DURABLY_QUEUED");
-    assert_eq!(accepted["body_bytes"], body.len());
-    let batch_id = accepted["batch_id"]
-        .as_str()
-        .expect("batch identity")
-        .to_owned();
-    let parsed_batch_id = Uuid::parse_str(&batch_id).expect("UUID batch identity");
-    assert_eq!(parsed_batch_id.get_version_num(), 7);
-    assert_eq!(parsed_batch_id.to_string(), batch_id);
-    let ingestion_time = accepted["ingestion_time"].as_str().expect("ingestion time");
-    assert_eq!(ingestion_time.len(), 24);
-    assert!(ingestion_time.ends_with('Z'));
+        .expect("connect admitted ingestion request");
+    let admitted_headers = format!(
+        "POST /api/v1/sources/demo_logs/inputs/vector/events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-ndjson; charset=utf-8\r\nContent-Encoding: identity\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    admitted_request
+        .write_all(admitted_headers.as_bytes())
+        .await
+        .expect("write admitted request headers");
+    admitted_request
+        .write_all(&body.as_bytes()[..body.len() - 1])
+        .await
+        .expect("write partial admitted body");
+    admitted_request
+        .flush()
+        .await
+        .expect("flush partial admitted request");
 
+    let status_url = format!("{endpoint}/api/v1/status");
+    wait_for_admission_state(&client, &status_url, "CLOSED").await;
     let capacity_exhausted = client
         .post(format!(
             "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
@@ -402,17 +400,47 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
         "CAPACITY_EXHAUSTED"
     );
 
-    let status = get_json(
-        &client,
-        &format!("{endpoint}/api/v1/status"),
-        StatusCode::OK,
+    minio.stop_with_timeout(Some(1)).await.expect("stop MinIO");
+    admitted_request
+        .write_all(&body.as_bytes()[body.len() - 1..])
+        .await
+        .expect("complete admitted body after dependency outage");
+    admitted_request
+        .flush()
+        .await
+        .expect("flush complete admitted request");
+    let mut raw_response = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        admitted_request.read_to_end(&mut raw_response),
     )
-    .await;
+    .await
+    .expect("admitted response timed out")
+    .expect("read admitted response");
+    let raw_response = String::from_utf8(raw_response).expect("UTF-8 admitted response");
+    let (response_headers, response_body) = raw_response
+        .split_once("\r\n\r\n")
+        .expect("split admitted response");
+    assert!(response_headers.starts_with("HTTP/1.1 202 Accepted"));
+    let accepted: Value = serde_json::from_str(response_body).expect("decode admitted response");
+    assert_eq!(accepted["state"], "DURABLY_QUEUED");
+    assert_eq!(accepted["body_bytes"], body.len());
+    let batch_id = accepted["batch_id"]
+        .as_str()
+        .expect("batch identity")
+        .to_owned();
+    let parsed_batch_id = Uuid::parse_str(&batch_id).expect("UUID batch identity");
+    assert_eq!(parsed_batch_id.get_version_num(), 7);
+    assert_eq!(parsed_batch_id.to_string(), batch_id);
+    let ingestion_time = accepted["ingestion_time"].as_str().expect("ingestion time");
+    assert_eq!(ingestion_time.len(), 24);
+    assert!(ingestion_time.ends_with('Z'));
+
+    let status = get_json(&client, &status_url, StatusCode::OK).await;
     assert!(status["spool"]["used_bytes"].as_u64().expect("used bytes") > body.len() as u64);
     assert_eq!(status["publication"]["pending_batches"], 1);
     assert_eq!(status["admission"], "CLOSED");
 
-    minio.stop_with_timeout(Some(1)).await.expect("stop MinIO");
     let unavailable =
         wait_for_unready_component(&client, &format!("{endpoint}/health/ready"), "object_store")
             .await;
@@ -521,13 +549,164 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     );
 }
 
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn disconnect_is_ambiguous_and_shutdown_recovers_an_incomplete_append() {
+    let postgres = Postgres::default()
+        .with_startup_timeout(Duration::from_secs(30))
+        .start()
+        .await
+        .expect("start PostgreSQL");
+    let postgres_host = postgres.get_host().await.expect("PostgreSQL host");
+    let postgres_port = postgres
+        .get_host_port_ipv4(5432)
+        .await
+        .expect("PostgreSQL port");
+    let postgresql_url =
+        format!("postgresql://postgres:postgres@{postgres_host}:{postgres_port}/postgres");
+
+    let test_identity = Uuid::now_v7().simple().to_string();
+    let network = format!("elucid-service-shutdown-{test_identity}");
+    let server_name = format!("elucid-service-shutdown-minio-{test_identity}");
+    let minio = MinIO::default()
+        .with_network(network.clone())
+        .with_container_name(server_name.clone())
+        .with_startup_timeout(Duration::from_secs(30))
+        .start()
+        .await
+        .expect("start MinIO");
+    let minio_host = minio.get_host().await.expect("MinIO host");
+    let minio_port = minio.get_host_port_ipv4(9000).await.expect("MinIO port");
+    let minio_alias = format!("http://minioadmin:minioadmin@{server_name}:9000");
+    let bucket_path = format!("local/{BUCKET}");
+    let _bucket = GenericImage::new("minio/mc", MINIO_CLIENT_TAG)
+        .with_wait_for(WaitFor::message_on_stdout("Bucket created successfully"))
+        .with_network(network)
+        .with_env_var("MC_HOST_local", minio_alias)
+        .with_cmd(["mb", bucket_path.as_str()])
+        .with_startup_timeout(Duration::from_secs(30))
+        .start()
+        .await
+        .expect("create MinIO bucket");
+
+    let local = TempDir::new().expect("create local storage root");
+    let spool_path = local.path().join("spool");
+    let document = runtime_configuration_with_timeouts(
+        &format!("http://{minio_host}:{minio_port}"),
+        spool_path.to_str().expect("spool path"),
+        local.path().join("scratch").to_str().expect("scratch path"),
+        30,
+        1,
+    );
+    let environment = Environment::from_pairs([
+        ("ELUCID_METASTORE__POSTGRESQL_URL", postgresql_url),
+        ("ELUCID_OBJECT_STORE__ACCESS_KEY_ID", "minioadmin".into()),
+        (
+            "ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY",
+            "minioadmin".into(),
+        ),
+    ]);
+    let configuration = RuntimeConfiguration::from_toml(&document, &environment)
+        .expect("decode runtime configuration");
+    let server = start(configuration).await.expect("bind server");
+    let endpoint = format!("http://{}", server.local_address());
+    let client = Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("build HTTP client");
+    wait_for_status(&client, &format!("{endpoint}/health/ready"), StatusCode::OK).await;
+    apply_catalog(&client, &endpoint).await;
+
+    let disconnected_body = b"{}\n";
+    let mut disconnected = TcpStream::connect(server.local_address())
+        .await
+        .expect("connect ingestion request with a lost response");
+    let disconnected_headers = format!(
+        "POST /api/v1/sources/demo_logs/inputs/vector/events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-ndjson\r\nContent-Length: {}\r\n\r\n",
+        disconnected_body.len()
+    );
+    disconnected
+        .write_all(disconnected_headers.as_bytes())
+        .await
+        .expect("write ingestion headers");
+    disconnected
+        .write_all(&disconnected_body[..disconnected_body.len() - 1])
+        .await
+        .expect("write partial ingestion body");
+    disconnected.flush().await.expect("flush ingestion request");
+
+    let status_url = format!("{endpoint}/api/v1/status");
+    wait_for_admission_state(&client, &status_url, "CLOSED").await;
+    disconnected
+        .write_all(&disconnected_body[disconnected_body.len() - 1..])
+        .await
+        .expect("complete ingestion body");
+    disconnected.flush().await.expect("flush complete request");
+    drop(disconnected);
+
+    let status = wait_for_pending_batches(&client, &status_url, 1).await;
+    assert_eq!(status["admission"], "OPEN");
+
+    let mut connection = TcpStream::connect(server.local_address())
+        .await
+        .expect("connect incomplete ingestion request");
+    connection
+        .write_all(
+            b"POST /api/v1/sources/demo_logs/inputs/vector/events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-ndjson\r\nContent-Length: 1024\r\n\r\n{",
+        )
+        .await
+        .expect("write incomplete ingestion request");
+    connection.flush().await.expect("flush incomplete request");
+
+    wait_for_admission_state(&client, &status_url, "CLOSED").await;
+
+    server
+        .shutdown()
+        .await
+        .expect("shutdown with incomplete admitted request");
+    drop(connection);
+
+    let recovery = Spool::open(
+        spool_path,
+        SpoolCapacity::new(1_049_000).expect("spool capacity"),
+        AppendBodyLimit::new(1_048_576).expect("maximum batch"),
+    )
+    .await
+    .expect("recover service spool");
+    assert_eq!(recovery.report().pending_batches(), 1);
+    let (_, mut batches, _) = recovery.into_parts();
+    let recovered = batches
+        .next_batch()
+        .await
+        .expect("read disconnected batch")
+        .expect("disconnected batch");
+    assert_eq!(recovered.body().as_ref(), disconnected_body);
+    assert!(
+        batches
+            .next_batch()
+            .await
+            .expect("finish recovered batches")
+            .is_none()
+    );
+}
+
 fn runtime_configuration(endpoint: &str, spool_path: &str, scratch_path: &str) -> String {
+    runtime_configuration_with_timeouts(endpoint, spool_path, scratch_path, 5, 5)
+}
+
+fn runtime_configuration_with_timeouts(
+    endpoint: &str,
+    spool_path: &str,
+    scratch_path: &str,
+    request_timeout_seconds: u64,
+    shutdown_timeout_seconds: u64,
+) -> String {
     format!(
         r#"
 [server]
 listen_address = "127.0.0.1:0"
-request_timeout_seconds = 5
-shutdown_timeout_seconds = 5
+request_timeout_seconds = {request_timeout_seconds}
+shutdown_timeout_seconds = {shutdown_timeout_seconds}
 
 [metastore]
 maximum_connections = 4
@@ -619,6 +798,36 @@ async fn wait_for_unready_component(client: &Client, url: &str, component: &str)
             "component {component} did not become unavailable"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_pending_batches(client: &Client, url: &str, expected: u64) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = get_json(client, url, StatusCode::OK).await;
+        if status["publication"]["pending_batches"] == expected {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pending batch count did not reach {expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn wait_for_admission_state(client: &Client, url: &str, expected: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let status = get_json(client, url, StatusCode::OK).await;
+        if status["admission"] == expected {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "admission state did not reach {expected}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 

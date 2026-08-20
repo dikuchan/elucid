@@ -3,6 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use elucid_ingestion::{
     AppendBodyLimit, BatchMetadata, DurableAppend, MaximumBatchAdmission, RecoveredBatches, Spool,
@@ -23,6 +26,8 @@ struct IngestionShared {
     spool: Spool,
     maximum_body: AppendBodyLimit,
     concurrency: Arc<Semaphore>,
+    admitted_requests: TaskTracker,
+    shutdown: CancellationToken,
     used_bytes: AtomicU64,
     pending_batches: AtomicU64,
     _recovered_batches: tokio::sync::Mutex<RecoveredBatches>,
@@ -59,6 +64,8 @@ impl IngestionBoundary {
                 spool,
                 maximum_body,
                 concurrency: Arc::new(Semaphore::new(permits)),
+                admitted_requests: TaskTracker::new(),
+                shutdown: CancellationToken::new(),
                 used_bytes: AtomicU64::new(report.committed_bytes()),
                 pending_batches: AtomicU64::new(report.pending_batches()),
                 _recovered_batches: tokio::sync::Mutex::new(recovered_batches),
@@ -75,6 +82,9 @@ impl IngestionBoundary {
     }
 
     pub(crate) fn availability(&self) -> IngestionAvailability {
+        if self.inner.concurrency.is_closed() {
+            return IngestionAvailability::Unavailable;
+        }
         match self
             .inner
             .spool
@@ -90,11 +100,14 @@ impl IngestionBoundary {
     }
 
     pub(crate) fn try_admit(&self) -> Result<AdmittedAppend, AdmissionFailure> {
+        // The token must exist before acquiring a permit. Shutdown closes the semaphore before
+        // waiting on the tracker, so every request that wins the admission race is accounted for.
+        let request = self.inner.admitted_requests.token();
         let permit = Arc::clone(&self.inner.concurrency)
             .try_acquire_owned()
             .map_err(|error| match error {
                 TryAcquireError::NoPermits => AdmissionFailure::CapacityExhausted,
-                TryAcquireError::Closed => AdmissionFailure::Unavailable,
+                TryAcquireError::Closed => AdmissionFailure::Draining,
             })?;
         let reservation = self
             .inner
@@ -104,8 +117,24 @@ impl IngestionBoundary {
         Ok(AdmittedAppend {
             inner: Arc::clone(&self.inner),
             reservation,
+            _request: request,
             _permit: permit,
         })
+    }
+
+    #[must_use]
+    pub(crate) fn shutdown_token(&self) -> CancellationToken {
+        self.inner.shutdown.clone()
+    }
+
+    pub(crate) fn begin_shutdown(&self) {
+        self.inner.concurrency.close();
+        self.inner.admitted_requests.close();
+        self.inner.shutdown.cancel();
+    }
+
+    pub(crate) async fn wait_for_admitted_requests(&self) {
+        self.inner.admitted_requests.wait().await;
     }
 }
 
@@ -137,6 +166,7 @@ impl IngestionStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AdmissionFailure {
     CapacityExhausted,
+    Draining,
     Unavailable,
 }
 
@@ -144,6 +174,7 @@ pub(crate) enum AdmissionFailure {
 pub(crate) struct AdmittedAppend {
     inner: Arc<IngestionShared>,
     reservation: SpoolReservation,
+    _request: TaskTrackerToken,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -156,6 +187,7 @@ impl AdmittedAppend {
         let Self {
             inner,
             reservation,
+            _request,
             _permit,
         } = self;
         let durable = reservation.append(metadata, body).await?;
