@@ -403,6 +403,19 @@ impl NormalizedBatch {
         self.ignored_records
     }
 
+    pub fn remove_covered_positions(
+        &mut self,
+        covered_positions: &std::collections::BTreeSet<u64>,
+    ) {
+        self.records.retain(|record| {
+            let position = match record {
+                NormalizedRecord::Accepted(row) => row.location().input_position(),
+                NormalizedRecord::DeadLetter(entry) => entry.location().input_position(),
+            };
+            !covered_positions.contains(&position)
+        });
+    }
+
     pub(crate) fn into_records(self) -> Vec<NormalizedRecord> {
         self.records
     }

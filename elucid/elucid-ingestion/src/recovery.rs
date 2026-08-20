@@ -4,12 +4,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use tokio::sync::watch;
 
 use crate::frame::{
     FOOTER_BYTES, HEADER_BYTES, decode_header, reserved_frame_bytes, validate_digests_and_footer,
     validate_incomplete_header,
 };
 use crate::spool::DATA_FILE_NAME;
+use crate::spool::SpoolExtent;
 use crate::{
     AppendBodyLimit, MaximumBatchAdmission, RecoveredBatch, RecoveryReport, Spool, SpoolCapacity,
     SpoolCheckpoint, SpoolError,
@@ -42,7 +44,9 @@ impl SpoolRecovery {
 pub struct RecoveredBatches {
     reader: Arc<Mutex<File>>,
     position: u64,
-    end: u64,
+    recovered_end: u64,
+    generation: u64,
+    extent: watch::Receiver<SpoolExtent>,
     body_limit: AppendBodyLimit,
     state: RecoveredBatchState,
 }
@@ -50,9 +54,9 @@ pub struct RecoveredBatches {
 impl RecoveredBatches {
     /// Reads and validates the next batch that was not covered by the recovered checkpoint.
     ///
-    /// The reader holds at most one configured maximum-size batch body in memory. It is a
-    /// snapshot of the committed range observed during recovery and does not include later
-    /// appends. Cancelling an in-progress read does not advance the durable batch position.
+    /// The reader holds at most one configured maximum-size batch body in memory. It is a snapshot
+    /// of the committed range observed during recovery and does not include later appends.
+    /// Cancelling an in-progress read does not advance the durable batch position.
     ///
     /// # Errors
     ///
@@ -60,8 +64,8 @@ impl RecoveredBatches {
     /// `SPOOL_UNAVAILABLE` after an I/O or blocking-task failure. A failed reader cannot resume.
     pub async fn next_batch(&mut self) -> Result<Option<RecoveredBatch>, SpoolError> {
         match self.state {
-            RecoveredBatchState::Reading => {}
-            RecoveredBatchState::Complete => return Ok(None),
+            RecoveredBatchState::ReadingRecovery | RecoveredBatchState::Following => {}
+            RecoveredBatchState::RecoveryComplete => return Ok(None),
             RecoveredBatchState::Failed => {
                 return Err(SpoolError::invariant(
                     "recovered spool reader is unavailable after a previous failure",
@@ -69,14 +73,37 @@ impl RecoveredBatches {
             }
         }
 
-        if self.position == self.end {
-            self.state = RecoveredBatchState::Complete;
+        let end = match self.state {
+            RecoveredBatchState::ReadingRecovery => self.recovered_end,
+            RecoveredBatchState::Following => {
+                let extent = *self.extent.borrow_and_update();
+                if extent.generation != self.generation {
+                    self.generation = extent.generation;
+                    self.position = 0;
+                }
+                if self.position > extent.end {
+                    self.state = RecoveredBatchState::Failed;
+                    return Err(SpoolError::corrupt(
+                        "live spool extent moved behind the reader without reclamation",
+                    ));
+                }
+                extent.end
+            }
+            RecoveredBatchState::RecoveryComplete | RecoveredBatchState::Failed => {
+                return Err(SpoolError::invariant(
+                    "recovered spool reader changed state unexpectedly",
+                ));
+            }
+        };
+        if self.position == end {
+            if self.state == RecoveredBatchState::ReadingRecovery {
+                self.state = RecoveredBatchState::RecoveryComplete;
+            }
             return Ok(None);
         }
 
         let reader = Arc::clone(&self.reader);
         let position = self.position;
-        let end = self.end;
         let body_limit = self.body_limit;
         let result = tokio::task::spawn_blocking(move || {
             read_recovered_batch(&reader, position, end, body_limit)
@@ -95,12 +122,38 @@ impl RecoveredBatches {
             }
         }
     }
+
+    /// Waits until the next durable batch is available and returns it exactly once to this reader.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed spool failures as [`Self::next_batch`], or unavailable if the spool
+    /// writer disappears while the reader is waiting.
+    pub async fn wait_next_batch(&mut self) -> Result<RecoveredBatch, SpoolError> {
+        if self.state == RecoveredBatchState::ReadingRecovery
+            && let Some(batch) = self.next_batch().await?
+        {
+            return Ok(batch);
+        }
+        if self.state == RecoveredBatchState::RecoveryComplete {
+            self.state = RecoveredBatchState::Following;
+        }
+        loop {
+            if let Some(batch) = self.next_batch().await? {
+                return Ok(batch);
+            }
+            self.extent.changed().await.map_err(|_| {
+                SpoolError::invariant("live spool writer disappeared while waiting for a batch")
+            })?;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecoveredBatchState {
-    Reading,
-    Complete,
+    ReadingRecovery,
+    RecoveryComplete,
+    Following,
     Failed,
 }
 
@@ -117,7 +170,7 @@ pub(crate) async fn recover(
     .await
     .map_err(SpoolError::task)??;
 
-    let spool = Spool::from_recovered(
+    let (spool, extent) = Spool::from_recovered(
         recovered.writer,
         directory,
         capacity,
@@ -127,9 +180,11 @@ pub(crate) async fn recover(
     let batches = RecoveredBatches {
         reader: Arc::new(Mutex::new(recovered.reader)),
         position: recovered.report.checkpoint().position(),
-        end: recovered.report.committed_bytes(),
+        recovered_end: recovered.report.committed_bytes(),
+        generation: 0,
+        extent,
         body_limit: maximum_batch,
-        state: RecoveredBatchState::Reading,
+        state: RecoveredBatchState::ReadingRecovery,
     };
     Ok(SpoolRecovery {
         spool,

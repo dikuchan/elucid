@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bytes::Bytes;
+use tokio::sync::watch;
 
 use crate::checkpoint;
 use crate::frame::{PreparedFrame, reserved_frame_bytes};
@@ -27,14 +28,22 @@ struct SpoolInner {
     writer: Mutex<File>,
     accounting: Mutex<Accounting>,
     checkpoint: Mutex<crate::SpoolCheckpoint>,
+    extent: watch::Sender<SpoolExtent>,
     directory: PathBuf,
     failed: AtomicBool,
 }
 
 #[derive(Debug)]
 struct Accounting {
+    generation: u64,
     committed_bytes: u64,
     reserved_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SpoolExtent {
+    pub(crate) generation: u64,
+    pub(crate) end: u64,
 }
 
 impl Spool {
@@ -90,7 +99,8 @@ impl Spool {
             capacity,
             0,
             crate::SpoolCheckpoint::INITIAL,
-        ))
+        )
+        .0)
     }
 
     /// Recovers a previously created append-only spool and its pending committed batches.
@@ -116,20 +126,30 @@ impl Spool {
         capacity: SpoolCapacity,
         committed_bytes: u64,
         checkpoint: crate::SpoolCheckpoint,
-    ) -> Self {
-        Self {
-            inner: Arc::new(SpoolInner {
-                capacity,
-                writer: Mutex::new(writer),
-                accounting: Mutex::new(Accounting {
-                    committed_bytes,
-                    reserved_bytes: 0,
+    ) -> (Self, watch::Receiver<SpoolExtent>) {
+        let extent = SpoolExtent {
+            generation: 0,
+            end: committed_bytes,
+        };
+        let (extent_sender, extent_receiver) = watch::channel(extent);
+        (
+            Self {
+                inner: Arc::new(SpoolInner {
+                    capacity,
+                    writer: Mutex::new(writer),
+                    accounting: Mutex::new(Accounting {
+                        generation: 0,
+                        committed_bytes,
+                        reserved_bytes: 0,
+                    }),
+                    checkpoint: Mutex::new(checkpoint),
+                    extent: extent_sender,
+                    directory,
+                    failed: AtomicBool::new(false),
                 }),
-                checkpoint: Mutex::new(checkpoint),
-                directory,
-                failed: AtomicBool::new(false),
-            }),
-        }
+            },
+            extent_receiver,
+        )
     }
 
     /// Reserves the worst-case physical spool space before the caller reads a request body.
@@ -416,6 +436,12 @@ impl SpoolInner {
             })?;
         accounting.committed_bytes = new_committed;
         accounting.reserved_bytes -= reserved_bytes;
+        let extent = SpoolExtent {
+            generation: accounting.generation,
+            end: accounting.committed_bytes,
+        };
+        drop(accounting);
+        self.extent.send_replace(extent);
         Ok(())
     }
 
@@ -512,6 +538,18 @@ impl SpoolInner {
             .sync_all()
             .map_err(|source| self.fail_io("synchronize reclaimed spool data", source))?;
         accounting.committed_bytes = 0;
+        accounting.generation = accounting.generation.checked_add(1).ok_or_else(|| {
+            self.mark_failed();
+            SpoolError::invariant("spool reclamation generation overflow")
+        })?;
+        let extent = SpoolExtent {
+            generation: accounting.generation,
+            end: 0,
+        };
+        drop(checkpoint);
+        drop(accounting);
+        drop(writer);
+        self.extent.send_replace(extent);
         Ok(crate::SpoolReclamation::reclaimed(reclaimed_bytes))
     }
 

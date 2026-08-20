@@ -17,6 +17,7 @@ pub enum ServiceErrorCode {
     SpoolUnavailable,
     SpoolCorrupt,
     IngestionInitializationFailed,
+    IngestionRuntimeFailed,
     RuntimeFailed,
     ShutdownTimedOut,
     SignalFailed,
@@ -35,6 +36,7 @@ impl ServiceErrorCode {
             Self::SpoolUnavailable => "SPOOL_UNAVAILABLE",
             Self::SpoolCorrupt => "SPOOL_CORRUPT",
             Self::IngestionInitializationFailed => "INGESTION_INITIALIZATION_FAILED",
+            Self::IngestionRuntimeFailed => "INGESTION_RUNTIME_FAILED",
             Self::RuntimeFailed => "SERVER_RUNTIME_FAILED",
             Self::ShutdownTimedOut => "SERVER_SHUTDOWN_TIMED_OUT",
             Self::SignalFailed => "SERVER_SIGNAL_FAILED",
@@ -98,6 +100,9 @@ pub enum ServiceError {
     #[error("ingestion initialization failed: {reason}")]
     IngestionInitialization { reason: &'static str },
 
+    #[error("ingestion runtime failed: {reason}")]
+    IngestionRuntime { reason: &'static str },
+
     #[error("HTTP runtime failed")]
     HttpRuntime {
         #[source]
@@ -147,6 +152,7 @@ impl ServiceError {
                 _ => ServiceErrorCode::SpoolUnavailable,
             },
             Self::IngestionInitialization { .. } => ServiceErrorCode::IngestionInitializationFailed,
+            Self::IngestionRuntime { .. } => ServiceErrorCode::IngestionRuntimeFailed,
             Self::HttpRuntime { .. } | Self::Supervisor { .. } => ServiceErrorCode::RuntimeFailed,
             Self::ShutdownTimedOut => ServiceErrorCode::ShutdownTimedOut,
             Self::Signal { .. } => ServiceErrorCode::SignalFailed,

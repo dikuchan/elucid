@@ -355,6 +355,16 @@ impl BatchOutputRequirements {
             .collect();
         Self::new(batch.metadata().batch_id(), spool_range, positions)
     }
+
+    #[must_use]
+    pub const fn batch_id(&self) -> BatchId {
+        self.batch_id
+    }
+
+    #[must_use]
+    pub const fn spool_range(&self) -> SpoolBatchRange {
+        self.spool_range
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

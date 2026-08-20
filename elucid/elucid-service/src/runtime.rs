@@ -17,10 +17,12 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use elucid_metastore::{CatalogStore, install};
+use elucid_metastore::{CatalogStore, OperationalStore, PublicationStore, install};
+use elucid_storage::ImmutableObjectStore;
 
 use crate::ingestion::{IngestionAvailability, IngestionBoundary};
 use crate::local_storage::LocalStorageBoundary;
+use crate::metrics::ServiceMetrics;
 use crate::{MaintenanceMode, RuntimeConfiguration, ServiceError};
 
 const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -117,6 +119,7 @@ impl RuntimeSnapshot {
 
 pub(crate) struct ApplicationState {
     configuration: Arc<RuntimeConfiguration>,
+    metrics: Arc<ServiceMetrics>,
     runtime: RwLock<RuntimeSnapshot>,
 }
 
@@ -124,6 +127,7 @@ impl ApplicationState {
     fn new(configuration: RuntimeConfiguration) -> Self {
         Self {
             configuration: Arc::new(configuration),
+            metrics: Arc::new(ServiceMetrics::default()),
             runtime: RwLock::new(RuntimeSnapshot::Starting {
                 health: ComponentHealth::starting(),
             }),
@@ -133,6 +137,11 @@ impl ApplicationState {
     #[must_use]
     pub(crate) fn configuration(&self) -> &RuntimeConfiguration {
         &self.configuration
+    }
+
+    #[must_use]
+    pub(crate) fn metrics(&self) -> &Arc<ServiceMetrics> {
+        &self.metrics
     }
 
     #[must_use]
@@ -185,6 +194,9 @@ impl ApplicationState {
 pub(crate) struct Dependencies {
     pub(crate) catalog: CatalogStore,
     pub(crate) ingestion: IngestionBoundary,
+    pub(crate) operations: OperationalStore,
+    pub(crate) publication: PublicationStore,
+    pub(crate) immutable_objects: ImmutableObjectStore,
     pub(crate) local_storage: LocalStorageBoundary,
     pub(crate) maintenance: MaintenanceBoundary,
     pool: PgPool,
@@ -376,6 +388,25 @@ async fn supervise(
     let health = initialized_health(&dependencies);
     let dependencies = Arc::new(dependencies);
     state.become_operational(Arc::clone(&dependencies), health);
+    let configuration = state.configuration();
+    let mut ingestion_processing = Box::pin(crate::processing::run(
+        &dependencies.ingestion,
+        crate::processing::ProcessingDependencies {
+            catalog: &dependencies.catalog,
+            publication: &dependencies.publication,
+            operations: &dependencies.operations,
+            objects: &dependencies.immutable_objects,
+            root: configuration.object_store().managed_root(),
+            spool_path: configuration.local_storage().spool_path(),
+            scratch_path: dependencies.local_storage.scratch_path(),
+            scratch_bytes: configuration.local_storage().scratch_capacity_bytes().get(),
+            event_retention_seconds: configuration.maintenance().event_retention_seconds().get(),
+            dead_letter_retention_seconds: configuration
+                .maintenance()
+                .dead_letter_retention_seconds()
+                .get(),
+        },
+    ));
     let mut health_checks = Box::pin(run_health_checks(
         Arc::clone(&state),
         Arc::clone(&dependencies),
@@ -394,6 +425,25 @@ async fn supervise(
             .await
         }
         result = http.as_mut() => unexpected_http_result(result),
+        result = ingestion_processing.as_mut() => {
+            state.begin_draining();
+            dependencies.ingestion.begin_shutdown();
+            http_cancellation.cancel();
+            finish_http_and_ingestion(
+                &mut http,
+                &dependencies.ingestion,
+                shutdown_timeout,
+            )
+            .await?;
+            match result {
+                Ok(()) => Err(ServiceError::IngestionRuntime {
+                    reason: "ingestion processing stopped unexpectedly",
+                }),
+                Err(error) => Err(ServiceError::IngestionRuntime {
+                    reason: error.reason(),
+                }),
+            }
+        },
         () = health_checks.as_mut() => Err(ServiceError::HttpRuntime {
             source: std::io::Error::other("health-check loop stopped unexpectedly"),
         }),
@@ -439,8 +489,12 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
     state.update_starting(|health| health.object_store = ComponentStatus::Up);
 
     let local_storage = LocalStorageBoundary::open(configuration.local_storage()).await?;
-    let ingestion =
-        IngestionBoundary::open(configuration.local_storage(), configuration.ingestion()).await?;
+    let ingestion = IngestionBoundary::open(
+        configuration.local_storage(),
+        configuration.ingestion(),
+        Arc::clone(state.metrics()),
+    )
+    .await?;
     let (spool, ingestion_worker) = ingestion_component_health(&ingestion);
     state.update_starting(|health| {
         health.spool = spool;
@@ -449,9 +503,18 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
 
     let maintenance = initialize_maintenance(configuration, &pool).await?;
     state.update_starting(|health| health.maintenance = maintenance.status());
+    let publication = PublicationStore::new(pool.clone());
+    let operations = OperationalStore::new(
+        pool.clone(),
+        configuration.object_store().managed_root().clone(),
+    );
+    let immutable_objects = ImmutableObjectStore::new(Arc::clone(&object_store));
     Ok(Dependencies {
         catalog,
         ingestion,
+        operations,
+        publication,
+        immutable_objects,
         local_storage,
         maintenance,
         pool,

@@ -1895,6 +1895,7 @@ name = "elucid-service"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "blake3",
  "bytes",
  "chrono",
  "elucid-catalog",

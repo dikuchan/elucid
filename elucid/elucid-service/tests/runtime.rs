@@ -324,17 +324,10 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
         "NOT_FOUND",
     )
     .await;
-    assert_ingestion_error(
-        client
-            .post(format!(
-                "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
-            ))
-            .header("Content-Type", "application/x-ndjson")
-            .body(vec![b'x'; 1_048_577])
-            .send()
-            .await
-            .expect("reject oversized body"),
-        StatusCode::PAYLOAD_TOO_LARGE,
+    assert_raw_ingestion_error(
+        server.local_address(),
+        1_048_577,
+        "413 Payload Too Large",
         "INGESTION_BATCH_LIMIT_EXCEEDED",
     )
     .await;
@@ -352,6 +345,102 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
         "INGESTION_BATCH_LIMIT_EXCEEDED",
     )
     .await;
+
+    let mixed_body = concat!(
+        "{\"timestamp\":\"2026-08-20T11:59:59.000Z\",\"message\":\"valid before\",\"status\":200}\n",
+        "{\"timestamp\":\"not-a-timestamp\",\"message\":\"invalid neighbor\"}\n",
+        "{\"timestamp\":\"2026-08-20T12:00:00.000Z\",\"message\":\"valid after\",\"status\":500}\n",
+    );
+    let accepted = client
+        .post(format!(
+            "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+        ))
+        .header("Content-Type", "application/x-ndjson")
+        .body(mixed_body)
+        .send()
+        .await
+        .expect("admit mixed ingestion batch");
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    assert_eq!(json(accepted).await["state"], "DURABLY_QUEUED");
+
+    let segments_url = format!("{endpoint}/api/v1/segments?source_id={source_id}&state=ACTIVE");
+    let segments = wait_for_list_items(&client, &segments_url, "segments", 1).await;
+    assert_eq!(segments["completion"], "COMPLETE");
+    assert_eq!(segments["limit"], 100);
+    assert_eq!(segments["segments"][0]["source_id"], source_id);
+    assert_eq!(segments["segments"][0]["schema_id"], target_schema_id);
+    assert_eq!(segments["segments"][0]["state"], "ACTIVE");
+    assert_eq!(segments["segments"][0]["origin"], "INGESTION");
+    assert_eq!(segments["segments"][0]["event_day"], "2026-08-20");
+    assert_eq!(segments["segments"][0]["row_count"], 2);
+    assert!(
+        segments["segments"][0]["parquet_bytes"]
+            .as_u64()
+            .expect("Parquet byte count")
+            > 0
+    );
+
+    let dead_letters_url = format!("{endpoint}/api/v1/dead-letters?source_id={source_id}");
+    let dead_letters = wait_for_list_items(&client, &dead_letters_url, "dead_letters", 1).await;
+    assert_eq!(dead_letters["completion"], "COMPLETE");
+    assert_eq!(dead_letters["limit"], 100);
+    assert_eq!(dead_letters["dead_letters"][0]["source_id"], source_id);
+    assert_eq!(dead_letters["dead_letters"][0]["input_id"], input_id);
+    let dead_letter_object_id = dead_letters["dead_letters"][0]["object_id"]
+        .as_str()
+        .expect("dead-letter object identity");
+    let dead_letter = get_json(
+        &client,
+        &format!("{endpoint}/api/v1/dead-letters/{dead_letter_object_id}"),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(dead_letter["completion"], "COMPLETE");
+    assert_eq!(dead_letter["limit_bytes"], 1_048_576);
+    assert_eq!(dead_letter["entries"].as_array().expect("entries").len(), 1);
+    assert_eq!(dead_letter["entries"][0]["line_number"], 2);
+    assert_eq!(
+        dead_letter["entries"][0]["code"],
+        "RECORD_EVENT_TIME_INVALID"
+    );
+    assert_eq!(dead_letter["entries"][0]["payload"]["encoding"], "UTF8");
+    assert_eq!(dead_letter["entries"][0]["payload"]["extent"], "COMPLETE");
+
+    let drained = wait_for_pending_batches(&client, &format!("{endpoint}/api/v1/status"), 0).await;
+    assert_eq!(drained["publication"]["status"], "UP");
+    assert_eq!(drained["publication"]["prepared_segments"], 0);
+    assert_eq!(drained["publication"]["planned_objects"], 0);
+    assert_eq!(drained["publication"]["uploaded_objects"], 0);
+    assert_eq!(regular_files_under(&local.path().join("scratch")), 0);
+
+    let metrics = client
+        .get(format!("{endpoint}/metrics"))
+        .send()
+        .await
+        .expect("request metrics");
+    assert_eq!(metrics.status(), StatusCode::OK);
+    assert!(
+        metrics
+            .headers()
+            .get("Content-Type")
+            .expect("metrics content type")
+            .to_str()
+            .expect("metrics content type text")
+            .starts_with("text/plain")
+    );
+    let metrics = metrics.text().await.expect("read metrics");
+    for metric in [
+        "elucid_ingestion_http_batches_accepted_total 1",
+        "elucid_ingestion_http_batches_rejected_total 6",
+        "elucid_ingestion_records_accepted_total 2",
+        "elucid_ingestion_records_rejected_total 1",
+        "elucid_ingestion_segments_published_total 1",
+        "elucid_ingestion_dead_letter_objects_published_total 1",
+        "elucid_spool_pending_batches 0",
+        "elucid_publication_prepared_segments 0",
+    ] {
+        assert!(metrics.contains(metric), "missing metric {metric}");
+    }
 
     let body = concat!(
         "{\"timestamp\":\"2026-08-20T12:00:00.000Z\",\"message\":\"first\"}\n",
@@ -492,6 +581,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     )
     .await;
     assert_eq!(cached_sources["sources"][0]["source_id"], source_id);
+    wait_for_publication_backlog(&client, &status_url, 1).await;
 
     server.shutdown().await.expect("shutdown server");
 
@@ -503,7 +593,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     .await
     .expect("recover service spool");
     assert_eq!(recovery.report().pending_batches(), 1);
-    let (_, mut batches, _) = recovery.into_parts();
+    let (recovered_spool, mut batches, _) = recovery.into_parts();
     let recovered = batches
         .next_batch()
         .await
@@ -548,11 +638,84 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
             .expect("finish recovered batches")
             .is_none()
     );
+    drop(batches);
+    drop(recovered_spool);
+
+    let scratch_path = local.path().join("scratch");
+    std::fs::remove_dir_all(&scratch_path).expect("remove staged output before restart");
+    std::fs::create_dir(&scratch_path).expect("recreate empty scratch directory");
+    let restart_network = format!("elucid-service-restart-{test_identity}");
+    let restart_server_name = format!("elucid-service-restart-minio-{test_identity}");
+    let restarted_minio = MinIO::default()
+        .with_network(restart_network.clone())
+        .with_container_name(restart_server_name.clone())
+        .with_startup_timeout(Duration::from_secs(30))
+        .start()
+        .await
+        .expect("start replacement MinIO");
+    let restart_minio_alias = format!("http://minioadmin:minioadmin@{restart_server_name}:9000");
+    let _restart_bucket = GenericImage::new("minio/mc", MINIO_CLIENT_TAG)
+        .with_wait_for(WaitFor::message_on_stdout("Bucket created successfully"))
+        .with_network(restart_network)
+        .with_env_var("MC_HOST_local", restart_minio_alias)
+        .with_cmd(["mb", bucket_path.as_str()])
+        .with_startup_timeout(Duration::from_secs(30))
+        .start()
+        .await
+        .expect("create replacement MinIO bucket");
+    let restart_minio_host = restarted_minio
+        .get_host()
+        .await
+        .expect("replacement MinIO host");
+    let restart_minio_port = restarted_minio
+        .get_host_port_ipv4(9000)
+        .await
+        .expect("replacement MinIO port");
+    let restart_document = runtime_configuration(
+        &format!("http://{restart_minio_host}:{restart_minio_port}"),
+        local.path().join("spool").to_str().expect("spool path"),
+        scratch_path.to_str().expect("scratch path"),
+    );
+    let configuration = RuntimeConfiguration::from_toml(&restart_document, &environment)
+        .expect("decode restart configuration");
+    let restarted = start(configuration).await.expect("restart server");
+    let restarted_endpoint = format!("http://{}", restarted.local_address());
+    let restart_ready = wait_for_status_until(
+        &client,
+        &format!("{restarted_endpoint}/health/ready"),
+        StatusCode::OK,
+        Duration::from_secs(20),
+    )
+    .await;
+    if !restart_ready {
+        let error = restarted
+            .shutdown()
+            .await
+            .expect_err("restarted server should expose its startup failure");
+        panic!("restarted server did not become ready: {error:?}");
+    }
+    let segments = wait_for_list_items(
+        &client,
+        &format!("{restarted_endpoint}/api/v1/segments?source_id={source_id}&state=ACTIVE"),
+        "segments",
+        2,
+    )
+    .await;
+    assert_eq!(segments["segments"][0]["row_count"], 2);
+    let drained =
+        wait_for_pending_batches(&client, &format!("{restarted_endpoint}/api/v1/status"), 0).await;
+    assert_eq!(drained["publication"]["prepared_segments"], 0);
+    assert_eq!(drained["publication"]["planned_objects"], 0);
+    assert_eq!(regular_files_under(&scratch_path), 0);
+    restarted
+        .shutdown()
+        .await
+        .expect("shutdown restarted server");
 }
 
 #[tokio::test]
 #[ignore = "requires Docker"]
-async fn disconnect_is_ambiguous_and_shutdown_recovers_an_incomplete_append() {
+async fn disconnect_is_ambiguous_and_shutdown_discards_an_incomplete_request() {
     let postgres = Postgres::default()
         .with_startup_timeout(Duration::from_secs(30))
         .start()
@@ -616,7 +779,8 @@ async fn disconnect_is_ambiguous_and_shutdown_recovers_an_incomplete_append() {
         .build()
         .expect("build HTTP client");
     wait_for_status(&client, &format!("{endpoint}/health/ready"), StatusCode::OK).await;
-    apply_catalog(&client, &endpoint).await;
+    let applied = apply_catalog(&client, &endpoint).await;
+    let source_id = applied["source_id"].as_str().expect("source identity");
 
     let disconnected_body = b"{}\n";
     let mut disconnected = TcpStream::connect(server.local_address())
@@ -645,7 +809,23 @@ async fn disconnect_is_ambiguous_and_shutdown_recovers_an_incomplete_append() {
     disconnected.flush().await.expect("flush complete request");
     drop(disconnected);
 
-    let status = wait_for_pending_batches(&client, &status_url, 1).await;
+    let dead_letters = wait_for_list_items(
+        &client,
+        &format!("{endpoint}/api/v1/dead-letters?source_id={source_id}"),
+        "dead_letters",
+        1,
+    )
+    .await;
+    let disconnected_batch_id = dead_letters["dead_letters"][0]["batch_id"]
+        .as_str()
+        .expect("disconnected batch identity");
+    assert_eq!(
+        Uuid::parse_str(disconnected_batch_id)
+            .expect("UUID disconnected batch identity")
+            .get_version_num(),
+        7
+    );
+    let status = wait_for_pending_batches(&client, &status_url, 0).await;
     assert_eq!(status["admission"], "OPEN");
 
     let mut connection = TcpStream::connect(server.local_address())
@@ -674,14 +854,8 @@ async fn disconnect_is_ambiguous_and_shutdown_recovers_an_incomplete_append() {
     )
     .await
     .expect("recover service spool");
-    assert_eq!(recovery.report().pending_batches(), 1);
+    assert_eq!(recovery.report().pending_batches(), 0);
     let (_, mut batches, _) = recovery.into_parts();
-    let recovered = batches
-        .next_batch()
-        .await
-        .expect("read disconnected batch")
-        .expect("disconnected batch");
-    assert_eq!(recovered.body().as_ref(), disconnected_body);
     assert!(
         batches
             .next_batch()
@@ -763,6 +937,44 @@ async fn assert_ingestion_error(
     assert_eq!(json(response).await["error"]["code"], expected_code);
 }
 
+async fn assert_raw_ingestion_error(
+    address: std::net::SocketAddr,
+    content_length: u64,
+    expected_status: &str,
+    expected_code: &str,
+) {
+    let mut connection = TcpStream::connect(address)
+        .await
+        .expect("connect raw ingestion request");
+    let request = format!(
+        "POST /api/v1/sources/demo_logs/inputs/vector/events HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/x-ndjson\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+    );
+    connection
+        .write_all(request.as_bytes())
+        .await
+        .expect("write raw ingestion request");
+    connection
+        .flush()
+        .await
+        .expect("flush raw ingestion request");
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        connection.read_to_end(&mut response),
+    )
+    .await
+    .expect("raw ingestion response timed out")
+    .expect("read raw ingestion response");
+    let response = String::from_utf8(response).expect("UTF-8 raw ingestion response");
+    let (headers, body) = response
+        .split_once("\r\n\r\n")
+        .expect("split raw ingestion response");
+    assert!(headers.starts_with(&format!("HTTP/1.1 {expected_status}")));
+    assert!(headers.to_ascii_lowercase().contains("x-request-id:"));
+    let body: Value = serde_json::from_str(body).expect("decode raw ingestion error");
+    assert_eq!(body["error"]["code"], expected_code);
+}
+
 async fn wait_for_status(client: &Client, url: &str, expected_status: StatusCode) -> Value {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -778,6 +990,26 @@ async fn wait_for_status(client: &Client, url: &str, expected_status: StatusCode
             Instant::now() < deadline,
             "endpoint did not reach {expected_status}"
         );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_status_until(
+    client: &Client,
+    url: &str,
+    expected_status: StatusCode,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(response) = client.get(url).send().await
+            && response.status() == expected_status
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -815,6 +1047,64 @@ async fn wait_for_pending_batches(client: &Client, url: &str, expected: u64) -> 
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+async fn wait_for_list_items(client: &Client, url: &str, field: &str, expected: usize) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Ok(response) = client.get(url).send().await
+            && response.status() == StatusCode::OK
+        {
+            let body = json(response).await;
+            if body[field]
+                .as_array()
+                .is_some_and(|items| items.len() == expected)
+            {
+                return body;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{field} did not reach {expected} items"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_publication_backlog(client: &Client, url: &str, expected_planned: u64) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Ok(response) = client.get(url).send().await
+            && response.status() == StatusCode::OK
+        {
+            let body = json(response).await;
+            if body["publication"]["planned_objects"] == expected_planned {
+                return body;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "publication backlog did not reach {expected_planned} planned objects"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn regular_files_under(root: &std::path::Path) -> usize {
+    let mut pending = vec![root.to_owned()];
+    let mut files = 0_usize;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).expect("read scratch directory") {
+            let entry = entry.expect("read scratch entry");
+            let file_type = entry.file_type().expect("read scratch entry type");
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() {
+                files = files.checked_add(1).expect("scratch file count");
+            }
+        }
+    }
+    files
 }
 
 async fn wait_for_admission_state(client: &Client, url: &str, expected: &str) -> Value {

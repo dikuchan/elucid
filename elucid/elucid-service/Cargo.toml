@@ -8,11 +8,13 @@ workspace = true
 
 [dependencies]
 axum = { workspace = true, features = ["json", "tokio"] }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true, features = ["aws"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "net", "rt", "signal", "sync", "time"] }
@@ -28,7 +30,6 @@ elucid-storage = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio", "postgres"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

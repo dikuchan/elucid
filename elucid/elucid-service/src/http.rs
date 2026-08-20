@@ -3,16 +3,16 @@ use std::time::Duration;
 
 use axum::body::{Body, Bytes as BodyBytes};
 use axum::extract::rejection::BytesRejection;
-use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use futures::StreamExt as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -26,10 +26,19 @@ use elucid_ingestion::{
     BatchId, BatchMetadata, IngestionTime, MAXIMUM_BATCH_EVENT_DAYS, PinnedCatalogIdentities,
     SpoolErrorCode,
 };
-use elucid_metastore::{CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind};
+use elucid_metastore::{
+    CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind, DeadLetterSummary,
+    OperationalLimit, OperationalSegmentState, PublicationError, PublicationErrorKind,
+    SegmentInspection,
+};
+use elucid_storage::{
+    ObjectReadRange, StorageError, StorageErrorCode, StoredObjectId, TransferLimit,
+};
 
+use crate::dead_letter::{DeadLetterDocumentEntry, decode_dead_letters};
 use crate::ingestion::{
-    AdmissionFailure, AdmittedAppend, IngestionAvailability, MAXIMUM_HTTP_BATCH_RECORDS,
+    AdmissionFailure, AdmittedAppend, IngestionAvailability, IngestionStatus,
+    MAXIMUM_HTTP_BATCH_RECORDS,
 };
 use crate::runtime::{
     ApplicationState, ComponentHealth, ComponentStatus, MaintenanceOwnership, RuntimeSnapshot,
@@ -37,6 +46,8 @@ use crate::runtime::{
 
 const MAXIMUM_CATALOG_DOCUMENT_BYTES: usize = 1_048_576;
 const MAXIMUM_SOURCE_LIST_ITEMS: usize = 100;
+const MAXIMUM_OPERATIONAL_LIST_ITEMS: u64 = 100;
+const MAXIMUM_DEAD_LETTER_RESPONSE_BYTES: u64 = 1_048_576;
 const RETRY_AFTER_SECONDS: u64 = 1;
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
@@ -51,6 +62,7 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
     Router::new()
         .route("/health/live", get(liveness))
         .route("/health/ready", get(readiness))
+        .route("/metrics", get(metrics))
         .route("/api/v1/status", get(status))
         .route(
             "/api/v1/catalog-applications",
@@ -58,6 +70,9 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
         )
         .route("/api/v1/sources", get(list_sources))
         .route("/api/v1/sources/{source_id}", get(get_source))
+        .route("/api/v1/segments", get(list_segments))
+        .route("/api/v1/dead-letters", get(list_dead_letters))
+        .route("/api/v1/dead-letters/{object_id}", get(read_dead_letter))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
@@ -92,30 +107,50 @@ async fn status(State(state): State<Arc<ApplicationState>>) -> Json<StatusRespon
     let snapshot = state.snapshot();
     let configuration = state.configuration();
     let phase = service_phase(&snapshot);
-    let (spool_used_bytes, pending_batches, ingestion_availability, maintenance_ownership) =
-        snapshot.dependencies().map_or(
+    let (
+        spool_used_bytes,
+        pending_batches,
+        oldest_queued_age_seconds,
+        ingestion_availability,
+        maintenance_ownership,
+    ) = snapshot.dependencies().map_or(
+        (
+            0,
+            0,
+            None,
+            IngestionAvailability::Unavailable,
+            status_maintenance_without_dependencies(configuration),
+        ),
+        |dependencies| {
+            let ingestion = dependencies.ingestion.status();
             (
-                0,
-                0,
-                IngestionAvailability::Unavailable,
-                status_maintenance_without_dependencies(configuration),
-            ),
-            |dependencies| {
-                let ingestion = dependencies.ingestion.status();
-                (
-                    ingestion.used_bytes(),
-                    ingestion.pending_batches(),
-                    dependencies.ingestion.availability(),
-                    StatusMaintenanceOwnership::from(dependencies.maintenance.ownership()),
-                )
-            },
-        );
+                ingestion.used_bytes(),
+                ingestion.pending_batches(),
+                ingestion.oldest_queued_age_seconds(),
+                dependencies.ingestion.availability(),
+                StatusMaintenanceOwnership::from(dependencies.maintenance.ownership()),
+            )
+        },
+    );
     let admission =
         if snapshot.is_ready() && ingestion_availability == IngestionAvailability::Available {
             AdmissionState::Open
         } else {
             AdmissionState::Closed
         };
+    let publication_status = match snapshot.dependencies() {
+        Some(dependencies) if snapshot.health().postgresql == ComponentStatus::Up => {
+            match dependencies.operations.publication_backlog().await {
+                Ok(backlog) => {
+                    state.metrics().update_publication_backlog(backlog);
+                    ComponentStatus::Up
+                }
+                Err(_) => ComponentStatus::Down,
+            }
+        }
+        Some(_) | None => ComponentStatus::Down,
+    };
+    let publication_backlog = state.metrics().publication_backlog();
     Json(StatusResponse {
         phase,
         admission,
@@ -124,17 +159,37 @@ async fn status(State(state): State<Arc<ApplicationState>>) -> Json<StatusRespon
         spool: SpoolStatus {
             capacity_bytes: configuration.local_storage().spool_capacity_bytes().get(),
             used_bytes: spool_used_bytes,
-            oldest_queued_age_seconds: None,
+            pending_batches,
+            oldest_queued_age_seconds,
         },
         publication: PublicationStatus {
+            status: publication_status,
             pending_batches,
-            prepared_segments: 0,
+            prepared_segments: publication_backlog.prepared_segments,
+            planned_objects: publication_backlog.planned_objects,
+            uploaded_objects: publication_backlog.uploaded_objects,
         },
         maintenance: MaintenanceStatus {
             ownership: maintenance_ownership,
             recent_compactions: [],
         },
     })
+}
+
+async fn metrics(State(state): State<Arc<ApplicationState>>) -> Response {
+    let snapshot = state.snapshot();
+    let ingestion = snapshot
+        .dependencies()
+        .map(|dependencies| dependencies.ingestion.status());
+    let body = state.metrics().render(
+        ingestion.map_or(0, IngestionStatus::used_bytes),
+        ingestion.map_or(0, IngestionStatus::pending_batches),
+    );
+    (
+        [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn apply_catalog(
@@ -183,14 +238,14 @@ async fn ingest_events(
     );
     let request_deadline = Instant::now() + request_timeout;
     if !has_ndjson_content_type(request.headers()) {
-        return ApiError::unsupported_ingestion_media_type().into_response();
+        return reject_ingestion(&state, ApiError::unsupported_ingestion_media_type());
     }
     if !has_identity_content_encoding(request.headers()) {
-        return ApiError::unsupported_ingestion_encoding().into_response();
+        return reject_ingestion(&state, ApiError::unsupported_ingestion_encoding());
     }
     let content_length = match parse_content_length(request.headers()) {
         Ok(content_length) => content_length,
-        Err(error) => return error.into_response(),
+        Err(error) => return reject_ingestion(&state, error),
     };
     let maximum_body_bytes = state
         .configuration()
@@ -198,37 +253,43 @@ async fn ingest_events(
         .maximum_http_batch_bytes()
         .get();
     if content_length.is_some_and(|length| length > maximum_body_bytes) {
-        return ApiError::ingestion_batch_limit_exceeded().into_response();
+        return reject_ingestion(&state, ApiError::ingestion_batch_limit_exceeded());
     }
 
     let snapshot = state.snapshot();
     if !snapshot.is_ready() {
         if snapshot.is_draining() {
-            return ApiError::server_draining().into_response();
+            return reject_ingestion(&state, ApiError::server_draining());
         }
-        return ApiError::server_not_ready(readiness_details(&snapshot)).into_response();
+        return reject_ingestion(
+            &state,
+            ApiError::server_not_ready(readiness_details(&snapshot)),
+        );
     }
     let Some(dependencies) = snapshot.dependencies() else {
-        return ApiError::server_not_ready(readiness_details(&snapshot)).into_response();
+        return reject_ingestion(
+            &state,
+            ApiError::server_not_ready(readiness_details(&snapshot)),
+        );
     };
     let source_name = match SourceName::try_from(source_name) {
         Ok(source_name) => source_name,
-        Err(_) => return ApiError::invalid_request().into_response(),
+        Err(_) => return reject_ingestion(&state, ApiError::invalid_request()),
     };
     let input_name = match InputName::try_from(input_name) {
         Ok(input_name) => input_name,
-        Err(_) => return ApiError::invalid_request().into_response(),
+        Err(_) => return reject_ingestion(&state, ApiError::invalid_request()),
     };
     let catalog = dependencies.catalog.snapshot();
     let Some(source) = catalog.source_by_name(&source_name) else {
-        return ApiError::not_found().into_response();
+        return reject_ingestion(&state, ApiError::not_found());
     };
     let Some(input) = source
         .inputs()
         .iter()
         .find(|input| input.name() == &input_name)
     else {
-        return ApiError::not_found().into_response();
+        return reject_ingestion(&state, ApiError::not_found());
     };
     let profile = input.active_profile_revision();
     let pinned_catalog = PinnedCatalogIdentities::new(
@@ -240,26 +301,28 @@ async fn ingest_events(
     let admitted = match dependencies.ingestion.try_admit() {
         Ok(admitted) => admitted,
         Err(AdmissionFailure::CapacityExhausted) => {
-            return ApiError::capacity_exhausted().into_response();
+            return reject_ingestion(&state, ApiError::capacity_exhausted());
         }
         Err(AdmissionFailure::Draining) => {
-            return ApiError::server_draining().into_response();
+            return reject_ingestion(&state, ApiError::server_draining());
         }
         Err(AdmissionFailure::Unavailable) => {
-            return ApiError::server_not_ready(spool_unavailable_details(&snapshot))
-                .into_response();
+            return reject_ingestion(
+                &state,
+                ApiError::server_not_ready(spool_unavailable_details(&snapshot)),
+            );
         }
     };
 
     let batch_id = match BatchId::try_from(Uuid::now_v7()) {
         Ok(batch_id) => batch_id,
-        Err(_) => return ApiError::internal().into_response(),
+        Err(_) => return reject_ingestion(&state, ApiError::internal()),
     };
     let captured_time = Utc::now();
     let ingestion_time =
         match IngestionTime::from_unix_milliseconds(captured_time.timestamp_millis()) {
             Ok(ingestion_time) => ingestion_time,
-            Err(_) => return ApiError::internal().into_response(),
+            Err(_) => return reject_ingestion(&state, ApiError::internal()),
         };
     let metadata = BatchMetadata::new(batch_id, pinned_catalog, ingestion_time);
     let shutdown = dependencies.ingestion.shutdown_token();
@@ -278,9 +341,22 @@ async fn ingest_events(
         outcome_sender,
     ));
     match outcome_receiver.await {
-        Ok(outcome) => outcome.into_response(),
-        Err(_) => ApiError::internal().into_response(),
+        Ok(outcome) => {
+            if outcome.is_rejected() {
+                state.metrics().record_http_rejected();
+            }
+            outcome.into_response()
+        }
+        Err(_) => {
+            state.metrics().record_http_rejected();
+            ApiError::internal().into_response()
+        }
     }
+}
+
+fn reject_ingestion(state: &ApplicationState, error: ApiError) -> Response {
+    state.metrics().record_http_rejected();
+    error.into_response()
 }
 
 struct AdmittedRequest {
@@ -432,6 +508,10 @@ enum AdmittedIngestionOutcome {
 }
 
 impl AdmittedIngestionOutcome {
+    const fn is_rejected(&self) -> bool {
+        !matches!(self, Self::Accepted(_))
+    }
+
     fn from_append(
         result: Result<elucid_ingestion::DurableAppend, elucid_ingestion::SpoolError>,
         captured_time: chrono::DateTime<Utc>,
@@ -511,6 +591,166 @@ async fn get_source(
         return ApiError::not_found().into_response();
     };
     Json(SourceDetail::from_source(source)).into_response()
+}
+
+async fn list_segments(
+    State(state): State<Arc<ApplicationState>>,
+    query: Result<Query<SegmentListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let source_id = match parse_source_id(&query.source_id) {
+        Ok(source_id) => source_id,
+        Err(error) => return error.into_response(),
+    };
+    let state_filter = match query
+        .state
+        .as_deref()
+        .map(OperationalSegmentState::try_from)
+    {
+        Some(Ok(state_filter)) => Some(state_filter),
+        Some(Err(_)) => return ApiError::invalid_request().into_response(),
+        None => None,
+    };
+    let runtime = state.snapshot();
+    let Some(dependencies) = runtime.dependencies() else {
+        return ApiError::server_not_ready(readiness_details(&runtime)).into_response();
+    };
+    if dependencies
+        .catalog
+        .snapshot()
+        .source_by_id(source_id)
+        .is_none()
+    {
+        return ApiError::not_found().into_response();
+    }
+    let limit = match OperationalLimit::new(MAXIMUM_OPERATIONAL_LIST_ITEMS) {
+        Ok(limit) => limit,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    match dependencies
+        .operations
+        .segments(source_id, state_filter, limit)
+        .await
+    {
+        Ok(segments) => Json(SegmentListResponse {
+            completion: ListCompletion::from_truncated(segments.is_truncated()),
+            limit: segments.limit(),
+            segments: segments.items().iter().map(SegmentResponse::from).collect(),
+        })
+        .into_response(),
+        Err(error) => ApiError::publication(error).into_response(),
+    }
+}
+
+async fn list_dead_letters(
+    State(state): State<Arc<ApplicationState>>,
+    query: Result<Query<DeadLetterListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Response {
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let source_id = match parse_source_id(&query.source_id) {
+        Ok(source_id) => source_id,
+        Err(error) => return error.into_response(),
+    };
+    let runtime = state.snapshot();
+    let Some(dependencies) = runtime.dependencies() else {
+        return ApiError::server_not_ready(readiness_details(&runtime)).into_response();
+    };
+    if dependencies
+        .catalog
+        .snapshot()
+        .source_by_id(source_id)
+        .is_none()
+    {
+        return ApiError::not_found().into_response();
+    }
+    let limit = match OperationalLimit::new(MAXIMUM_OPERATIONAL_LIST_ITEMS) {
+        Ok(limit) => limit,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    match dependencies.operations.dead_letters(source_id, limit).await {
+        Ok(dead_letters) => Json(DeadLetterListResponse {
+            completion: ListCompletion::from_truncated(dead_letters.is_truncated()),
+            limit: dead_letters.limit(),
+            dead_letters: dead_letters
+                .items()
+                .iter()
+                .map(DeadLetterSummaryResponse::from)
+                .collect(),
+        })
+        .into_response(),
+        Err(error) => ApiError::publication(error).into_response(),
+    }
+}
+
+async fn read_dead_letter(
+    State(state): State<Arc<ApplicationState>>,
+    Path(object_id): Path<String>,
+) -> Response {
+    let object_id = match Uuid::parse_str(&object_id) {
+        Ok(object_id) => StoredObjectId::from(object_id),
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let runtime = state.snapshot();
+    let Some(dependencies) = runtime.dependencies() else {
+        return ApiError::server_not_ready(readiness_details(&runtime)).into_response();
+    };
+    let object = match dependencies.operations.dead_letter(object_id).await {
+        Ok(Some(object)) => object,
+        Ok(None) => return ApiError::not_found().into_response(),
+        Err(error) => return ApiError::publication(error).into_response(),
+    };
+    let transfer_limit = match TransferLimit::new(MAXIMUM_DEAD_LETTER_RESPONSE_BYTES) {
+        Ok(limit) => limit,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    let object_bytes = object.descriptor().expected_byte_size().get();
+    let (bytes, completion) = if object_bytes <= MAXIMUM_DEAD_LETTER_RESPONSE_BYTES {
+        match dependencies
+            .immutable_objects
+            .read_exact(object.descriptor(), transfer_limit)
+            .await
+        {
+            Ok(bytes) => (bytes, ListCompletion::Complete),
+            Err(error) => return ApiError::storage(error).into_response(),
+        }
+    } else {
+        let range = match ObjectReadRange::new(
+            0,
+            MAXIMUM_DEAD_LETTER_RESPONSE_BYTES,
+            object.descriptor().expected_byte_size(),
+        ) {
+            Ok(range) => range,
+            Err(_) => return ApiError::internal().into_response(),
+        };
+        let prefix = match dependencies
+            .immutable_objects
+            .read_range(object.descriptor(), range, transfer_limit)
+            .await
+        {
+            Ok(prefix) => prefix,
+            Err(error) => return ApiError::storage(error).into_response(),
+        };
+        let Some(last_delimiter) = prefix.iter().rposition(|byte| *byte == b'\n') else {
+            return ApiError::object_integrity().into_response();
+        };
+        (prefix.slice(..=last_delimiter), ListCompletion::Truncated)
+    };
+    match decode_dead_letters(&bytes) {
+        Ok(entries) => Json(DeadLetterReadResponse {
+            object: DeadLetterSummaryResponse::from(object.summary()),
+            completion,
+            limit_bytes: MAXIMUM_DEAD_LETTER_RESPONSE_BYTES,
+            entries,
+        })
+        .into_response(),
+        Err(_) => ApiError::object_integrity().into_response(),
+    }
 }
 
 async fn not_found() -> ApiError {
@@ -611,6 +851,10 @@ fn parse_source_id(value: &str) -> Result<SourceId, ApiError> {
         .ok()
         .and_then(|value| SourceId::try_from(value).ok())
         .ok_or_else(ApiError::invalid_request)
+}
+
+fn format_timestamp(timestamp: DateTime<Utc>) -> String {
+    timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn readiness_details(snapshot: &RuntimeSnapshot) -> ReadinessDetails {
@@ -742,13 +986,118 @@ enum IngestionAcceptedState {
 struct SpoolStatus {
     capacity_bytes: u64,
     used_bytes: u64,
+    pending_batches: u64,
     oldest_queued_age_seconds: Option<u64>,
 }
 
 #[derive(Serialize)]
 struct PublicationStatus {
+    status: ComponentStatus,
     pending_batches: u64,
     prepared_segments: u64,
+    planned_objects: u64,
+    uploaded_objects: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SegmentListQuery {
+    source_id: String,
+    state: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeadLetterListQuery {
+    source_id: String,
+}
+
+#[derive(Serialize)]
+struct SegmentListResponse {
+    completion: ListCompletion,
+    limit: usize,
+    segments: Vec<SegmentResponse>,
+}
+
+#[derive(Serialize)]
+struct SegmentResponse {
+    segment_id: String,
+    source_id: String,
+    schema_id: String,
+    state: &'static str,
+    origin: &'static str,
+    event_day: String,
+    row_count: u64,
+    uncompressed_bytes: u64,
+    parquet_bytes: u64,
+    minimum_event_time: String,
+    maximum_event_time: String,
+    minimum_ingestion_time: String,
+    maximum_ingestion_time: String,
+    published_at: Option<String>,
+    retired_at: Option<String>,
+}
+
+impl From<&SegmentInspection> for SegmentResponse {
+    fn from(segment: &SegmentInspection) -> Self {
+        Self {
+            segment_id: segment.segment_id().to_string(),
+            source_id: segment.source_id().to_string(),
+            schema_id: segment.schema_id().to_string(),
+            state: segment.state().as_str(),
+            origin: segment.origin().as_str(),
+            event_day: segment.event_day().to_string(),
+            row_count: segment.row_count(),
+            uncompressed_bytes: segment.uncompressed_bytes(),
+            parquet_bytes: segment.parquet_bytes(),
+            minimum_event_time: format_timestamp(segment.minimum_event_time()),
+            maximum_event_time: format_timestamp(segment.maximum_event_time()),
+            minimum_ingestion_time: format_timestamp(segment.minimum_ingestion_time()),
+            maximum_ingestion_time: format_timestamp(segment.maximum_ingestion_time()),
+            published_at: segment.published_at().map(format_timestamp),
+            retired_at: segment.retired_at().map(format_timestamp),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DeadLetterListResponse {
+    completion: ListCompletion,
+    limit: usize,
+    dead_letters: Vec<DeadLetterSummaryResponse>,
+}
+
+#[derive(Serialize)]
+struct DeadLetterSummaryResponse {
+    object_id: String,
+    source_id: String,
+    input_id: String,
+    batch_id: String,
+    byte_size: u64,
+    published_at: String,
+    retention_deadline: String,
+}
+
+impl From<&DeadLetterSummary> for DeadLetterSummaryResponse {
+    fn from(summary: &DeadLetterSummary) -> Self {
+        Self {
+            object_id: summary.object_id().to_string(),
+            source_id: summary.source_id().to_string(),
+            input_id: summary.input_id().to_string(),
+            batch_id: summary.batch_id().to_string(),
+            byte_size: summary.byte_size(),
+            published_at: format_timestamp(summary.published_at()),
+            retention_deadline: format_timestamp(summary.retention_deadline()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DeadLetterReadResponse {
+    object: DeadLetterSummaryResponse,
+    completion: ListCompletion,
+    limit_bytes: u64,
+    entries: Vec<DeadLetterDocumentEntry>,
 }
 
 #[derive(Serialize)]
@@ -837,6 +1186,16 @@ impl ActiveInputProfile {
 enum ListCompletion {
     Complete,
     Truncated,
+}
+
+impl ListCompletion {
+    const fn from_truncated(truncated: bool) -> Self {
+        if truncated {
+            Self::Truncated
+        } else {
+            Self::Complete
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1119,6 +1478,51 @@ impl ApiError {
             StatusCode::SERVICE_UNAVAILABLE,
             "METASTORE_UNAVAILABLE",
             "Metastore is unavailable",
+        )
+    }
+
+    fn publication(error: PublicationError) -> Self {
+        match error.kind() {
+            PublicationErrorKind::Unavailable => Self::metastore_unavailable(),
+            PublicationErrorKind::Conflict => Self::plain(
+                StatusCode::CONFLICT,
+                "METASTORE_CONFLICT",
+                "Metastore state changed concurrently",
+            ),
+            PublicationErrorKind::Corrupt => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "METASTORE_CORRUPT",
+                "Metastore state is corrupt",
+            ),
+            _ => Self::internal(),
+        }
+    }
+
+    fn storage(error: StorageError) -> Self {
+        match error.code() {
+            StorageErrorCode::ObjectStoreUnavailable
+            | StorageErrorCode::ObjectUploadFailed
+            | StorageErrorCode::ObjectVerificationFailed
+            | StorageErrorCode::ObjectDeleteFailed => Self::plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "OBJECT_STORE_UNAVAILABLE",
+                "Object store is unavailable",
+            ),
+            StorageErrorCode::ObjectIntegrityError | StorageErrorCode::ParquetInvalid => {
+                Self::object_integrity()
+            }
+            StorageErrorCode::ParquetBuildFailed | StorageErrorCode::LocalCapacityExhausted => {
+                Self::internal()
+            }
+            _ => Self::internal(),
+        }
+    }
+
+    fn object_integrity() -> Self {
+        Self::plain(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "OBJECT_INTEGRITY_ERROR",
+            "Stored object failed integrity validation",
         )
     }
 

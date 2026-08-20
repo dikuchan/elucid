@@ -28,6 +28,11 @@ impl LocalStorageBoundary {
     pub(crate) async fn is_accessible(&self) -> bool {
         is_directory(&self.spool_path).await && is_directory(&self.scratch_path).await
     }
+
+    #[must_use]
+    pub(crate) fn scratch_path(&self) -> &Path {
+        &self.scratch_path
+    }
 }
 
 async fn prepare_directory(path: &Path) -> Result<(), ServiceError> {
