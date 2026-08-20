@@ -1845,6 +1845,7 @@ dependencies = [
 name = "elucid-ingestion"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "base64",
  "blake3",
  "bytes",
@@ -1916,9 +1917,13 @@ dependencies = [
 name = "elucid-storage"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "blake3",
  "bytes",
+ "elucid-catalog",
  "object_store",
+ "parquet",
+ "tempfile",
  "testcontainers-modules",
  "thiserror",
  "tokio",

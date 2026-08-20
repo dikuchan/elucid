@@ -7,13 +7,18 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+arrow = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+elucid-catalog = { workspace = true }
 object_store = { workspace = true, features = ["aws"] }
+parquet = { workspace = true, features = ["arrow"] }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 uuid = { workspace = true, features = ["v7"] }

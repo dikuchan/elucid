@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::io;
 
 use uuid::Uuid;
 
@@ -39,6 +40,33 @@ pub enum StorageModelError {
 
     #[error("object media type does not match its managed key")]
     MediaTypeDoesNotMatchManagedKey,
+
+    #[error("Parquet segments require a Parquet managed object key")]
+    ParquetManagedKeyRequired,
+
+    #[error("Parquet segment row count must be positive")]
+    ParquetRowCountMustBePositive,
+
+    #[error("Parquet segment row count exceeds the supported range")]
+    ParquetRowCountOutOfRange,
+
+    #[error("Parquet record-batch fields do not exactly match the stored schema")]
+    ParquetSchemaMismatch,
+
+    #[error("Parquet record batch contains null in non-null field {field_ordinal}")]
+    ParquetNonNullFieldContainsNull { field_ordinal: usize },
+
+    #[error("Parquet segment system columns do not have the required representation")]
+    ParquetSystemColumnsInvalid,
+
+    #[error("Parquet segment rows span more than one UTC event day")]
+    ParquetRowsSpanEventDays,
+
+    #[error("Parquet segment rows are not ordered by event time and event identity")]
+    ParquetRowsNotOrdered,
+
+    #[error("Parquet write limit must be positive")]
+    ParquetWriteLimitMustBePositive,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,6 +148,66 @@ impl StorageError {
         Self::invariant(StorageErrorCode::LocalCapacityExhausted, message)
     }
 
+    pub(crate) fn parquet_build(source: parquet::errors::ParquetError) -> Self {
+        Self {
+            code: StorageErrorCode::ParquetBuildFailed,
+            source: StorageErrorSource::Parquet(source),
+        }
+    }
+
+    pub(crate) fn parquet_build_io(source: io::Error) -> Self {
+        Self {
+            code: StorageErrorCode::ParquetBuildFailed,
+            source: StorageErrorSource::Io(source),
+        }
+    }
+
+    pub(crate) fn parquet_build_task(source: tokio::task::JoinError) -> Self {
+        Self {
+            code: StorageErrorCode::ParquetBuildFailed,
+            source: StorageErrorSource::Task(source),
+        }
+    }
+
+    pub(crate) fn parquet_build_invariant(message: &'static str) -> Self {
+        Self::invariant(StorageErrorCode::ParquetBuildFailed, message)
+    }
+
+    pub(crate) fn parquet_invalid(source: parquet::errors::ParquetError) -> Self {
+        Self {
+            code: StorageErrorCode::ParquetInvalid,
+            source: StorageErrorSource::Parquet(source),
+        }
+    }
+
+    pub(crate) fn parquet_invalid_io(source: io::Error) -> Self {
+        Self {
+            code: StorageErrorCode::ParquetInvalid,
+            source: StorageErrorSource::Io(source),
+        }
+    }
+
+    pub(crate) fn parquet_invalid_task(source: tokio::task::JoinError) -> Self {
+        Self {
+            code: StorageErrorCode::ParquetInvalid,
+            source: StorageErrorSource::Task(source),
+        }
+    }
+
+    pub(crate) fn parquet_invalid_invariant(message: &'static str) -> Self {
+        Self::invariant(StorageErrorCode::ParquetInvalid, message)
+    }
+
+    pub(crate) fn with_cleanup_failure(self, cleanup: io::Error) -> Self {
+        Self {
+            code: self.code,
+            source: StorageErrorSource::Cleanup {
+                original: Box::new(self.source),
+                cleanup,
+            },
+        }
+    }
+
     fn object_store(code: StorageErrorCode, source: object_store::Error) -> Self {
         Self {
             code,
@@ -151,6 +239,18 @@ impl Error for StorageError {
 enum StorageErrorSource {
     #[error("object-store operation failed")]
     ObjectStore(#[source] object_store::Error),
+    #[error("local file operation failed")]
+    Io(#[source] io::Error),
+    #[error("Parquet operation failed")]
+    Parquet(#[source] parquet::errors::ParquetError),
+    #[error("blocking storage task failed")]
+    Task(#[source] tokio::task::JoinError),
+    #[error("cleanup after {original} failed")]
+    Cleanup {
+        original: Box<StorageErrorSource>,
+        #[source]
+        cleanup: io::Error,
+    },
     #[error("{0}")]
     Invariant(&'static str),
 }

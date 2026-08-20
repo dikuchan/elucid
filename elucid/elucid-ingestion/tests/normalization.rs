@@ -1,3 +1,10 @@
+use std::time::Instant;
+
+use arrow::array::{
+    Array as _, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+    TimestampMillisecondArray, UInt32Array, UInt64Array,
+};
+use arrow::record_batch::RecordBatch;
 use elucid_catalog::{
     DeclarationDigest, DefinitionDigests, EventTimeFormat, EventTimeMapping, FieldId, FieldMapping,
     IngestionProfile, IngestionProfileRevision, IngestionProfileRevisionId, Input, InputId,
@@ -8,7 +15,8 @@ use elucid_catalog::{
 use elucid_ingestion::{
     BatchId, BatchMetadata, DEAD_LETTER_PAYLOAD_PREFIX_BYTES, DeadLetterCode, IngestionTime,
     MAXIMUM_BATCH_EVENT_DAYS, NormalizedRecord, NormalizedValue, PayloadEncoding, PayloadExtent,
-    PinnedCatalogIdentities, RecordLocation, normalize_records,
+    PinnedCatalogIdentities, RecordLocation, SegmentBuildOutcome, SegmentBuilders,
+    SegmentStagingCapacity, materialize_segment_record_batch, normalize_records,
 };
 use serde_json::Value;
 use uuid::Uuid;
@@ -295,6 +303,84 @@ fn every_declared_scalar_type_is_converted_directly_to_its_target_type() {
 }
 
 #[test]
+fn sealed_segment_materializes_exact_catalog_ordered_arrow_columns() {
+    let declarations = [
+        ("boolean", UserLogicalType::Bool),
+        ("i32", UserLogicalType::Int32),
+        ("i64", UserLogicalType::Int64),
+        ("u32", UserLogicalType::UInt32),
+        ("u64", UserLogicalType::UInt64),
+        ("f32", UserLogicalType::Float32),
+        ("f64", UserLogicalType::Float64),
+        ("text", UserLogicalType::Utf8),
+        ("datetime", UserLogicalType::Datetime),
+        ("unmapped", UserLogicalType::Utf8),
+    ];
+    let fields = declarations
+        .iter()
+        .enumerate()
+        .map(|(index, (name, logical_type))| {
+            field(
+                field_id(80 + index as u128),
+                name,
+                *logical_type,
+                if *name == "unmapped" {
+                    Nullability::Nullable
+                } else {
+                    Nullability::NonNull
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let mappings = declarations
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _))| *name != "unmapped")
+        .map(|(index, (name, _))| mapping(field_id(80 + index as u128), &format!("/{name}")))
+        .collect::<Vec<_>>();
+    let fixture = fixture(4_096, EventTimeFormat::Rfc3339, fields, mappings);
+    let body = br#"{"timestamp":"2026-08-20T12:00:00Z","boolean":true,"i32":-2147483648,"i64":-9223372036854775808,"u32":4294967295,"u64":18446744073709551615,"f32":1.5,"f64":2.5,"text":"value","datetime":"1969-12-31T23:59:59.999Z","extra":{"nested":true}}"#;
+    let normalized = normalize_records(fixture.metadata, body, &fixture.source)
+        .expect("the pinned catalog exists");
+    let mut builders = SegmentBuilders::new(
+        SegmentStagingCapacity::new(16 * 1024 * 1024).expect("staging capacity"),
+    );
+    assert!(matches!(
+        builders
+            .push_batch(normalized, Instant::now())
+            .expect("build segment"),
+        SegmentBuildOutcome::Accepted(_)
+    ));
+    assert_eq!(builders.flush_all().expect("seal segment"), 1);
+    let segment = builders
+        .take_next_sealed()
+        .expect("segment accounting")
+        .expect("sealed segment");
+
+    let batch = materialize_segment_record_batch(&segment, fixture.source.active_schema())
+        .expect("materialize Arrow batch");
+
+    assert_eq!(
+        batch.schema().as_ref(),
+        fixture.source.active_schema().arrow_schema()
+    );
+    assert_eq!(batch.num_rows(), 1);
+    assert!(column::<BooleanArray>(&batch, 3).value(0));
+    assert_eq!(column::<Int32Array>(&batch, 4).value(0), i32::MIN);
+    assert_eq!(column::<Int64Array>(&batch, 5).value(0), i64::MIN);
+    assert_eq!(column::<UInt32Array>(&batch, 6).value(0), u32::MAX);
+    assert_eq!(column::<UInt64Array>(&batch, 7).value(0), u64::MAX);
+    assert_eq!(column::<Float32Array>(&batch, 8).value(0), 1.5);
+    assert_eq!(column::<Float64Array>(&batch, 9).value(0), 2.5);
+    assert_eq!(column::<StringArray>(&batch, 10).value(0), "value");
+    assert_eq!(column::<TimestampMillisecondArray>(&batch, 11).value(0), -1);
+    assert!(batch.column(12).is_null(0));
+    let remainder: Value =
+        serde_json::from_str(column::<StringArray>(&batch, 13).value(0)).expect("remainder JSON");
+    assert_eq!(remainder, serde_json::json!({"extra": {"nested": true}}));
+}
+
+#[test]
 fn event_day_fan_out_rejects_only_days_not_admitted_in_first_occurrence_order() {
     let message_id = field_id(60);
     let fixture = fixture(
@@ -456,6 +542,14 @@ fn accepted(record: &NormalizedRecord) -> &elucid_ingestion::AcceptedRow {
         }
         _ => panic!("unexpected normalization result"),
     }
+}
+
+fn column<T: arrow::array::Array + 'static>(batch: &RecordBatch, index: usize) -> &T {
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<T>()
+        .expect("column has its catalog type")
 }
 
 fn rejected(record: &NormalizedRecord) -> &elucid_ingestion::DeadLetterEntry {

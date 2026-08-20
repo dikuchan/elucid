@@ -5,6 +5,7 @@ mod error;
 mod frame;
 mod model;
 mod normalization;
+mod parquet;
 mod recovery;
 mod segment;
 mod spool;
@@ -22,6 +23,7 @@ pub use normalization::{
     NormalizationError, NormalizedBatch, NormalizedField, NormalizedRecord, NormalizedValue,
     PayloadEncoding, PayloadExtent, RecordLocation, RecordPayloadDigest, normalize_records,
 };
+pub use parquet::{SegmentMaterializationError, materialize_segment_record_batch};
 pub use recovery::{RecoveredBatches, SpoolRecovery};
 pub use segment::{
     EventDay, SealedSegment, SealingReason, SegmentBuildError, SegmentBuildOutcome,

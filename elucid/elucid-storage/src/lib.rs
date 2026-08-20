@@ -4,6 +4,7 @@ mod descriptor;
 mod error;
 mod identity;
 mod key;
+mod parquet_segment;
 mod store;
 mod value;
 
@@ -11,6 +12,11 @@ pub use descriptor::ObjectDescriptor;
 pub use error::{StorageError, StorageErrorCode, StorageModelError};
 pub use identity::{BatchId, SegmentId, StoredObjectId};
 pub use key::{ManagedObjectKey, ManagedObjectKind, ManagedRoot, ObjectOwner};
+pub use parquet_segment::{
+    PARQUET_FORMAT_VERSION, PARQUET_MAX_ROW_GROUP_ROWS, ParquetSegmentExpectation,
+    ParquetSegmentInput, ParquetWriteLimit, StagedParquetSegment, validate_parquet_segment,
+    write_parquet_segment,
+};
 pub use store::{
     ImmutableObjectStore, ObjectDeleteOutcome, ObjectUploadOutcome, ObjectVerificationOutcome,
 };
