@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, SecondsFormat, Utc};
+use elucid_ingestion::{AppendBodyLimit, Spool, SpoolCapacity};
 use elucid_service::{Environment, RuntimeConfiguration, start};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
@@ -237,6 +239,18 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     );
     assert_eq!(source["inputs"][0]["name"], "vector");
     assert_eq!(source["inputs"][0]["active_profile"]["revision"], 1);
+    let input_id = applied["active_input_profile_revisions"][0]["input_id"]
+        .as_str()
+        .expect("input identity")
+        .to_owned();
+    let profile_revision_id = applied["active_input_profile_revisions"][0]["profile_revision_id"]
+        .as_str()
+        .expect("profile revision identity")
+        .to_owned();
+    let target_schema_id = source["active_schema"]["schema_id"]
+        .as_str()
+        .expect("schema identity")
+        .to_owned();
 
     let status = get_json(
         &client,
@@ -247,16 +261,161 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(status["phase"], "READY");
     assert_eq!(status["admission"], "OPEN");
     assert_eq!(status["limits"]["maximum_http_batch_bytes"], 1_048_576);
+    assert_eq!(status["limits"]["maximum_http_batch_records"], 100_000);
     assert_eq!(status["spool"]["used_bytes"], 0);
     assert_eq!(status["maintenance"]["ownership"], "OWNED");
 
-    minio.stop_with_timeout(Some(1)).await.expect("stop MinIO");
-    let unavailable = wait_for_status(
-        &client,
-        &format!("{endpoint}/health/ready"),
-        StatusCode::SERVICE_UNAVAILABLE,
+    assert_ingestion_error(
+        client
+            .post(format!(
+                "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+            ))
+            .header("Content-Type", "application/json")
+            .body("{}\n")
+            .send()
+            .await
+            .expect("reject JSON media type"),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "INVALID_REQUEST",
     )
     .await;
+    assert_ingestion_error(
+        client
+            .post(format!(
+                "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+            ))
+            .header("Content-Type", "application/x-ndjson")
+            .header("Content-Encoding", "gzip")
+            .body("{}\n")
+            .send()
+            .await
+            .expect("reject compressed body"),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "INVALID_REQUEST",
+    )
+    .await;
+    assert_ingestion_error(
+        client
+            .post(format!(
+                "{endpoint}/api/v1/sources/unknown/inputs/vector/events"
+            ))
+            .header("Content-Type", "application/x-ndjson")
+            .body("{}\n")
+            .send()
+            .await
+            .expect("reject unknown source"),
+        StatusCode::NOT_FOUND,
+        "NOT_FOUND",
+    )
+    .await;
+    assert_ingestion_error(
+        client
+            .post(format!(
+                "{endpoint}/api/v1/sources/demo_logs/inputs/unknown/events"
+            ))
+            .header("Content-Type", "application/x-ndjson")
+            .body("{}\n")
+            .send()
+            .await
+            .expect("reject unknown input"),
+        StatusCode::NOT_FOUND,
+        "NOT_FOUND",
+    )
+    .await;
+    assert_ingestion_error(
+        client
+            .post(format!(
+                "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+            ))
+            .header("Content-Type", "application/x-ndjson")
+            .body(vec![b'x'; 1_048_577])
+            .send()
+            .await
+            .expect("reject oversized body"),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "INGESTION_BATCH_LIMIT_EXCEEDED",
+    )
+    .await;
+    assert_ingestion_error(
+        client
+            .post(format!(
+                "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+            ))
+            .header("Content-Type", "application/x-ndjson")
+            .body("\n".repeat(100_001))
+            .send()
+            .await
+            .expect("reject too many framed records"),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "INGESTION_BATCH_LIMIT_EXCEEDED",
+    )
+    .await;
+
+    let body = concat!(
+        "{\"timestamp\":\"2026-08-20T12:00:00.000Z\",\"message\":\"first\"}\n",
+        "{\"timestamp\":\"2026-08-20T12:00:01.000Z\",\"message\":\"second\"}\n",
+    );
+    let accepted = client
+        .post(format!(
+            "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+        ))
+        .header("Content-Type", "application/x-ndjson; charset=utf-8")
+        .header("Content-Encoding", "identity")
+        .body(body)
+        .send()
+        .await
+        .expect("ingest NDJSON batch");
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let accepted = json(accepted).await;
+    assert_eq!(accepted["state"], "DURABLY_QUEUED");
+    assert_eq!(accepted["body_bytes"], body.len());
+    let batch_id = accepted["batch_id"]
+        .as_str()
+        .expect("batch identity")
+        .to_owned();
+    let parsed_batch_id = Uuid::parse_str(&batch_id).expect("UUID batch identity");
+    assert_eq!(parsed_batch_id.get_version_num(), 7);
+    assert_eq!(parsed_batch_id.to_string(), batch_id);
+    let ingestion_time = accepted["ingestion_time"].as_str().expect("ingestion time");
+    assert_eq!(ingestion_time.len(), 24);
+    assert!(ingestion_time.ends_with('Z'));
+
+    let capacity_exhausted = client
+        .post(format!(
+            "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+        ))
+        .header("Content-Type", "application/x-ndjson")
+        .body("{}\n")
+        .send()
+        .await
+        .expect("reject ingestion beyond spool capacity");
+    assert_eq!(capacity_exhausted.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        capacity_exhausted
+            .headers()
+            .get("Retry-After")
+            .expect("capacity retry delay"),
+        "1"
+    );
+    assert_eq!(
+        json(capacity_exhausted).await["error"]["code"],
+        "CAPACITY_EXHAUSTED"
+    );
+
+    let status = get_json(
+        &client,
+        &format!("{endpoint}/api/v1/status"),
+        StatusCode::OK,
+    )
+    .await;
+    assert!(status["spool"]["used_bytes"].as_u64().expect("used bytes") > body.len() as u64);
+    assert_eq!(status["publication"]["pending_batches"], 1);
+    assert_eq!(status["admission"], "CLOSED");
+
+    minio.stop_with_timeout(Some(1)).await.expect("stop MinIO");
+    let unavailable =
+        wait_for_unready_component(&client, &format!("{endpoint}/health/ready"), "object_store")
+            .await;
     assert_eq!(unavailable["error"]["code"], "SERVER_NOT_READY");
     assert_eq!(
         unavailable["error"]["details"]["components"]["object_store"],
@@ -273,6 +432,30 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     .await;
     assert_eq!(status["phase"], "DEGRADED");
     assert_eq!(status["components"]["object_store"], "DOWN");
+    let unavailable_ingestion = client
+        .post(format!(
+            "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
+        ))
+        .header("Content-Type", "application/x-ndjson")
+        .body("{}\n")
+        .send()
+        .await
+        .expect("reject ingestion while unavailable");
+    assert_eq!(
+        unavailable_ingestion.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        unavailable_ingestion
+            .headers()
+            .get("Retry-After")
+            .expect("readiness retry delay"),
+        "1"
+    );
+    assert_eq!(
+        json(unavailable_ingestion).await["error"]["code"],
+        "SERVER_NOT_READY"
+    );
     let cached_sources = get_json(
         &client,
         &format!("{endpoint}/api/v1/sources"),
@@ -282,6 +465,60 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(cached_sources["sources"][0]["source_id"], source_id);
 
     server.shutdown().await.expect("shutdown server");
+
+    let recovery = Spool::open(
+        local.path().join("spool"),
+        SpoolCapacity::new(1_049_000).expect("spool capacity"),
+        AppendBodyLimit::new(1_048_576).expect("maximum batch"),
+    )
+    .await
+    .expect("recover service spool");
+    assert_eq!(recovery.report().pending_batches(), 1);
+    let (_, mut batches, _) = recovery.into_parts();
+    let recovered = batches
+        .next_batch()
+        .await
+        .expect("read accepted batch")
+        .expect("accepted batch");
+    assert_eq!(recovered.body().as_ref(), body.as_bytes());
+    assert_eq!(recovered.metadata().batch_id().to_string(), batch_id);
+    assert_eq!(
+        recovered.metadata().catalog().source_id().to_string(),
+        source_id
+    );
+    assert_eq!(
+        recovered.metadata().catalog().input_id().to_string(),
+        input_id
+    );
+    assert_eq!(
+        recovered
+            .metadata()
+            .catalog()
+            .profile_revision_id()
+            .to_string(),
+        profile_revision_id
+    );
+    assert_eq!(
+        recovered
+            .metadata()
+            .catalog()
+            .target_schema_id()
+            .to_string(),
+        target_schema_id
+    );
+    let recovered_time = DateTime::<Utc>::from_timestamp_millis(
+        recovered.metadata().ingestion_time().unix_milliseconds(),
+    )
+    .expect("recovered ingestion time")
+    .to_rfc3339_opts(SecondsFormat::Millis, true);
+    assert_eq!(recovered_time, ingestion_time);
+    assert!(
+        batches
+            .next_batch()
+            .await
+            .expect("finish recovered batches")
+            .is_none()
+    );
 }
 
 fn runtime_configuration(endpoint: &str, spool_path: &str, scratch_path: &str) -> String {
@@ -303,7 +540,7 @@ request_timeout_seconds = 1
 
 [local_storage]
 spool_path = "{spool_path}"
-spool_capacity_bytes = 16777216
+spool_capacity_bytes = 1049000
 scratch_path = "{scratch_path}"
 scratch_capacity_bytes = 16777216
 
@@ -336,6 +573,16 @@ async fn get_json(client: &Client, url: &str, expected_status: StatusCode) -> Va
     json(response).await
 }
 
+async fn assert_ingestion_error(
+    response: reqwest::Response,
+    expected_status: StatusCode,
+    expected_code: &str,
+) {
+    assert_eq!(response.status(), expected_status);
+    assert!(response.headers().contains_key("X-Request-Id"));
+    assert_eq!(json(response).await["error"]["code"], expected_code);
+}
+
 async fn wait_for_status(client: &Client, url: &str, expected_status: StatusCode) -> Value {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
@@ -350,6 +597,26 @@ async fn wait_for_status(client: &Client, url: &str, expected_status: StatusCode
         assert!(
             Instant::now() < deadline,
             "endpoint did not reach {expected_status}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_unready_component(client: &Client, url: &str, component: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Ok(response) = client.get(url).send().await
+            && response.status() == StatusCode::SERVICE_UNAVAILABLE
+            && response.headers().contains_key("Retry-After")
+        {
+            let body = json(response).await;
+            if body["error"]["details"]["components"][component] == "DOWN" {
+                return body;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "component {component} did not become unavailable"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }

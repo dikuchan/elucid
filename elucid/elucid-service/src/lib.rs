@@ -1,6 +1,7 @@
 mod configuration;
 mod error;
 mod http;
+mod ingestion;
 mod local_storage;
 mod runtime;
 

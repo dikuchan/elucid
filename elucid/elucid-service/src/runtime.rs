@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use elucid_metastore::{CatalogStore, install};
 
+use crate::ingestion::{IngestionAvailability, IngestionBoundary};
 use crate::local_storage::LocalStorageBoundary;
 use crate::{MaintenanceMode, RuntimeConfiguration, ServiceError};
 
@@ -178,6 +179,7 @@ impl ApplicationState {
 
 pub(crate) struct Dependencies {
     pub(crate) catalog: CatalogStore,
+    pub(crate) ingestion: IngestionBoundary,
     pub(crate) local_storage: LocalStorageBoundary,
     pub(crate) maintenance: MaintenanceBoundary,
     pool: PgPool,
@@ -423,15 +425,19 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
     state.update_starting(|health| health.object_store = ComponentStatus::Up);
 
     let local_storage = LocalStorageBoundary::open(configuration.local_storage()).await?;
+    let ingestion =
+        IngestionBoundary::open(configuration.local_storage(), configuration.ingestion()).await?;
+    let (spool, ingestion_worker) = ingestion_component_health(&ingestion);
     state.update_starting(|health| {
-        health.spool = ComponentStatus::Up;
-        health.ingestion_worker = ComponentStatus::Up;
+        health.spool = spool;
+        health.ingestion_worker = ingestion_worker;
     });
 
     let maintenance = initialize_maintenance(configuration, &pool).await?;
     state.update_starting(|health| health.maintenance = maintenance.status());
     Ok(Dependencies {
         catalog,
+        ingestion,
         local_storage,
         maintenance,
         pool,
@@ -529,11 +535,12 @@ async fn initialize_maintenance(
 }
 
 fn initialized_health(dependencies: &Dependencies) -> ComponentHealth {
+    let (spool, ingestion_worker) = ingestion_component_health(&dependencies.ingestion);
     ComponentHealth {
         postgresql: ComponentStatus::Up,
         object_store: ComponentStatus::Up,
-        spool: ComponentStatus::Up,
-        ingestion_worker: ComponentStatus::Up,
+        spool,
+        ingestion_worker,
         query: ComponentStatus::Degraded,
         maintenance: dependencies.maintenance.status(),
     }
@@ -547,20 +554,30 @@ async fn run_health_checks(state: Arc<ApplicationState>, dependencies: Arc<Depen
             check_object_store(&dependencies),
             dependencies.local_storage.is_accessible(),
         );
-        let spool = if local_storage {
-            ComponentStatus::Up
+        let (spool, ingestion_worker) = if local_storage {
+            ingestion_component_health(&dependencies.ingestion)
         } else {
-            ComponentStatus::Down
+            (ComponentStatus::Down, ComponentStatus::Down)
         };
         let maintenance = dependencies.maintenance.health(postgresql);
         state.update_operational_health(ComponentHealth {
             postgresql,
             object_store,
             spool,
-            ingestion_worker: spool,
+            ingestion_worker,
             query: ComponentStatus::Degraded,
             maintenance,
         });
+    }
+}
+
+fn ingestion_component_health(ingestion: &IngestionBoundary) -> (ComponentStatus, ComponentStatus) {
+    match ingestion.availability() {
+        IngestionAvailability::Available => (ComponentStatus::Up, ComponentStatus::Up),
+        IngestionAvailability::CapacityExhausted => {
+            (ComponentStatus::Degraded, ComponentStatus::Up)
+        }
+        IngestionAvailability::Unavailable => (ComponentStatus::Down, ComponentStatus::Down),
     }
 }
 

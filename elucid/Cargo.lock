@@ -1888,7 +1888,10 @@ name = "elucid-service"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "bytes",
+ "chrono",
  "elucid-catalog",
+ "elucid-ingestion",
  "elucid-metastore",
  "elucid-storage",
  "futures",

@@ -9,8 +9,8 @@ use bytes::Bytes;
 use crate::checkpoint;
 use crate::frame::{PreparedFrame, reserved_frame_bytes};
 use crate::{
-    AppendBodyLimit, BatchMetadata, DurableAppend, SpoolCapacity, SpoolError, SpoolRecovery,
-    SpoolUsage,
+    AppendBodyLimit, BatchMetadata, DurableAppend, MaximumBatchAdmission, SpoolCapacity,
+    SpoolError, SpoolRecovery, SpoolUsage,
 };
 
 pub(crate) const DATA_FILE_NAME: &str = "spool.data";
@@ -36,6 +36,37 @@ struct Accounting {
 }
 
 impl Spool {
+    /// Opens the spool in an existing directory, initializing it when no spool state exists.
+    ///
+    /// Existing state is always recovered and validated before the returned writer can accept an
+    /// append. A directory containing only one of the data and checkpoint files is corrupt.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SPOOL_CORRUPT` for incomplete or invalid existing state and `SPOOL_UNAVAILABLE`
+    /// when the directory or its files cannot be accessed or synchronized.
+    pub async fn open(
+        directory: impl AsRef<Path>,
+        capacity: SpoolCapacity,
+        maximum_batch: AppendBodyLimit,
+    ) -> Result<SpoolRecovery, SpoolError> {
+        let directory = directory.as_ref().to_owned();
+        let inspection_directory = directory.clone();
+        let files = tokio::task::spawn_blocking(move || inspect_spool_files(&inspection_directory))
+            .await
+            .map_err(SpoolError::task)??;
+        match files {
+            SpoolFiles::Absent => drop(Self::create_new(&directory, capacity).await?),
+            SpoolFiles::Complete => {}
+            SpoolFiles::Incomplete => {
+                return Err(SpoolError::corrupt(
+                    "spool data and checkpoint files are incomplete",
+                ));
+            }
+        }
+        Self::recover(directory, capacity, maximum_batch).await
+    }
+
     /// Creates a new append-only spool in an existing directory.
     ///
     /// # Errors
@@ -108,6 +139,38 @@ impl Spool {
     pub fn usage(&self) -> Result<SpoolUsage, SpoolError> {
         self.inner.usage()
     }
+
+    /// Reports whether another maximum-size batch can be reserved without changing accounting.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SPOOL_UNAVAILABLE` if the writer or its capacity accounting cannot be trusted.
+    pub fn maximum_batch_admission(
+        &self,
+        body_limit: AppendBodyLimit,
+    ) -> Result<MaximumBatchAdmission, SpoolError> {
+        self.inner.maximum_batch_admission(body_limit)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpoolFiles {
+    Absent,
+    Complete,
+    Incomplete,
+}
+
+fn inspect_spool_files(directory: &Path) -> Result<SpoolFiles, SpoolError> {
+    let data_exists = directory
+        .join(DATA_FILE_NAME)
+        .try_exists()
+        .map_err(|source| SpoolError::io("inspect the spool data file", source))?;
+    let checkpoint_exists = checkpoint::exists(directory)?;
+    Ok(match (data_exists, checkpoint_exists) {
+        (false, false) => SpoolFiles::Absent,
+        (true, true) => SpoolFiles::Complete,
+        (true, false) | (false, true) => SpoolFiles::Incomplete,
+    })
 }
 
 #[derive(Debug)]
@@ -195,6 +258,26 @@ impl SpoolInner {
             accounting.committed_bytes,
             accounting.reserved_bytes,
         )
+    }
+
+    fn maximum_batch_admission(
+        &self,
+        body_limit: AppendBodyLimit,
+    ) -> Result<MaximumBatchAdmission, SpoolError> {
+        self.ensure_writable()?;
+        let required_bytes = reserved_frame_bytes(body_limit)?;
+        let accounting = self.lock_accounting()?;
+        self.ensure_writable()?;
+        let occupied_bytes = accounting
+            .committed_bytes
+            .checked_add(accounting.reserved_bytes)
+            .ok_or_else(|| SpoolError::invariant("spool accounting overflow"))?;
+        let available_bytes = self.capacity.get().saturating_sub(occupied_bytes);
+        Ok(if required_bytes <= available_bytes {
+            MaximumBatchAdmission::Available
+        } else {
+            MaximumBatchAdmission::CapacityExhausted
+        })
     }
 
     fn append_reserved(

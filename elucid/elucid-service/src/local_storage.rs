@@ -25,11 +25,6 @@ impl LocalStorageBoundary {
         })
     }
 
-    #[must_use]
-    pub(crate) const fn spool_used_bytes(&self) -> u64 {
-        0
-    }
-
     pub(crate) async fn is_accessible(&self) -> bool {
         is_directory(&self.spool_path).await && is_directory(&self.scratch_path).await
     }

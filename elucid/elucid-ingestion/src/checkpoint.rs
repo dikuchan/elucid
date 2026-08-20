@@ -43,6 +43,12 @@ pub(crate) fn load(directory: &Path) -> Result<SpoolCheckpoint, SpoolError> {
     decode(&bytes)
 }
 
+pub(crate) fn exists(directory: &Path) -> Result<bool, SpoolError> {
+    path(directory)
+        .try_exists()
+        .map_err(|source| SpoolError::io("inspect the spool checkpoint", source))
+}
+
 fn path(directory: &Path) -> PathBuf {
     directory.join(CHECKPOINT_FILE_NAME)
 }

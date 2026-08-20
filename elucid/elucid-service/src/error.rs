@@ -2,6 +2,7 @@ use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use elucid_ingestion::{SpoolError, SpoolErrorCode};
 use elucid_metastore::{CatalogPersistenceError, MetastoreMigrationError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -13,6 +14,9 @@ pub enum ServiceErrorCode {
     MetastoreCorrupt,
     ObjectStoreUnavailable,
     LocalStorageUnavailable,
+    SpoolUnavailable,
+    SpoolCorrupt,
+    IngestionInitializationFailed,
     RuntimeFailed,
     ShutdownTimedOut,
     SignalFailed,
@@ -28,6 +32,9 @@ impl ServiceErrorCode {
             Self::MetastoreCorrupt => "METASTORE_CORRUPT",
             Self::ObjectStoreUnavailable => "OBJECT_STORE_UNAVAILABLE",
             Self::LocalStorageUnavailable => "LOCAL_STORAGE_UNAVAILABLE",
+            Self::SpoolUnavailable => "SPOOL_UNAVAILABLE",
+            Self::SpoolCorrupt => "SPOOL_CORRUPT",
+            Self::IngestionInitializationFailed => "INGESTION_INITIALIZATION_FAILED",
             Self::RuntimeFailed => "SERVER_RUNTIME_FAILED",
             Self::ShutdownTimedOut => "SERVER_SHUTDOWN_TIMED_OUT",
             Self::SignalFailed => "SERVER_SIGNAL_FAILED",
@@ -82,6 +89,15 @@ pub enum ServiceError {
         source: std::io::Error,
     },
 
+    #[error("spool initialization failed")]
+    SpoolInitialization {
+        #[source]
+        source: SpoolError,
+    },
+
+    #[error("ingestion initialization failed: {reason}")]
+    IngestionInitialization { reason: &'static str },
+
     #[error("HTTP runtime failed")]
     HttpRuntime {
         #[source]
@@ -123,6 +139,14 @@ impl ServiceError {
             },
             Self::ObjectStoreInitialization { .. } => ServiceErrorCode::ObjectStoreUnavailable,
             Self::LocalStorage { .. } => ServiceErrorCode::LocalStorageUnavailable,
+            Self::SpoolInitialization { source } => match source.code() {
+                SpoolErrorCode::Corrupt => ServiceErrorCode::SpoolCorrupt,
+                SpoolErrorCode::CapacityExhausted
+                | SpoolErrorCode::BatchLimitExceeded
+                | SpoolErrorCode::Unavailable => ServiceErrorCode::SpoolUnavailable,
+                _ => ServiceErrorCode::SpoolUnavailable,
+            },
+            Self::IngestionInitialization { .. } => ServiceErrorCode::IngestionInitializationFailed,
             Self::HttpRuntime { .. } | Self::Supervisor { .. } => ServiceErrorCode::RuntimeFailed,
             Self::ShutdownTimedOut => ServiceErrorCode::ShutdownTimedOut,
             Self::Signal { .. } => ServiceErrorCode::SignalFailed,

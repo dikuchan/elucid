@@ -216,6 +216,14 @@ fn capacity_relationships_protect_spool_scratch_and_query_limits() {
             ConfigurationViolation::MaximumHttpBatchExceedsSpoolCapacity,
         ),
         violation_case(
+            "HTTP batch leaves no room for durable spool framing",
+            &[(
+                "spool_capacity_bytes = 2147483648",
+                "spool_capacity_bytes = 16777216",
+            )],
+            ConfigurationViolation::MaximumHttpBatchExceedsSpoolCapacity,
+        ),
+        violation_case(
             "HTTP batch exceeds scratch",
             &[(
                 "scratch_capacity_bytes = 2147483648",

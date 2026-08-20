@@ -1,3 +1,5 @@
+use elucid_ingestion::{AppendBodyLimit, SpoolCapacity};
+
 use super::error::{ConfigurationError, ConfigurationViolation};
 use super::model::MaintenanceMode;
 use super::raw::RuntimeConfigurationCandidate;
@@ -15,7 +17,14 @@ pub(super) fn validate(
     {
         return violation(ConfigurationViolation::AutomaticMaintenanceRequiresTwoConnections);
     }
-    if batch_bytes > spool_bytes {
+    let maximum_batch_fits_spool = match (
+        SpoolCapacity::new(spool_bytes),
+        AppendBodyLimit::new(batch_bytes),
+    ) {
+        (Ok(capacity), Ok(body_limit)) => capacity.can_reserve(body_limit),
+        _ => false,
+    };
+    if !maximum_batch_fits_spool {
         return violation(ConfigurationViolation::MaximumHttpBatchExceedsSpoolCapacity);
     }
     if batch_bytes > scratch_bytes {

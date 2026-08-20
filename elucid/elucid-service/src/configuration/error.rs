@@ -136,7 +136,7 @@ impl Display for ConfigurationViolation {
                 "metastore.maximum_connections must be at least 2 when maintenance.mode is AUTOMATIC"
             }
             Self::MaximumHttpBatchExceedsSpoolCapacity => {
-                "ingestion.maximum_http_batch_bytes exceeds local_storage.spool_capacity_bytes"
+                "ingestion.maximum_http_batch_bytes and its durable frame exceed local_storage.spool_capacity_bytes"
             }
             Self::MaximumHttpBatchExceedsScratchCapacity => {
                 "ingestion.maximum_http_batch_bytes exceeds local_storage.scratch_capacity_bytes"

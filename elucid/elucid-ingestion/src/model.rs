@@ -21,6 +21,15 @@ impl SpoolCapacity {
     pub const fn get(self) -> u64 {
         self.0.get()
     }
+
+    /// Returns whether this capacity can reserve the complete durable frame for the body limit.
+    #[must_use]
+    pub fn can_reserve(self, body_limit: AppendBodyLimit) -> bool {
+        body_limit
+            .get()
+            .checked_add(crate::frame::FRAME_OVERHEAD_BYTES)
+            .is_some_and(|required_bytes| required_bytes <= self.get())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

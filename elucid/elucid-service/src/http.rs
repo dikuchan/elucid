@@ -1,24 +1,30 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Bytes as BodyBytes;
+use axum::body::{Body, Bytes as BodyBytes};
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Path, Request, State};
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{SecondsFormat, Utc};
+use futures::StreamExt as _;
 use serde::Serialize;
 use uuid::Uuid;
 
 use elucid_catalog::{
     CatalogApplicationError, CatalogErrorCode, CatalogManifest, Field, IngestionProfileRevision,
-    Input, Schema, Source, SourceId,
+    Input, InputName, Schema, Source, SourceId, SourceName,
+};
+use elucid_ingestion::{
+    BatchId, BatchMetadata, IngestionTime, PinnedCatalogIdentities, SpoolErrorCode,
 };
 use elucid_metastore::{CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind};
 
+use crate::ingestion::{AdmissionFailure, IngestionAvailability, MAXIMUM_HTTP_BATCH_RECORDS};
 use crate::runtime::{
     ApplicationState, ComponentHealth, ComponentStatus, MaintenanceOwnership, RuntimeSnapshot,
 };
@@ -45,6 +51,10 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
             post(apply_catalog).layer(DefaultBodyLimit::max(MAXIMUM_CATALOG_DOCUMENT_BYTES)),
         )
         .route("/api/v1/sources", get(list_sources))
+        .route(
+            "/api/v1/sources/{source_name}/inputs/{input_name}/events",
+            post(ingest_events),
+        )
         .route("/api/v1/sources/{source_id}", get(get_source))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
@@ -76,20 +86,30 @@ async fn status(State(state): State<Arc<ApplicationState>>) -> Json<StatusRespon
     let snapshot = state.snapshot();
     let configuration = state.configuration();
     let phase = service_phase(&snapshot);
-    let admission = if snapshot.is_ready() {
-        AdmissionState::Open
-    } else {
-        AdmissionState::Closed
-    };
-    let (spool_used_bytes, maintenance_ownership) = snapshot.dependencies().map_or(
-        (0, status_maintenance_without_dependencies(configuration)),
-        |dependencies| {
+    let (spool_used_bytes, pending_batches, ingestion_availability, maintenance_ownership) =
+        snapshot.dependencies().map_or(
             (
-                dependencies.local_storage.spool_used_bytes(),
-                StatusMaintenanceOwnership::from(dependencies.maintenance.ownership()),
-            )
-        },
-    );
+                0,
+                0,
+                IngestionAvailability::Unavailable,
+                status_maintenance_without_dependencies(configuration),
+            ),
+            |dependencies| {
+                let ingestion = dependencies.ingestion.status();
+                (
+                    ingestion.used_bytes(),
+                    ingestion.pending_batches(),
+                    dependencies.ingestion.availability(),
+                    StatusMaintenanceOwnership::from(dependencies.maintenance.ownership()),
+                )
+            },
+        );
+    let admission =
+        if snapshot.is_ready() && ingestion_availability == IngestionAvailability::Available {
+            AdmissionState::Open
+        } else {
+            AdmissionState::Closed
+        };
     Json(StatusResponse {
         phase,
         admission,
@@ -101,7 +121,7 @@ async fn status(State(state): State<Arc<ApplicationState>>) -> Json<StatusRespon
             oldest_queued_age_seconds: None,
         },
         publication: PublicationStatus {
-            pending_batches: 0,
+            pending_batches,
             prepared_segments: 0,
         },
         maintenance: MaintenanceStatus {
@@ -117,11 +137,11 @@ async fn apply_catalog(
     body: Result<BodyBytes, BytesRejection>,
 ) -> Response {
     if !has_yaml_content_type(&headers) {
-        return ApiError::unsupported_media_type().into_response();
+        return ApiError::unsupported_catalog_media_type().into_response();
     }
     let body = match body {
         Ok(body) => body,
-        Err(_) => return ApiError::request_too_large().into_response(),
+        Err(_) => return ApiError::catalog_request_too_large().into_response(),
     };
     let manifest = match CatalogManifest::decode(&body) {
         Ok(manifest) => manifest,
@@ -141,6 +161,178 @@ async fn apply_catalog(
         },
         Err(error) => ApiError::catalog_persistence(error).into_response(),
     }
+}
+
+async fn ingest_events(
+    State(state): State<Arc<ApplicationState>>,
+    Path((source_name, input_name)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    if !has_ndjson_content_type(request.headers()) {
+        return ApiError::unsupported_ingestion_media_type().into_response();
+    }
+    if !has_identity_content_encoding(request.headers()) {
+        return ApiError::unsupported_ingestion_encoding().into_response();
+    }
+    let content_length = match parse_content_length(request.headers()) {
+        Ok(content_length) => content_length,
+        Err(error) => return error.into_response(),
+    };
+    let maximum_body_bytes = state
+        .configuration()
+        .ingestion()
+        .maximum_http_batch_bytes()
+        .get();
+    if content_length.is_some_and(|length| length > maximum_body_bytes) {
+        return ApiError::ingestion_batch_limit_exceeded().into_response();
+    }
+
+    let snapshot = state.snapshot();
+    if !snapshot.is_ready() {
+        return ApiError::server_not_ready(readiness_details(&snapshot)).into_response();
+    }
+    let Some(dependencies) = snapshot.dependencies() else {
+        return ApiError::server_not_ready(readiness_details(&snapshot)).into_response();
+    };
+    let source_name = match SourceName::try_from(source_name) {
+        Ok(source_name) => source_name,
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let input_name = match InputName::try_from(input_name) {
+        Ok(input_name) => input_name,
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let catalog = dependencies.catalog.snapshot();
+    let Some(source) = catalog.source_by_name(&source_name) else {
+        return ApiError::not_found().into_response();
+    };
+    let Some(input) = source
+        .inputs()
+        .iter()
+        .find(|input| input.name() == &input_name)
+    else {
+        return ApiError::not_found().into_response();
+    };
+    let profile = input.active_profile_revision();
+    let pinned_catalog = PinnedCatalogIdentities::new(
+        source.id(),
+        input.id(),
+        profile.id(),
+        profile.target_schema_id(),
+    );
+    let admitted = match dependencies.ingestion.try_admit() {
+        Ok(admitted) => admitted,
+        Err(AdmissionFailure::CapacityExhausted) => {
+            return ApiError::capacity_exhausted().into_response();
+        }
+        Err(AdmissionFailure::Unavailable) => {
+            return ApiError::server_not_ready(spool_unavailable_details(&snapshot))
+                .into_response();
+        }
+    };
+
+    let batch_id = match BatchId::try_from(Uuid::now_v7()) {
+        Ok(batch_id) => batch_id,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    let captured_time = Utc::now();
+    let ingestion_time =
+        match IngestionTime::from_unix_milliseconds(captured_time.timestamp_millis()) {
+            Ok(ingestion_time) => ingestion_time,
+            Err(_) => return ApiError::internal().into_response(),
+        };
+    let metadata = BatchMetadata::new(batch_id, pinned_catalog, ingestion_time);
+    let body = match read_bounded_ndjson(
+        request.into_body(),
+        content_length,
+        maximum_body_bytes,
+        MAXIMUM_HTTP_BATCH_RECORDS,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(BodyReadFailure::Invalid) => return ApiError::invalid_request().into_response(),
+        Err(BodyReadFailure::LimitExceeded) => {
+            return ApiError::ingestion_batch_limit_exceeded().into_response();
+        }
+        Err(BodyReadFailure::Internal) => return ApiError::internal().into_response(),
+    };
+    let durable = match admitted.append(metadata, body).await {
+        Ok(durable) => durable,
+        Err(error) if error.code() == SpoolErrorCode::BatchLimitExceeded => {
+            return ApiError::ingestion_batch_limit_exceeded().into_response();
+        }
+        Err(_) => return ApiError::internal().into_response(),
+    };
+
+    (
+        StatusCode::ACCEPTED,
+        Json(IngestionAcceptedResponse {
+            batch_id: durable.metadata().batch_id().to_string(),
+            state: IngestionAcceptedState::DurablyQueued,
+            ingestion_time: captured_time.to_rfc3339_opts(SecondsFormat::Millis, true),
+            body_bytes: durable.body_bytes().get(),
+        }),
+    )
+        .into_response()
+}
+
+async fn read_bounded_ndjson(
+    body: Body,
+    content_length: Option<u64>,
+    maximum_body_bytes: u64,
+    maximum_records: u64,
+) -> Result<BodyBytes, BodyReadFailure> {
+    let initial_capacity = content_length.unwrap_or(0).min(maximum_body_bytes);
+    let initial_capacity =
+        usize::try_from(initial_capacity).map_err(|_| BodyReadFailure::Internal)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(initial_capacity)
+        .map_err(|_| BodyReadFailure::Internal)?;
+    let mut body_bytes = 0_u64;
+    let mut framed_records = 0_u64;
+    let mut stream = body.into_data_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| BodyReadFailure::Invalid)?;
+        let chunk_bytes = u64::try_from(chunk.len()).map_err(|_| BodyReadFailure::Internal)?;
+        body_bytes = body_bytes
+            .checked_add(chunk_bytes)
+            .ok_or(BodyReadFailure::LimitExceeded)?;
+        if body_bytes > maximum_body_bytes {
+            return Err(BodyReadFailure::LimitExceeded);
+        }
+        let chunk_records = u64::try_from(chunk.iter().filter(|byte| **byte == b'\n').count())
+            .map_err(|_| BodyReadFailure::LimitExceeded)?;
+        framed_records = framed_records
+            .checked_add(chunk_records)
+            .ok_or(BodyReadFailure::LimitExceeded)?;
+        if framed_records > maximum_records {
+            return Err(BodyReadFailure::LimitExceeded);
+        }
+        bytes
+            .try_reserve_exact(chunk.len())
+            .map_err(|_| BodyReadFailure::Internal)?;
+        bytes.extend_from_slice(&chunk);
+    }
+
+    if bytes.last().is_some_and(|byte| *byte != b'\n') {
+        framed_records = framed_records
+            .checked_add(1)
+            .ok_or(BodyReadFailure::LimitExceeded)?;
+    }
+    if framed_records > maximum_records {
+        return Err(BodyReadFailure::LimitExceeded);
+    }
+    Ok(BodyBytes::from(bytes))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BodyReadFailure {
+    Invalid,
+    LimitExceeded,
+    Internal,
 }
 
 async fn list_sources(State(state): State<Arc<ApplicationState>>) -> Response {
@@ -228,11 +420,55 @@ fn generated_request_identity() -> HeaderValue {
 }
 
 fn has_yaml_content_type(headers: &HeaderMap) -> bool {
-    headers
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
+    has_content_type(headers, "application/yaml")
+}
+
+fn has_ndjson_content_type(headers: &HeaderMap) -> bool {
+    has_content_type(headers, "application/x-ndjson")
+}
+
+fn has_content_type(headers: &HeaderMap, expected: &str) -> bool {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    let Some(value) = values.next() else {
+        return false;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .ok()
         .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/yaml"))
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case(expected))
+}
+
+fn has_identity_content_encoding(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(CONTENT_ENCODING).iter();
+    let Some(value) = values.next() else {
+        return true;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("identity"))
+}
+
+fn parse_content_length(headers: &HeaderMap) -> Result<Option<u64>, ApiError> {
+    let mut values = headers.get_all(CONTENT_LENGTH).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(ApiError::invalid_request());
+    }
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .map(Some)
+        .ok_or_else(ApiError::invalid_request)
 }
 
 fn parse_source_id(value: &str) -> Result<SourceId, ApiError> {
@@ -246,6 +482,16 @@ fn readiness_details(snapshot: &RuntimeSnapshot) -> ReadinessDetails {
     ReadinessDetails {
         phase: service_phase(snapshot),
         components: snapshot.health(),
+    }
+}
+
+fn spool_unavailable_details(snapshot: &RuntimeSnapshot) -> ReadinessDetails {
+    let mut components = snapshot.health();
+    components.spool = ComponentStatus::Down;
+    components.ingestion_worker = ComponentStatus::Down;
+    ReadinessDetails {
+        phase: ServicePhase::Degraded,
+        components,
     }
 }
 
@@ -308,6 +554,7 @@ struct StatusResponse {
 #[derive(Serialize)]
 struct EffectiveLimits {
     maximum_http_batch_bytes: u64,
+    maximum_http_batch_records: u64,
     maximum_concurrent_ingestion_requests: u64,
     maximum_concurrent_queries: u64,
     query_timeout_seconds: u64,
@@ -323,6 +570,7 @@ impl EffectiveLimits {
     fn from_configuration(configuration: &crate::RuntimeConfiguration) -> Self {
         Self {
             maximum_http_batch_bytes: configuration.ingestion().maximum_http_batch_bytes().get(),
+            maximum_http_batch_records: MAXIMUM_HTTP_BATCH_RECORDS,
             maximum_concurrent_ingestion_requests: configuration
                 .ingestion()
                 .maximum_concurrent_requests()
@@ -337,6 +585,20 @@ impl EffectiveLimits {
             scratch_capacity_bytes: configuration.local_storage().scratch_capacity_bytes().get(),
         }
     }
+}
+
+#[derive(Serialize)]
+struct IngestionAcceptedResponse {
+    batch_id: String,
+    state: IngestionAcceptedState,
+    ingestion_time: String,
+    body_bytes: u64,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum IngestionAcceptedState {
+    DurablyQueued,
 }
 
 #[derive(Serialize)]
@@ -617,7 +879,7 @@ impl ApiError {
         )
     }
 
-    fn unsupported_media_type() -> Self {
+    fn unsupported_catalog_media_type() -> Self {
         Self::plain(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "INVALID_REQUEST",
@@ -625,12 +887,46 @@ impl ApiError {
         )
     }
 
-    fn request_too_large() -> Self {
+    fn catalog_request_too_large() -> Self {
         Self::plain(
             StatusCode::PAYLOAD_TOO_LARGE,
             "INVALID_REQUEST",
             "Request body exceeds the catalog document limit",
         )
+    }
+
+    fn unsupported_ingestion_media_type() -> Self {
+        Self::plain(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "INVALID_REQUEST",
+            "Content-Type must be application/x-ndjson",
+        )
+    }
+
+    fn unsupported_ingestion_encoding() -> Self {
+        Self::plain(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "INVALID_REQUEST",
+            "Content-Encoding must be identity",
+        )
+    }
+
+    fn ingestion_batch_limit_exceeded() -> Self {
+        Self::plain(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "INGESTION_BATCH_LIMIT_EXCEEDED",
+            "Ingestion batch exceeds an admission limit",
+        )
+    }
+
+    fn capacity_exhausted() -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "CAPACITY_EXHAUSTED",
+            message: "Ingestion capacity is exhausted",
+            details: ErrorDetails::Empty(EmptyDetails {}),
+            retry_after_seconds: Some(RETRY_AFTER_SECONDS),
+        }
     }
 
     fn request_timed_out() -> Self {
