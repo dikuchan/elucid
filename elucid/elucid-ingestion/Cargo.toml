@@ -7,11 +7,13 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 elucid-catalog = { workspace = true }
 elucid-storage = { workspace = true }
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }

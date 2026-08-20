@@ -38,7 +38,7 @@ An accepted event identity is:
 ```text
 first_16_bytes(
   BLAKE3(
-    "elucid:event:v0\0" ||
+    "elucid:event\0" ||
     canonical_uuid_bytes(batch_id) ||
     input_position_u64_be
   )
