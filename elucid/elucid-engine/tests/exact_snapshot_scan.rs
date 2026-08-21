@@ -1,10 +1,10 @@
 use std::num::NonZeroU64;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::{
-    Array as _, ArrayRef, FixedSizeBinaryArray, Float64Array, Int64Array, StringArray,
-    TimestampMillisecondArray,
+    Array as _, ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, TimestampMillisecondArray,
 };
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
@@ -13,7 +13,9 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
 use elucid_catalog::{CatalogManifest, LogicalType, Schema};
 use elucid_engine::{
-    EngineErrorCode, HistoricalConversionMetrics, QueryEngine, QueryObjectStore,
+    EngineErrorCode, HistoricalConversionMetrics, MAXIMUM_ENCODED_QUERY_ROW_BYTES,
+    QueryCancellation, QueryCompletion, QueryEngine, QueryExecutionLimitConfiguration,
+    QueryExecutionLimits, QueryObjectStore, QueryResourceLimitExceeded, QueryTruncationReason,
     SnapshotTableProvider,
 };
 use elucid_metastore::{
@@ -25,10 +27,10 @@ use elucid_storage::{
     ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ParquetSegmentInput,
     ParquetWriteLimit, SegmentId, StoredObjectId, TransferLimit, write_parquet_segment,
 };
-use futures::TryStreamExt as _;
 use object_store::memory::InMemory;
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, PutPayload};
+use serde_json::{Value, json};
 use sqlx::postgres::PgPoolOptions;
 use tempfile::TempDir;
 use testcontainers_modules::postgres::Postgres;
@@ -144,6 +146,24 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         current_batch(active_schema, "selected", "us", timestamp(11, 45)),
     )
     .await;
+    let oversized_message = "x".repeat(
+        usize::try_from(MAXIMUM_ENCODED_QUERY_ROW_BYTES).expect("encoded-row limit fits usize"),
+    );
+    write_upload_and_publish(
+        &publication,
+        &immutable_store,
+        staging.path(),
+        &root,
+        FixtureIdentity::new(4, 104),
+        active_schema,
+        current_batch(
+            active_schema,
+            &oversized_message,
+            "oversized",
+            timestamp(12, 30),
+        ),
+    )
+    .await;
     let stray = write_upload(
         &immutable_store,
         staging.path(),
@@ -233,25 +253,40 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect("select typed pipeline snapshot");
-    let engine = QueryEngine::new(query_objects.clone(), Arc::clone(&metrics));
-    let batches = engine
-        .execute(&typed_snapshot)
-        .await
-        .expect("start typed pipeline")
-        .try_collect::<Vec<_>>()
+    let query_scratch = TempDir::new().expect("create query scratch directory");
+    let engine = QueryEngine::new(
+        query_objects.clone(),
+        Arc::clone(&metrics),
+        query_limits(query_scratch.path()),
+    )
+    .expect("initialize bounded query engine");
+    let result = engine
+        .execute(&typed_snapshot, &QueryCancellation::new())
         .await
         .expect("execute typed pipeline");
     assert_eq!(
-        projected_rows(&batches),
+        result.rows(),
         vec![
-            ("selected".to_owned(), 5, None, "4".to_owned()),
-            (
-                "historical".to_owned(),
-                3,
-                Some("eu".to_owned()),
-                "2".to_owned(),
-            ),
+            vec![json!("selected"), json!("5"), Value::Null, json!("4")],
+            vec![json!("historical"), json!("3"), json!("eu"), json!("2")],
         ]
+    );
+    assert_eq!(result.completion(), QueryCompletion::Complete);
+    assert!(result.diagnostics().is_empty());
+    assert_eq!(result.statistics().selected_segments(), 2);
+    assert_eq!(
+        result.statistics().selected_parquet_bytes(),
+        typed_snapshot.selected_parquet_bytes()
+    );
+    assert_eq!(result.statistics().output_rows(), 2);
+    assert_eq!(
+        result.statistics().output_bytes(),
+        u64::try_from(
+            serde_json::to_vec(result.rows())
+                .expect("encode expected rows")
+                .len()
+        )
+        .expect("encoded rows fit u64")
     );
 
     let aggregate_snapshot = snapshot_store
@@ -262,43 +297,40 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect("select aggregate pipeline snapshot");
-    let batches = engine
-        .execute(&aggregate_snapshot)
-        .await
-        .expect("start aggregate pipeline")
-        .try_collect::<Vec<_>>()
+    let result = engine
+        .execute(&aggregate_snapshot, &QueryCancellation::new())
         .await
         .expect("execute aggregate pipeline");
     assert_eq!(
-        aggregate_rows(&batches),
+        result.rows(),
         vec![
-            (
-                Some("eu".to_owned()),
-                1,
-                1,
-                2,
-                2.0,
-                "historical".to_owned(),
-                "historical".to_owned(),
-            ),
-            (
-                Some("us".to_owned()),
-                1,
-                1,
-                4,
-                4.0,
-                "selected".to_owned(),
-                "selected".to_owned(),
-            ),
-            (
-                None,
-                1,
-                0,
-                3,
-                3.0,
-                "invalid".to_owned(),
-                "invalid".to_owned(),
-            ),
+            vec![
+                json!("eu"),
+                json!("1"),
+                json!("1"),
+                json!("2"),
+                json!(2.0),
+                json!("historical"),
+                json!("historical")
+            ],
+            vec![
+                json!("us"),
+                json!("1"),
+                json!("1"),
+                json!("4"),
+                json!(4.0),
+                json!("selected"),
+                json!("selected")
+            ],
+            vec![
+                Value::Null,
+                json!("1"),
+                json!("0"),
+                json!("3"),
+                json!(3.0),
+                json!("invalid"),
+                json!("invalid")
+            ],
         ]
     );
 
@@ -311,10 +343,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select strict-cast failure snapshot");
     let error = engine
-        .execute(&cast_failure_snapshot)
-        .await
-        .expect("start strict-cast pipeline")
-        .try_collect::<Vec<_>>()
+        .execute(&cast_failure_snapshot, &QueryCancellation::new())
         .await
         .expect_err("a JSON number cannot be strictly cast to UTF-8");
     assert_eq!(error.code(), EngineErrorCode::QueryCastFailed);
@@ -330,10 +359,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select arithmetic-overflow snapshot");
     let error = engine
-        .execute(&overflow_snapshot)
-        .await
-        .expect("start arithmetic-overflow pipeline")
-        .try_collect::<Vec<_>>()
+        .execute(&overflow_snapshot, &QueryCancellation::new())
         .await
         .expect_err("integer overflow must terminate execution");
     assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
@@ -349,10 +375,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select sum-overflow snapshot");
     let error = engine
-        .execute(&sum_overflow_snapshot)
-        .await
-        .expect("start sum-overflow pipeline")
-        .try_collect::<Vec<_>>()
+        .execute(&sum_overflow_snapshot, &QueryCancellation::new())
         .await
         .expect_err("integer sum overflow must terminate execution");
     assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
@@ -367,24 +390,166 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect("select empty aggregate snapshot");
-    let batches = engine
-        .execute(&empty_snapshot)
-        .await
-        .expect("start empty aggregate pipeline")
-        .try_collect::<Vec<_>>()
+    let result = engine
+        .execute(&empty_snapshot, &QueryCancellation::new())
         .await
         .expect("execute empty aggregate pipeline");
-    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
-    let batch = batches.first().expect("one empty-aggregate batch");
-    assert_eq!(int64_column(batch, "events").value(0), 0);
-    assert!(int64_column(batch, "total").is_null(0));
-    let mean = batch
-        .column_by_name("mean")
-        .expect("mean column")
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .expect("float64 mean");
-    assert!(mean.is_null(0));
+    assert_eq!(
+        result.rows(),
+        vec![vec![json!("0"), Value::Null, Value::Null]]
+    );
+
+    let encoded_snapshot = snapshot_store
+        .select(
+            "source logs | project @event_time, @event_id, attempts, @rest | sort @event_time",
+            request_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select typed-result snapshot");
+    let encoded = engine
+        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .await
+        .expect("encode typed query result");
+    assert_eq!(
+        encoded
+            .columns()
+            .iter()
+            .map(|column| (column.name(), column.logical_type()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("@event_time", LogicalType::Datetime),
+            ("@event_id", LogicalType::Eid),
+            ("attempts", LogicalType::Int64),
+            ("@rest", LogicalType::Json),
+        ]
+    );
+    assert_eq!(
+        encoded.rows(),
+        vec![
+            vec![
+                json!("2026-08-20T11:00:00.000Z"),
+                json!("00000000000000000000000000000002"),
+                json!("2"),
+                json!({"region": "eu"})
+            ],
+            vec![
+                json!("2026-08-20T11:30:00.000Z"),
+                json!("00000000000000000000000000000003"),
+                json!("3"),
+                json!({"region": 42})
+            ],
+            vec![
+                json!("2026-08-20T11:45:00.000Z"),
+                json!("0000000000000000000000000000000a"),
+                json!("4"),
+                Value::Null
+            ],
+        ]
+    );
+
+    let mut row_limit_configuration = query_limit_configuration(query_scratch.path());
+    row_limit_configuration.maximum_result_rows = 1;
+    let row_limited_engine = QueryEngine::new(
+        query_objects.clone(),
+        Arc::clone(&metrics),
+        QueryExecutionLimits::new(row_limit_configuration).expect("row limits"),
+    )
+    .expect("initialize row-limited query engine");
+    let truncated = row_limited_engine
+        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .await
+        .expect("truncate query by row count");
+    assert_eq!(truncated.rows().len(), 1);
+    assert_eq!(
+        truncated.completion(),
+        QueryCompletion::Truncated {
+            reason: QueryTruncationReason::OutputRows,
+        }
+    );
+
+    let mut byte_limit_configuration = query_limit_configuration(query_scratch.path());
+    byte_limit_configuration.maximum_result_bytes = 2;
+    let byte_limited_engine = QueryEngine::new(
+        query_objects.clone(),
+        Arc::clone(&metrics),
+        QueryExecutionLimits::new(byte_limit_configuration).expect("byte limits"),
+    )
+    .expect("initialize byte-limited query engine");
+    let truncated = byte_limited_engine
+        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .await
+        .expect("truncate query by encoded bytes");
+    assert!(truncated.rows().is_empty());
+    assert_eq!(truncated.statistics().output_bytes(), 2);
+    assert_eq!(
+        truncated.completion(),
+        QueryCompletion::Truncated {
+            reason: QueryTruncationReason::OutputBytes,
+        }
+    );
+
+    let mut scan_limit_configuration = query_limit_configuration(query_scratch.path());
+    scan_limit_configuration.maximum_scan_bytes = 1;
+    let scan_limited_engine = QueryEngine::new(
+        query_objects.clone(),
+        Arc::clone(&metrics),
+        QueryExecutionLimits::new(scan_limit_configuration).expect("scan limits"),
+    )
+    .expect("initialize scan-limited query engine");
+    let error = scan_limited_engine
+        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .await
+        .expect_err("selected bytes must be checked again before execution");
+    assert_eq!(error.code(), EngineErrorCode::QueryResourceLimitExceeded);
+    assert_eq!(
+        error.resource_limit_exceeded(),
+        Some(QueryResourceLimitExceeded::ScanBytes { maximum: 1 })
+    );
+
+    let cancellation = QueryCancellation::new();
+    cancellation.cancel();
+    let error = engine
+        .execute(&encoded_snapshot, &cancellation)
+        .await
+        .expect_err("pre-cancelled query must not begin execution");
+    assert_eq!(error.code(), EngineErrorCode::QueryCancelled);
+
+    let mut timeout_configuration = query_limit_configuration(query_scratch.path());
+    timeout_configuration.timeout = Duration::from_nanos(1);
+    let timeout_engine = QueryEngine::new(
+        query_objects.clone(),
+        Arc::clone(&metrics),
+        QueryExecutionLimits::new(timeout_configuration).expect("timeout limits"),
+    )
+    .expect("initialize timeout-limited query engine");
+    let error = timeout_engine
+        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .await
+        .expect_err("query execution must honor its deadline");
+    assert_eq!(error.code(), EngineErrorCode::QueryTimeout);
+
+    let oversized_range = QueryRequestTimeRange::new(timestamp(12, 15), timestamp(12, 45))
+        .expect("ordered oversized-row range");
+    let oversized_snapshot = snapshot_store
+        .select(
+            "source logs | project message",
+            oversized_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select oversized-row snapshot");
+    let error = engine
+        .execute(&oversized_snapshot, &QueryCancellation::new())
+        .await
+        .expect_err("one encoded row must not exceed the reported implementation limit");
+    assert_eq!(error.code(), EngineErrorCode::QueryResourceLimitExceeded);
+    assert_eq!(
+        error.resource_limit_exceeded(),
+        Some(QueryResourceLimitExceeded::EncodedRowBytes {
+            maximum: MAXIMUM_ENCODED_QUERY_ROW_BYTES,
+        })
+    );
 
     raw_store
         .delete(&ObjectPath::from(old.descriptor.key().as_str()))
@@ -594,80 +759,18 @@ fn uuid(sequence: u64) -> Uuid {
     Uuid::from_u128(0x019d_0000_0000_7000_8000_0000_0000_0000 | u128::from(sequence))
 }
 
-type ProjectedRow = (String, i64, Option<String>, String);
-
-fn projected_rows(batches: &[RecordBatch]) -> Vec<ProjectedRow> {
-    batches
-        .iter()
-        .flat_map(|batch| {
-            let messages = utf8_column(batch, "message");
-            let adjusted = int64_column(batch, "adjusted");
-            let original_regions = utf8_column(batch, "original_region");
-            let attempts = utf8_column(batch, "attempts_text");
-            (0..batch.num_rows())
-                .map(|index| {
-                    (
-                        messages.value(index).to_owned(),
-                        adjusted.value(index),
-                        (!original_regions.is_null(index))
-                            .then(|| original_regions.value(index).to_owned()),
-                        attempts.value(index).to_owned(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+fn query_limits(scratch_path: &Path) -> QueryExecutionLimits {
+    QueryExecutionLimits::new(query_limit_configuration(scratch_path)).expect("query limits")
 }
 
-type AggregateRow = (Option<String>, i64, i64, i64, f64, String, String);
-
-fn aggregate_rows(batches: &[RecordBatch]) -> Vec<AggregateRow> {
-    batches
-        .iter()
-        .flat_map(|batch| {
-            let regions = utf8_column(batch, "region");
-            let events = int64_column(batch, "events");
-            let known = int64_column(batch, "known");
-            let total = int64_column(batch, "total");
-            let mean = batch
-                .column_by_name("mean")
-                .expect("mean column")
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .expect("float64 mean");
-            let first = utf8_column(batch, "first");
-            let last = utf8_column(batch, "last");
-            (0..batch.num_rows())
-                .map(|index| {
-                    (
-                        (!regions.is_null(index)).then(|| regions.value(index).to_owned()),
-                        events.value(index),
-                        known.value(index),
-                        total.value(index),
-                        mean.value(index),
-                        first.value(index).to_owned(),
-                        last.value(index).to_owned(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
-fn utf8_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
-    batch
-        .column_by_name(name)
-        .unwrap_or_else(|| panic!("{name} column"))
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .unwrap_or_else(|| panic!("UTF-8 {name}"))
-}
-
-fn int64_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a Int64Array {
-    batch
-        .column_by_name(name)
-        .unwrap_or_else(|| panic!("{name} column"))
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .unwrap_or_else(|| panic!("int64 {name}"))
+fn query_limit_configuration(scratch_path: &Path) -> QueryExecutionLimitConfiguration {
+    QueryExecutionLimitConfiguration {
+        timeout: Duration::from_secs(30),
+        maximum_scan_bytes: 16 * 1024 * 1024,
+        memory_bytes: 64 * 1024 * 1024,
+        scratch_path: scratch_path.to_path_buf(),
+        scratch_capacity_bytes: 64 * 1024 * 1024,
+        maximum_result_rows: 1_000,
+        maximum_result_bytes: 16 * 1024 * 1024,
+    }
 }

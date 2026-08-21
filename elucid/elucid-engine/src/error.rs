@@ -12,6 +12,9 @@ pub enum EngineErrorCode {
     CatalogCorrupt,
     QueryCastFailed,
     QueryEvaluationFailed,
+    QueryResourceLimitExceeded,
+    QueryTimeout,
+    QueryCancelled,
     QueryExecutionFailed,
 }
 
@@ -24,9 +27,28 @@ impl EngineErrorCode {
             Self::CatalogCorrupt => "CATALOG_CORRUPT",
             Self::QueryCastFailed => "QUERY_CAST_FAILED",
             Self::QueryEvaluationFailed => "QUERY_EVALUATION_FAILED",
+            Self::QueryResourceLimitExceeded => "QUERY_RESOURCE_LIMIT_EXCEEDED",
+            Self::QueryTimeout => "QUERY_TIMEOUT",
+            Self::QueryCancelled => "QUERY_CANCELLED",
             Self::QueryExecutionFailed => "QUERY_EXECUTION_FAILED",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum QueryResourceLimitExceeded {
+    #[error("query exceeds the limit of {maximum} selected segments")]
+    SelectedSegments { maximum: u64 },
+
+    #[error("query exceeds the limit of {maximum} selected Parquet bytes")]
+    ScanBytes { maximum: u64 },
+
+    #[error("query execution exhausted its memory or scratch capacity")]
+    ExecutionResources,
+
+    #[error("encoded query row exceeds the limit of {maximum} bytes")]
+    EncodedRowBytes { maximum: u64 },
 }
 
 impl Display for EngineErrorCode {
@@ -45,6 +67,17 @@ impl EngineError {
     #[must_use]
     pub const fn code(&self) -> EngineErrorCode {
         self.code
+    }
+
+    #[must_use]
+    pub const fn resource_limit_exceeded(&self) -> Option<QueryResourceLimitExceeded> {
+        match (&self.source, self.code) {
+            (EngineErrorSource::ResourceLimit(source), _) => Some(*source),
+            (EngineErrorSource::DataFusion(_), EngineErrorCode::QueryResourceLimitExceeded) => {
+                Some(QueryResourceLimitExceeded::ExecutionResources)
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn missing_object() -> Self {
@@ -90,6 +123,38 @@ impl EngineError {
         }
     }
 
+    pub(crate) fn evaluation_invariant(message: &'static str) -> Self {
+        Self::invariant(EngineErrorCode::QueryEvaluationFailed, message)
+    }
+
+    pub(crate) fn resource_limit(source: QueryResourceLimitExceeded) -> Self {
+        Self {
+            code: EngineErrorCode::QueryResourceLimitExceeded,
+            source: EngineErrorSource::ResourceLimit(source),
+        }
+    }
+
+    pub(crate) fn resources_exhausted(source: DataFusionError) -> Self {
+        Self {
+            code: EngineErrorCode::QueryResourceLimitExceeded,
+            source: EngineErrorSource::DataFusion(source),
+        }
+    }
+
+    pub(crate) fn timeout() -> Self {
+        Self::invariant(
+            EngineErrorCode::QueryTimeout,
+            "query exceeded its execution timeout",
+        )
+    }
+
+    pub(crate) fn cancelled() -> Self {
+        Self::invariant(
+            EngineErrorCode::QueryCancelled,
+            "query execution was cancelled",
+        )
+    }
+
     pub(crate) fn execution_invariant(message: &'static str) -> Self {
         Self::invariant(EngineErrorCode::QueryExecutionFailed, message)
     }
@@ -120,8 +185,12 @@ pub(crate) enum EngineErrorSource {
     Storage(#[source] StorageError),
     #[error("Parquet metadata decoding failed")]
     Parquet(#[source] parquet::errors::ParquetError),
+    #[error("JSON result encoding failed")]
+    Json(#[source] serde_json::Error),
     #[error("DataFusion query failed")]
     DataFusion(#[source] DataFusionError),
+    #[error("query resource limit exceeded")]
+    ResourceLimit(#[source] QueryResourceLimitExceeded),
     #[error("{0}")]
     Invariant(&'static str),
 }
@@ -135,6 +204,12 @@ impl From<StorageError> for EngineErrorSource {
 impl From<parquet::errors::ParquetError> for EngineErrorSource {
     fn from(source: parquet::errors::ParquetError) -> Self {
         Self::Parquet(source)
+    }
+}
+
+impl From<serde_json::Error> for EngineErrorSource {
+    fn from(source: serde_json::Error) -> Self {
+        Self::Json(source)
     }
 }
 

@@ -16,6 +16,8 @@ object_store = { workspace = true }
 parquet = { workspace = true, features = ["arrow", "object_store"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
 
 elucid-catalog = { workspace = true }
 elucid-language = { workspace = true }

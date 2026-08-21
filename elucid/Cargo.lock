@@ -1852,6 +1852,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 

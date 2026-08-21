@@ -252,7 +252,9 @@ async fn validate_objects(
                             "selected segment references a missing stored schema",
                         )
                     })?;
-            validate_object(segment, stored_schema, objects).await
+            let result = validate_object(segment, stored_schema, objects).await;
+            tokio::task::yield_now().await;
+            result
         })
         .buffer_unordered(MAXIMUM_CONCURRENT_FOOTER_READS)
         .try_collect::<Vec<_>>()
