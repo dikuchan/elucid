@@ -1,0 +1,193 @@
+.shell {
+  --elucid-border: light-dark(
+    var(--mantine-color-gray-3),
+    var(--mantine-color-dark-5)
+  );
+  --elucid-surface: light-dark(var(--mantine-color-white), #111419);
+  --elucid-surface-raised: light-dark(var(--mantine-color-gray-0), #161a20);
+}
+
+.header {
+  background: color-mix(in srgb, var(--elucid-surface) 94%, transparent);
+  border-bottom-color: var(--elucid-border);
+  backdrop-filter: blur(14px);
+}
+
+.brandMark {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: var(--mantine-color-dark-9);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 16px;
+  font-weight: 800;
+  background: linear-gradient(
+    145deg,
+    var(--mantine-color-cyan-3),
+    var(--mantine-color-cyan-6)
+  );
+  border-radius: var(--mantine-radius-sm);
+  box-shadow: 0 0 24px
+    color-mix(in srgb, var(--mantine-color-cyan-5) 26%, transparent);
+}
+
+.brandTitle {
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.rail {
+  background: var(--elucid-surface);
+  border-color: var(--elucid-border);
+}
+
+.railFooter {
+  border-top: 1px solid var(--elucid-border);
+}
+
+.eyebrow {
+  letter-spacing: 0.08em;
+}
+
+.sourceActive,
+.sourceIdle {
+  border: 1px solid transparent;
+}
+
+.sourceActive {
+  background: color-mix(
+    in srgb,
+    var(--mantine-color-cyan-8) 20%,
+    var(--elucid-surface-raised)
+  );
+  border-color: color-mix(
+    in srgb,
+    var(--mantine-color-cyan-6) 48%,
+    transparent
+  );
+}
+
+.sourceIdle {
+  background: transparent;
+}
+
+.truncate {
+  min-width: 0;
+}
+
+.main {
+  min-height: 100dvh;
+  background:
+    radial-gradient(
+      circle at 42% -18%,
+      color-mix(in srgb, var(--mantine-color-cyan-9) 18%, transparent),
+      transparent 42%
+    ),
+    #0b0d10;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: auto auto minmax(280px, 1fr);
+  gap: var(--mantine-spacing-sm);
+  min-height: calc(100dvh - 58px);
+  padding: var(--mantine-spacing-sm);
+}
+
+.contextPanel,
+.editorPanel,
+.resultsPanel {
+  overflow: hidden;
+  background: color-mix(in srgb, var(--elucid-surface) 96%, transparent);
+  border-color: var(--elucid-border);
+}
+
+.contextPanel {
+  overflow: visible;
+}
+
+.timeInput {
+  width: 174px;
+}
+
+.rowsInput {
+  width: 96px;
+}
+
+.panelHeader,
+.resultsFooter {
+  background: var(--elucid-surface-raised);
+}
+
+.panelHeader {
+  border-bottom: 1px solid var(--elucid-border);
+}
+
+.queryInput {
+  padding: 14px var(--mantine-spacing-md);
+  color: light-dark(var(--mantine-color-dark-8), var(--mantine-color-gray-1));
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.7;
+  background: transparent;
+}
+
+.diagnostic {
+  background: color-mix(in srgb, var(--mantine-color-red-9) 8%, transparent);
+}
+
+.resultsPanel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.tableScroll {
+  flex: 1;
+}
+
+.monospaceCell,
+.numericCell,
+.fieldName {
+  font-family: var(--mantine-font-family-monospace);
+}
+
+.monospaceCell {
+  color: var(--mantine-color-cyan-2);
+  white-space: nowrap;
+}
+
+.numericCell {
+  color: var(--mantine-color-yellow-3);
+  text-align: right;
+}
+
+.resultsFooter {
+  border-top: 1px solid var(--elucid-border);
+}
+
+.fieldRow {
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--elucid-border) 65%, transparent);
+}
+
+@media (max-width: 74.99em) {
+  .workspace {
+    grid-template-rows: auto auto auto;
+  }
+}
+
+@media (max-width: 47.99em) {
+  .header :global(.mantine-Badge-root):first-of-type {
+    display: none;
+  }
+
+  .workspace {
+    padding: var(--mantine-spacing-xs);
+  }
+
+  .timeInput {
+    width: 100%;
+  }
+}

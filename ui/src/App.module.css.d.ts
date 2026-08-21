@@ -1,0 +1,30 @@
+declare const classes: {
+  readonly brandMark: string;
+  readonly brandTitle: string;
+  readonly contextPanel: string;
+  readonly diagnostic: string;
+  readonly editorPanel: string;
+  readonly eyebrow: string;
+  readonly fieldName: string;
+  readonly fieldRow: string;
+  readonly header: string;
+  readonly main: string;
+  readonly monospaceCell: string;
+  readonly numericCell: string;
+  readonly panelHeader: string;
+  readonly queryInput: string;
+  readonly rail: string;
+  readonly railFooter: string;
+  readonly resultsFooter: string;
+  readonly resultsPanel: string;
+  readonly rowsInput: string;
+  readonly shell: string;
+  readonly sourceActive: string;
+  readonly sourceIdle: string;
+  readonly tableScroll: string;
+  readonly timeInput: string;
+  readonly truncate: string;
+  readonly workspace: string;
+};
+
+export default classes;
