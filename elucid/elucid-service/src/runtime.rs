@@ -17,12 +17,16 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use elucid_metastore::{CatalogStore, OperationalStore, PublicationStore, install};
+use elucid_engine::QueryObjectStore;
+use elucid_metastore::{
+    CatalogStore, OperationalStore, PublicationStore, QuerySnapshotStore, install,
+};
 use elucid_storage::ImmutableObjectStore;
 
 use crate::ingestion::{IngestionAvailability, IngestionBoundary};
 use crate::local_storage::LocalStorageBoundary;
 use crate::metrics::ServiceMetrics;
+use crate::query::{QueryAvailability, QueryBoundary};
 use crate::{MaintenanceMode, RuntimeConfiguration, ServiceError};
 
 const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -68,6 +72,7 @@ impl ComponentHealth {
             && matches!(self.object_store, ComponentStatus::Up)
             && matches!(self.spool, ComponentStatus::Up)
             && matches!(self.ingestion_worker, ComponentStatus::Up)
+            && matches!(self.query, ComponentStatus::Up)
     }
 }
 
@@ -196,6 +201,7 @@ pub(crate) struct Dependencies {
     pub(crate) ingestion: IngestionBoundary,
     pub(crate) operations: OperationalStore,
     pub(crate) publication: PublicationStore,
+    pub(crate) queries: QueryBoundary,
     pub(crate) immutable_objects: ImmutableObjectStore,
     pub(crate) local_storage: LocalStorageBoundary,
     pub(crate) maintenance: MaintenanceBoundary,
@@ -416,6 +422,7 @@ async fn supervise(
         () = cancellation.cancelled() => {
             state.begin_draining();
             dependencies.ingestion.begin_shutdown();
+            dependencies.queries.begin_shutdown();
             http_cancellation.cancel();
             finish_http_and_ingestion(
                 &mut http,
@@ -428,6 +435,7 @@ async fn supervise(
         result = ingestion_processing.as_mut() => {
             state.begin_draining();
             dependencies.ingestion.begin_shutdown();
+            dependencies.queries.begin_shutdown();
             http_cancellation.cancel();
             finish_http_and_ingestion(
                 &mut http,
@@ -501,6 +509,22 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
         health.ingestion_worker = ingestion_worker;
     });
 
+    let query_objects = QueryObjectStore::from_url(
+        format!("s3://{}", configuration.object_store().bucket()),
+        Arc::clone(&object_store),
+    )
+    .map_err(|source| ServiceError::QueryInitialization {
+        source: source.into(),
+    })?;
+    let queries = QueryBoundary::new(
+        configuration.query(),
+        configuration.local_storage(),
+        QuerySnapshotStore::new(pool.clone()),
+        query_objects,
+    )
+    .map_err(|source| ServiceError::QueryInitialization { source })?;
+    state.update_starting(|health| health.query = ComponentStatus::Up);
+
     let maintenance = initialize_maintenance(configuration, &pool).await?;
     state.update_starting(|health| health.maintenance = maintenance.status());
     let publication = PublicationStore::new(pool.clone());
@@ -514,6 +538,7 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
         ingestion,
         operations,
         publication,
+        queries,
         immutable_objects,
         local_storage,
         maintenance,
@@ -618,7 +643,11 @@ fn initialized_health(dependencies: &Dependencies) -> ComponentHealth {
         object_store: ComponentStatus::Up,
         spool,
         ingestion_worker,
-        query: ComponentStatus::Degraded,
+        query: query_component_health(
+            &dependencies.queries,
+            ComponentStatus::Up,
+            ComponentStatus::Up,
+        ),
         maintenance: dependencies.maintenance.status(),
     }
 }
@@ -637,14 +666,29 @@ async fn run_health_checks(state: Arc<ApplicationState>, dependencies: Arc<Depen
             (ComponentStatus::Down, ComponentStatus::Down)
         };
         let maintenance = dependencies.maintenance.health(postgresql);
+        let query = query_component_health(&dependencies.queries, postgresql, object_store);
         state.update_operational_health(ComponentHealth {
             postgresql,
             object_store,
             spool,
             ingestion_worker,
-            query: ComponentStatus::Degraded,
+            query,
             maintenance,
         });
+    }
+}
+
+fn query_component_health(
+    queries: &QueryBoundary,
+    postgresql: ComponentStatus,
+    object_store: ComponentStatus,
+) -> ComponentStatus {
+    if postgresql != ComponentStatus::Up || object_store != ComponentStatus::Up {
+        return ComponentStatus::Down;
+    }
+    match queries.availability() {
+        QueryAvailability::Available => ComponentStatus::Up,
+        QueryAvailability::Draining => ComponentStatus::Down,
     }
 }
 

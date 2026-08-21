@@ -25,7 +25,9 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 elucid-catalog = { workspace = true }
+elucid-engine = { workspace = true }
 elucid-ingestion = { workspace = true }
+elucid-language = { workspace = true }
 elucid-metastore = { workspace = true }
 elucid-storage = { workspace = true }
 

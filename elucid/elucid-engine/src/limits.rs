@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -71,6 +72,26 @@ pub enum QueryExecutionLimitsError {
     ResultBytesExceedMemory,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum QueryOutputRowLimitError {
+    #[error("query output row limit must be positive")]
+    MustBePositive,
+
+    #[error("query output row limit exceeds the configured maximum of {maximum}")]
+    ExceedsConfiguredMaximum { maximum: u64 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct QueryOutputRowLimit(NonZeroU64);
+
+impl QueryOutputRowLimit {
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QueryExecutionLimits {
     timeout: Duration,
@@ -78,7 +99,7 @@ pub struct QueryExecutionLimits {
     memory_bytes: usize,
     scratch_path: PathBuf,
     scratch_capacity_bytes: u64,
-    maximum_result_rows: u64,
+    maximum_result_rows: NonZeroU64,
     maximum_result_bytes: u64,
 }
 
@@ -126,13 +147,18 @@ impl QueryExecutionLimits {
         }
         let memory_bytes = usize::try_from(configuration.memory_bytes)
             .map_err(|_| QueryExecutionLimitsError::MemorySizeUnsupported)?;
+        let Some(maximum_result_rows) = NonZeroU64::new(configuration.maximum_result_rows) else {
+            return Err(QueryExecutionLimitsError::LimitMustBePositive {
+                limit: QueryExecutionLimit::ResultRows,
+            });
+        };
         Ok(Self {
             timeout: configuration.timeout,
             maximum_scan_bytes: configuration.maximum_scan_bytes,
             memory_bytes,
             scratch_path: configuration.scratch_path,
             scratch_capacity_bytes: configuration.scratch_capacity_bytes,
-            maximum_result_rows: configuration.maximum_result_rows,
+            maximum_result_rows,
             maximum_result_bytes: configuration.maximum_result_bytes,
         })
     }
@@ -164,7 +190,26 @@ impl QueryExecutionLimits {
 
     #[must_use]
     pub const fn maximum_result_rows(&self) -> u64 {
-        self.maximum_result_rows
+        self.maximum_result_rows.get()
+    }
+
+    #[must_use]
+    pub const fn maximum_output_row_limit(&self) -> QueryOutputRowLimit {
+        QueryOutputRowLimit(self.maximum_result_rows)
+    }
+
+    pub fn output_row_limit(
+        &self,
+        requested: u64,
+    ) -> Result<QueryOutputRowLimit, QueryOutputRowLimitError> {
+        let requested =
+            NonZeroU64::new(requested).ok_or(QueryOutputRowLimitError::MustBePositive)?;
+        if requested > self.maximum_result_rows {
+            return Err(QueryOutputRowLimitError::ExceedsConfiguredMaximum {
+                maximum: self.maximum_result_rows.get(),
+            });
+        }
+        Ok(QueryOutputRowLimit(requested))
     }
 
     #[must_use]

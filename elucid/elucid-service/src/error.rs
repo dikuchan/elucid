@@ -2,8 +2,25 @@ use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use elucid_engine::{EngineError, QueryExecutionLimitsError};
 use elucid_ingestion::{SpoolError, SpoolErrorCode};
-use elucid_metastore::{CatalogPersistenceError, MetastoreMigrationError};
+use elucid_metastore::{CatalogPersistenceError, MetastoreMigrationError, QuerySnapshotModelError};
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum QueryInitializationError {
+    #[error("maximum concurrent queries {maximum} exceeds the runtime limit")]
+    ConcurrencyUnsupported { maximum: u64 },
+
+    #[error("query execution limits are invalid")]
+    ExecutionLimits(#[from] QueryExecutionLimitsError),
+
+    #[error("query snapshot limits are invalid")]
+    SnapshotLimits(#[from] QuerySnapshotModelError),
+
+    #[error("query engine initialization failed")]
+    Engine(#[from] EngineError),
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -18,6 +35,7 @@ pub enum ServiceErrorCode {
     SpoolCorrupt,
     IngestionInitializationFailed,
     IngestionRuntimeFailed,
+    QueryInitializationFailed,
     RuntimeFailed,
     ShutdownTimedOut,
     SignalFailed,
@@ -37,6 +55,7 @@ impl ServiceErrorCode {
             Self::SpoolCorrupt => "SPOOL_CORRUPT",
             Self::IngestionInitializationFailed => "INGESTION_INITIALIZATION_FAILED",
             Self::IngestionRuntimeFailed => "INGESTION_RUNTIME_FAILED",
+            Self::QueryInitializationFailed => "QUERY_INITIALIZATION_FAILED",
             Self::RuntimeFailed => "SERVER_RUNTIME_FAILED",
             Self::ShutdownTimedOut => "SERVER_SHUTDOWN_TIMED_OUT",
             Self::SignalFailed => "SERVER_SIGNAL_FAILED",
@@ -103,6 +122,12 @@ pub enum ServiceError {
     #[error("ingestion runtime failed: {reason}")]
     IngestionRuntime { reason: &'static str },
 
+    #[error("query initialization failed")]
+    QueryInitialization {
+        #[source]
+        source: QueryInitializationError,
+    },
+
     #[error("HTTP runtime failed")]
     HttpRuntime {
         #[source]
@@ -153,6 +178,7 @@ impl ServiceError {
             },
             Self::IngestionInitialization { .. } => ServiceErrorCode::IngestionInitializationFailed,
             Self::IngestionRuntime { .. } => ServiceErrorCode::IngestionRuntimeFailed,
+            Self::QueryInitialization { .. } => ServiceErrorCode::QueryInitializationFailed,
             Self::HttpRuntime { .. } | Self::Supervisor { .. } => ServiceErrorCode::RuntimeFailed,
             Self::ShutdownTimedOut => ServiceErrorCode::ShutdownTimedOut,
             Self::Signal { .. } => ServiceErrorCode::SignalFailed,

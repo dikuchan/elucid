@@ -14,7 +14,7 @@ pub use error::{EngineError, EngineErrorCode, QueryResourceLimitExceeded};
 pub use execution::{QueryCancellation, QueryEngine};
 pub use limits::{
     QueryExecutionLimit, QueryExecutionLimitConfiguration, QueryExecutionLimits,
-    QueryExecutionLimitsError,
+    QueryExecutionLimitsError, QueryOutputRowLimit, QueryOutputRowLimitError,
 };
 pub use metrics::HistoricalConversionMetrics;
 pub use object_store::QueryObjectStore;

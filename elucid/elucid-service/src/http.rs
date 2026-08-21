@@ -12,6 +12,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, SecondsFormat, Utc};
 use futures::StreamExt as _;
+use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -22,6 +23,10 @@ use elucid_catalog::{
     CatalogApplicationError, CatalogErrorCode, CatalogManifest, Field, IngestionProfileRevision,
     Input, InputName, Schema, Source, SourceId, SourceName,
 };
+use elucid_engine::{
+    EngineError, EngineErrorCode, QueryColumn, QueryExecutionStatistics, QueryOutputRowLimitError,
+    QueryResult,
+};
 use elucid_ingestion::{
     BatchId, BatchMetadata, IngestionTime, MAXIMUM_BATCH_EVENT_DAYS, PinnedCatalogIdentities,
     SpoolErrorCode,
@@ -29,7 +34,7 @@ use elucid_ingestion::{
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind, DeadLetterSummary,
     OperationalLimit, OperationalSegmentState, PublicationError, PublicationErrorKind,
-    SegmentInspection,
+    QueryRequestTimeRange, QuerySnapshotError, QuerySnapshotErrorKind, SegmentInspection,
 };
 use elucid_storage::{
     ObjectReadRange, StorageError, StorageErrorCode, StoredObjectId, TransferLimit,
@@ -40,11 +45,13 @@ use crate::ingestion::{
     AdmissionFailure, AdmittedAppend, IngestionAvailability, IngestionStatus,
     MAXIMUM_HTTP_BATCH_RECORDS,
 };
+use crate::query::{CompletedQuery, QueryAdmissionFailure, QueryFailure};
 use crate::runtime::{
     ApplicationState, ComponentHealth, ComponentStatus, MaintenanceOwnership, RuntimeSnapshot,
 };
 
 const MAXIMUM_CATALOG_DOCUMENT_BYTES: usize = 1_048_576;
+const MAXIMUM_QUERY_REQUEST_BYTES: u64 = 1_048_576;
 const MAXIMUM_SOURCE_LIST_ITEMS: usize = 100;
 const MAXIMUM_OPERATIONAL_LIST_ITEMS: u64 = 100;
 const MAXIMUM_DEAD_LETTER_RESPONSE_BYTES: u64 = 1_048_576;
@@ -73,6 +80,7 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
         .route("/api/v1/segments", get(list_segments))
         .route("/api/v1/dead-letters", get(list_dead_letters))
         .route("/api/v1/dead-letters/{object_id}", get(read_dead_letter))
+        .route("/api/v1/query-executions", post(execute_query))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .layer(middleware::from_fn_with_state(
@@ -496,6 +504,37 @@ async fn read_bounded_ndjson(
     Ok(BodyBytes::from(bytes))
 }
 
+async fn read_bounded_body(
+    body: Body,
+    content_length: Option<u64>,
+    maximum_body_bytes: u64,
+) -> Result<BodyBytes, BodyReadFailure> {
+    let initial_capacity = content_length.unwrap_or(0).min(maximum_body_bytes);
+    let initial_capacity =
+        usize::try_from(initial_capacity).map_err(|_| BodyReadFailure::Internal)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(initial_capacity)
+        .map_err(|_| BodyReadFailure::Internal)?;
+    let mut body_bytes = 0_u64;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| BodyReadFailure::Invalid)?;
+        let chunk_bytes = u64::try_from(chunk.len()).map_err(|_| BodyReadFailure::Internal)?;
+        body_bytes = body_bytes
+            .checked_add(chunk_bytes)
+            .ok_or(BodyReadFailure::LimitExceeded)?;
+        if body_bytes > maximum_body_bytes {
+            return Err(BodyReadFailure::LimitExceeded);
+        }
+        bytes
+            .try_reserve_exact(chunk.len())
+            .map_err(|_| BodyReadFailure::Internal)?;
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(BodyBytes::from(bytes))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BodyReadFailure {
     Invalid,
@@ -648,6 +687,76 @@ async fn list_segments(
         })
         .into_response(),
         Err(error) => ApiError::publication(error).into_response(),
+    }
+}
+
+async fn execute_query(State(state): State<Arc<ApplicationState>>, request: Request) -> Response {
+    if !has_json_content_type(request.headers()) {
+        return ApiError::unsupported_query_media_type().into_response();
+    }
+    let content_length = match parse_content_length(request.headers()) {
+        Ok(content_length) => content_length,
+        Err(error) => return error.into_response(),
+    };
+    if content_length.is_some_and(|length| length > MAXIMUM_QUERY_REQUEST_BYTES) {
+        return ApiError::query_request_too_large().into_response();
+    }
+
+    let runtime = state.snapshot();
+    if !runtime.is_ready() {
+        if runtime.is_draining() {
+            return ApiError::server_draining().into_response();
+        }
+        return ApiError::server_not_ready(readiness_details(&runtime)).into_response();
+    }
+    let Some(dependencies) = runtime.dependencies() else {
+        return ApiError::server_not_ready(readiness_details(&runtime)).into_response();
+    };
+    let admitted = match dependencies.queries.try_admit() {
+        Ok(admitted) => admitted,
+        Err(QueryAdmissionFailure::CapacityExhausted) => {
+            return ApiError::capacity_exhausted().into_response();
+        }
+        Err(QueryAdmissionFailure::Draining) => {
+            return ApiError::server_draining().into_response();
+        }
+    };
+    let body = match read_bounded_body(
+        request.into_body(),
+        content_length,
+        MAXIMUM_QUERY_REQUEST_BYTES,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(BodyReadFailure::LimitExceeded) => {
+            return ApiError::query_request_too_large().into_response();
+        }
+        Err(BodyReadFailure::Invalid | BodyReadFailure::Internal) => {
+            return ApiError::invalid_request().into_response();
+        }
+    };
+    let request = match serde_json::from_slice::<QueryExecutionRequest>(&body) {
+        Ok(request) => request,
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let request_range = match QueryRequestTimeRange::new(
+        request.time_range.start_inclusive,
+        request.time_range.end_exclusive,
+    ) {
+        Ok(request_range) => request_range,
+        Err(_) => return ApiError::invalid_request().into_response(),
+    };
+    let completed = match admitted
+        .execute(request.query, request_range, request.output_rows)
+        .await
+    {
+        Ok(completed) => completed,
+        Err(error) => return ApiError::query(error).into_response(),
+    };
+    match QueryExecutionResponse::new(Uuid::now_v7(), completed) {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => error.into_response(),
     }
 }
 
@@ -806,6 +915,10 @@ fn has_yaml_content_type(headers: &HeaderMap) -> bool {
 
 fn has_ndjson_content_type(headers: &HeaderMap) -> bool {
     has_content_type(headers, "application/x-ndjson")
+}
+
+fn has_json_content_type(headers: &HeaderMap) -> bool {
+    has_content_type(headers, "application/json")
 }
 
 fn has_content_type(headers: &HeaderMap, expected: &str) -> bool {
@@ -1007,6 +1120,211 @@ struct PublicationStatus {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct QueryExecutionRequest {
+    query: String,
+    time_range: QueryTimeRangeRequest,
+    output_rows: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueryTimeRangeRequest {
+    start_inclusive: DateTime<Utc>,
+    end_exclusive: DateTime<Utc>,
+}
+
+struct QueryExecutionResponse {
+    query_id: String,
+    source_id: String,
+    active_schema_id: String,
+    active_schema_version: u64,
+    time_range: QueryTimeRangeResponse,
+    columns: Vec<QueryColumnResponse>,
+    diagnostics: Vec<QueryDiagnosticResponse>,
+    result: QueryResult,
+}
+
+impl QueryExecutionResponse {
+    fn new(query_id: Uuid, completed: CompletedQuery) -> Result<Self, ApiError> {
+        let snapshot = completed.snapshot();
+        let time_range = snapshot.time_range();
+        let start_inclusive = DateTime::<Utc>::from_timestamp_millis(
+            time_range.start_inclusive().unix_milliseconds(),
+        )
+        .ok_or_else(ApiError::internal)?;
+        let end_exclusive =
+            DateTime::<Utc>::from_timestamp_millis(time_range.end_exclusive().unix_milliseconds())
+                .ok_or_else(ApiError::internal)?;
+        let source_id = snapshot.source_id().to_string();
+        let active_schema_id = snapshot.active_schema().id().to_string();
+        let active_schema_version = snapshot.active_schema().version().get();
+        let columns = completed
+            .result()
+            .columns()
+            .iter()
+            .map(QueryColumnResponse::from_column)
+            .collect();
+        let diagnostics = completed
+            .result()
+            .diagnostics()
+            .iter()
+            .map(QueryDiagnosticResponse::from_diagnostic)
+            .collect();
+        Ok(Self {
+            query_id: query_id.to_string(),
+            source_id,
+            active_schema_id,
+            active_schema_version,
+            time_range: QueryTimeRangeResponse {
+                start_inclusive: format_timestamp(start_inclusive),
+                end_exclusive: format_timestamp(end_exclusive),
+            },
+            columns,
+            diagnostics,
+            result: completed.into_result(),
+        })
+    }
+}
+
+impl Serialize for QueryExecutionResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut response = serializer.serialize_struct("QueryExecutionResponse", 11)?;
+        response.serialize_field("query_id", &self.query_id)?;
+        response.serialize_field("source_id", &self.source_id)?;
+        response.serialize_field("active_schema_id", &self.active_schema_id)?;
+        response.serialize_field("active_schema_version", &self.active_schema_version)?;
+        response.serialize_field("time_range", &self.time_range)?;
+        response.serialize_field("columns", &self.columns)?;
+        response.serialize_field("rows", self.result.rows())?;
+        response.serialize_field("completion", self.result.completion().as_str())?;
+        response.serialize_field(
+            "truncation_reason",
+            &self
+                .result
+                .completion()
+                .truncation_reason()
+                .map(|reason| reason.as_str()),
+        )?;
+        response.serialize_field("diagnostics", &self.diagnostics)?;
+        response.serialize_field(
+            "statistics",
+            &QueryStatisticsResponse::from(self.result.statistics()),
+        )?;
+        response.end()
+    }
+}
+
+#[derive(Serialize)]
+struct QueryTimeRangeResponse {
+    start_inclusive: String,
+    end_exclusive: String,
+}
+
+#[derive(Serialize)]
+struct QueryColumnResponse {
+    name: String,
+    logical_type: &'static str,
+    nullability: &'static str,
+}
+
+impl QueryColumnResponse {
+    fn from_column(column: &QueryColumn) -> Self {
+        Self {
+            name: column.name().to_owned(),
+            logical_type: column.logical_type().as_str(),
+            nullability: column.nullability().as_str(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct QueryDiagnosticResponse {
+    code: &'static str,
+    severity: &'static str,
+    message: String,
+    span: Option<QuerySpanResponse>,
+    source_range: Option<QuerySourceRangeResponse>,
+}
+
+impl QueryDiagnosticResponse {
+    fn from_diagnostic(diagnostic: &elucid_language::Diagnostic) -> Self {
+        Self {
+            code: diagnostic.code().as_str(),
+            severity: diagnostic.severity().as_str(),
+            message: diagnostic.message().to_owned(),
+            span: diagnostic.span().map(|span| QuerySpanResponse {
+                start_byte: span.start(),
+                end_byte: span.end(),
+            }),
+            source_range: diagnostic
+                .source_range()
+                .map(QuerySourceRangeResponse::from),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct QuerySpanResponse {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Serialize)]
+struct QuerySourceRangeResponse {
+    start: QuerySourcePositionResponse,
+    end: QuerySourcePositionResponse,
+}
+
+impl From<elucid_language::SourceRange> for QuerySourceRangeResponse {
+    fn from(range: elucid_language::SourceRange) -> Self {
+        Self {
+            start: QuerySourcePositionResponse::from(range.start()),
+            end: QuerySourcePositionResponse::from(range.end()),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct QuerySourcePositionResponse {
+    line: usize,
+    column: usize,
+}
+
+impl From<elucid_language::SourcePosition> for QuerySourcePositionResponse {
+    fn from(position: elucid_language::SourcePosition) -> Self {
+        Self {
+            line: position.line(),
+            column: position.column(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct QueryStatisticsResponse {
+    selected_segments: u64,
+    selected_parquet_bytes: u64,
+    output_rows: u64,
+    output_bytes: u64,
+    elapsed_milliseconds: u64,
+}
+
+impl From<QueryExecutionStatistics> for QueryStatisticsResponse {
+    fn from(statistics: QueryExecutionStatistics) -> Self {
+        Self {
+            selected_segments: statistics.selected_segments(),
+            selected_parquet_bytes: statistics.selected_parquet_bytes(),
+            output_rows: statistics.output_rows(),
+            output_bytes: statistics.output_bytes(),
+            elapsed_milliseconds: statistics.elapsed_milliseconds(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SegmentListQuery {
     source_id: String,
     state: Option<String>,
@@ -1030,6 +1348,7 @@ struct SegmentResponse {
     segment_id: String,
     source_id: String,
     schema_id: String,
+    schema_version: u64,
     state: &'static str,
     origin: &'static str,
     event_day: String,
@@ -1050,6 +1369,7 @@ impl From<&SegmentInspection> for SegmentResponse {
             segment_id: segment.segment_id().to_string(),
             source_id: segment.source_id().to_string(),
             schema_id: segment.schema_id().to_string(),
+            schema_version: segment.schema_version().get(),
             state: segment.state().as_str(),
             origin: segment.origin().as_str(),
             event_day: segment.event_day().to_string(),
@@ -1413,6 +1733,22 @@ impl ApiError {
         )
     }
 
+    fn unsupported_query_media_type() -> Self {
+        Self::plain(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "INVALID_REQUEST",
+            "Content-Type must be application/json",
+        )
+    }
+
+    fn query_request_too_large() -> Self {
+        Self::plain(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "INVALID_REQUEST",
+            "Request body exceeds the query request limit",
+        )
+    }
+
     fn ingestion_batch_limit_exceeded() -> Self {
         Self::plain(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -1425,7 +1761,7 @@ impl ApiError {
         Self {
             status: StatusCode::TOO_MANY_REQUESTS,
             code: "CAPACITY_EXHAUSTED",
-            message: "Ingestion capacity is exhausted",
+            message: "Admission capacity is exhausted",
             details: ErrorDetails::Empty(EmptyDetails {}),
             retry_after_seconds: Some(RETRY_AFTER_SECONDS),
         }
@@ -1530,6 +1866,111 @@ impl ApiError {
             "OBJECT_INTEGRITY_ERROR",
             "Stored object failed integrity validation",
         )
+    }
+
+    fn query(error: QueryFailure) -> Self {
+        match error {
+            QueryFailure::Snapshot(error) => Self::query_snapshot(error),
+            QueryFailure::Engine(error) => Self::query_engine(error),
+            QueryFailure::OutputRowLimit(error) => match error {
+                QueryOutputRowLimitError::MustBePositive
+                | QueryOutputRowLimitError::ExceedsConfiguredMaximum { .. } => {
+                    Self::invalid_request()
+                }
+                _ => Self::invalid_request(),
+            },
+            QueryFailure::Cancelled => Self::plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "QUERY_CANCELLED",
+                "Query execution was cancelled",
+            ),
+        }
+    }
+
+    fn query_snapshot(error: QuerySnapshotError) -> Self {
+        match error.kind() {
+            QuerySnapshotErrorKind::Analysis => {
+                let Some(analysis) = error.analysis_error() else {
+                    return Self::internal();
+                };
+                Self {
+                    status: StatusCode::BAD_REQUEST,
+                    code: analysis.code().as_str(),
+                    message: "Query is invalid",
+                    details: ErrorDetails::Query(QueryErrorDetails {
+                        diagnostics: analysis
+                            .diagnostics()
+                            .iter()
+                            .map(QueryDiagnosticResponse::from_diagnostic)
+                            .collect(),
+                    }),
+                    retry_after_seconds: None,
+                }
+            }
+            QuerySnapshotErrorKind::ResourceLimit => Self::plain(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "QUERY_RESOURCE_LIMIT_EXCEEDED",
+                "Query exceeds an execution limit",
+            ),
+            QuerySnapshotErrorKind::Unavailable => Self::metastore_unavailable(),
+            QuerySnapshotErrorKind::Corrupt => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "CATALOG_CORRUPT",
+                "Query metadata is corrupt",
+            ),
+            _ => Self::internal(),
+        }
+    }
+
+    fn query_engine(error: EngineError) -> Self {
+        match error.code() {
+            EngineErrorCode::PublishedObjectMissing => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error.code().as_str(),
+                "A published query object is missing",
+            ),
+            EngineErrorCode::PublishedObjectCorrupt => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error.code().as_str(),
+                "A published query object is corrupt",
+            ),
+            EngineErrorCode::CatalogCorrupt => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error.code().as_str(),
+                "Query catalog state is corrupt",
+            ),
+            EngineErrorCode::QueryCastFailed => Self::plain(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                error.code().as_str(),
+                "Query cast failed",
+            ),
+            EngineErrorCode::QueryEvaluationFailed => Self::plain(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                error.code().as_str(),
+                "Query evaluation failed",
+            ),
+            EngineErrorCode::QueryResourceLimitExceeded => Self::plain(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                error.code().as_str(),
+                "Query exceeds an execution limit",
+            ),
+            EngineErrorCode::QueryTimeout => Self::plain(
+                StatusCode::REQUEST_TIMEOUT,
+                error.code().as_str(),
+                "Query exceeded its execution timeout",
+            ),
+            EngineErrorCode::QueryCancelled => Self::plain(
+                StatusCode::SERVICE_UNAVAILABLE,
+                error.code().as_str(),
+                "Query execution was cancelled",
+            ),
+            EngineErrorCode::QueryExecutionFailed => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                error.code().as_str(),
+                "Query execution failed",
+            ),
+            _ => Self::internal(),
+        }
     }
 
     fn catalog(error: CatalogApplicationError) -> Self {
@@ -1643,6 +2084,7 @@ enum ErrorDetails {
     Empty(EmptyDetails),
     Readiness(ReadinessDetails),
     Catalog(CatalogErrorDetails),
+    Query(QueryErrorDetails),
 }
 
 #[derive(Serialize)]
@@ -1657,4 +2099,9 @@ struct ReadinessDetails {
 #[derive(Serialize)]
 struct CatalogErrorDetails {
     path: String,
+}
+
+#[derive(Serialize)]
+struct QueryErrorDetails {
+    diagnostics: Vec<QueryDiagnosticResponse>,
 }

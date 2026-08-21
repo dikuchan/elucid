@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 use chrono::{DateTime, NaiveDate, Utc};
-use elucid_catalog::{InputId, SchemaId, SourceId};
+use elucid_catalog::{InputId, SchemaId, SchemaVersion, SourceId};
 use elucid_storage::{
     BatchId, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
     ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
@@ -132,6 +132,7 @@ pub struct SegmentInspection {
     segment_id: SegmentId,
     source_id: SourceId,
     schema_id: SchemaId,
+    schema_version: SchemaVersion,
     state: OperationalSegmentState,
     origin: OperationalSegmentOrigin,
     event_day: NaiveDate,
@@ -160,6 +161,11 @@ impl SegmentInspection {
     #[must_use]
     pub const fn schema_id(&self) -> SchemaId {
         self.schema_id
+    }
+
+    #[must_use]
+    pub const fn schema_version(&self) -> SchemaVersion {
+        self.schema_version
     }
 
     #[must_use]
@@ -396,6 +402,7 @@ impl OperationalStore {
                 segment.segment_id,
                 segment.source_id,
                 segment.schema_id,
+                schema.version AS schema_version,
                 segment.state,
                 segment.origin,
                 segment.event_day,
@@ -410,6 +417,9 @@ impl OperationalStore {
                 segment.retired_at
             FROM segments AS segment
             JOIN stored_objects AS object USING (segment_id)
+            JOIN schema_versions AS schema
+              ON schema.source_id = segment.source_id
+             AND schema.schema_id = segment.schema_id
             WHERE segment.source_id = $1
               AND ($2::TEXT IS NULL OR segment.state = $2)
             ORDER BY segment.event_day DESC, segment.minimum_event_time DESC, segment.segment_id
@@ -506,6 +516,7 @@ struct SegmentInspectionRow {
     segment_id: Uuid,
     source_id: Uuid,
     schema_id: Uuid,
+    schema_version: i64,
     state: String,
     origin: String,
     event_day: NaiveDate,
@@ -532,6 +543,12 @@ impl TryFrom<SegmentInspectionRow> for SegmentInspection {
             schema_id: SchemaId::try_from(row.schema_id).map_err(|_| {
                 PublicationError::corrupt("stored segment schema identity is invalid")
             })?,
+            schema_version: u64::try_from(row.schema_version)
+                .ok()
+                .and_then(|version| SchemaVersion::new(version).ok())
+                .ok_or_else(|| {
+                    PublicationError::corrupt("stored segment schema version is invalid")
+                })?,
             state: OperationalSegmentState::from_database(&row.state)?,
             origin: OperationalSegmentOrigin::from_database(&row.origin)?,
             event_day: row.event_day,

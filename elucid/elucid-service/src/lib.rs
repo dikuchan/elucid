@@ -6,8 +6,9 @@ mod ingestion;
 mod local_storage;
 mod metrics;
 mod processing;
+mod query;
 mod runtime;
 
 pub use configuration::*;
-pub use error::{ServiceError, ServiceErrorCode};
+pub use error::{QueryInitializationError, ServiceError, ServiceErrorCode};
 pub use runtime::{RunningServer, start};

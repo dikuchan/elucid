@@ -18,7 +18,7 @@ use futures::{Stream, StreamExt as _};
 use serde_json::{Number, Value};
 
 use crate::execution::QueryExecutionGuard;
-use crate::{EngineError, QueryExecutionLimits, QueryResourceLimitExceeded};
+use crate::{EngineError, QueryExecutionLimits, QueryOutputRowLimit, QueryResourceLimitExceeded};
 
 pub const MAXIMUM_ENCODED_QUERY_ROW_BYTES: u64 = 1_048_576;
 const EMPTY_ENCODED_ROWS_BYTES: u64 = 2;
@@ -183,6 +183,7 @@ impl QueryResult {
 pub(crate) async fn encode_query_result(
     snapshot: &QuerySnapshot,
     limits: &QueryExecutionLimits,
+    output_row_limit: QueryOutputRowLimit,
     memory_pool: &Arc<dyn MemoryPool>,
     mut batches: QueryBatchStream,
     started_at: Instant,
@@ -199,7 +200,7 @@ pub(crate) async fn encode_query_result(
             nullability: field.nullability(),
         })
         .collect();
-    let mut builder = QueryResultBuilder::new(limits, memory_pool)?;
+    let mut builder = QueryResultBuilder::new(limits, output_row_limit, memory_pool)?;
     while let Some(batch) = batches.next().await {
         guard.ensure_active()?;
         let batch = batch?;
@@ -280,6 +281,7 @@ struct QueryResultBuilder {
 impl QueryResultBuilder {
     fn new(
         limits: &QueryExecutionLimits,
+        output_row_limit: QueryOutputRowLimit,
         memory_pool: &Arc<dyn MemoryPool>,
     ) -> Result<Self, EngineError> {
         let mut memory_reservation =
@@ -292,7 +294,7 @@ impl QueryResultBuilder {
         Ok(Self {
             rows: Vec::new(),
             output_bytes: EMPTY_ENCODED_ROWS_BYTES,
-            maximum_rows: limits.maximum_result_rows(),
+            maximum_rows: output_row_limit.get(),
             maximum_bytes: limits.maximum_result_bytes(),
             maximum_row_bytes: limits.maximum_encoded_row_bytes(),
             memory_reservation,

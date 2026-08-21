@@ -56,19 +56,19 @@ impl SnapshotTableProvider {
         objects: QueryObjectStore,
         metrics: Arc<HistoricalConversionMetrics>,
     ) -> Result<Self, EngineError> {
-        let prepared = PreparedSnapshot::from_query_snapshot(snapshot)?;
-        validate_objects(&prepared, &objects).await?;
+        let PreparedSnapshot {
+            active_schema,
+            time_range,
+            stored_schemas,
+            segments,
+            schema_plans,
+        } = PreparedSnapshot::from_query_snapshot(snapshot)?;
+        let segments = validate_objects(segments, stored_schemas, objects.clone()).await?;
         Ok(Self {
-            schema: Arc::new(prepared.active_schema.arrow_schema().clone()),
-            time_range: prepared.time_range,
-            segments: prepared
-                .segments
-                .into_iter()
-                .map(|segment| ValidatedSegment {
-                    object: segment.object,
-                })
-                .collect(),
-            schema_plans: prepared.schema_plans,
+            schema: Arc::new(active_schema.arrow_schema().clone()),
+            time_range,
+            segments: segments.into(),
+            schema_plans,
             objects,
             metrics,
         })
@@ -158,7 +158,7 @@ fn mandatory_time_predicate(time_range: TimeRange) -> Expr {
 struct PreparedSnapshot {
     active_schema: Schema,
     time_range: TimeRange,
-    stored_schemas: HashMap<SchemaId, Schema>,
+    stored_schemas: HashMap<SchemaId, Arc<Schema>>,
     segments: Vec<PreparedSegment>,
     schema_plans: Arc<[StoredSchemaPlan]>,
 }
@@ -180,7 +180,7 @@ impl PreparedSnapshot {
                 ));
             }
             if stored_schemas
-                .insert(stored_schema.id(), stored_schema.clone())
+                .insert(stored_schema.id(), Arc::new(stored_schema.clone()))
                 .is_some()
             {
                 return Err(EngineError::catalog_corrupt(
@@ -238,28 +238,31 @@ struct ValidatedSegment {
 }
 
 async fn validate_objects(
-    snapshot: &PreparedSnapshot,
-    objects: &QueryObjectStore,
-) -> Result<(), EngineError> {
-    stream::iter(snapshot.segments.iter())
-        .map(|segment| async move {
-            let stored_schema =
-                snapshot
-                    .stored_schemas
-                    .get(&segment.schema_id)
-                    .ok_or_else(|| {
-                        EngineError::catalog_corrupt(
-                            "selected segment references a missing stored schema",
-                        )
-                    })?;
-            let result = validate_object(segment, stored_schema, objects).await;
-            tokio::task::yield_now().await;
-            result
+    segments: Vec<PreparedSegment>,
+    stored_schemas: HashMap<SchemaId, Arc<Schema>>,
+    objects: QueryObjectStore,
+) -> Result<Vec<ValidatedSegment>, EngineError> {
+    stream::iter(segments)
+        .map(move |segment| {
+            let stored_schema = stored_schemas.get(&segment.schema_id).cloned();
+            let objects = objects.clone();
+            async move {
+                let stored_schema = stored_schema.ok_or_else(|| {
+                    EngineError::catalog_corrupt(
+                        "selected segment references a missing stored schema",
+                    )
+                })?;
+                validate_object(&segment, &stored_schema, &objects).await?;
+                let validated = ValidatedSegment {
+                    object: segment.object,
+                };
+                tokio::task::yield_now().await;
+                Ok(validated)
+            }
         })
-        .buffer_unordered(MAXIMUM_CONCURRENT_FOOTER_READS)
-        .try_collect::<Vec<_>>()
+        .buffered(MAXIMUM_CONCURRENT_FOOTER_READS)
+        .try_collect()
         .await
-        .map(|_| ())
 }
 
 async fn validate_object(

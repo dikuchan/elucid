@@ -88,6 +88,22 @@ async fn dropping_server_releases_its_bound_listener() {
         .expect("request liveness");
     assert_eq!(live.status(), StatusCode::OK);
 
+    let query = client
+        .post(format!("http://{server_address}/api/v1/query-executions"))
+        .json(&serde_json::json!({
+            "query": "source demo_logs",
+            "time_range": {
+                "start_inclusive": "2026-08-20T00:00:00.000Z",
+                "end_exclusive": "2026-08-21T00:00:00.000Z"
+            },
+            "output_rows": 100
+        }))
+        .send()
+        .await
+        .expect("reject query before startup completes");
+    assert_eq!(query.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(json(query).await["error"]["code"], "SERVER_NOT_READY");
+
     drop(server);
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
@@ -200,6 +216,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(ready["components"]["postgresql"], "UP");
     assert_eq!(ready["components"]["object_store"], "UP");
     assert_eq!(ready["components"]["spool"], "UP");
+    assert_eq!(ready["components"]["query"], "UP");
     assert_eq!(ready["components"]["maintenance"], "DEGRADED");
 
     let applied = apply_catalog(&client, &endpoint).await;
@@ -369,6 +386,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(segments["limit"], 100);
     assert_eq!(segments["segments"][0]["source_id"], source_id);
     assert_eq!(segments["segments"][0]["schema_id"], target_schema_id);
+    assert_eq!(segments["segments"][0]["schema_version"], 1);
     assert_eq!(segments["segments"][0]["state"], "ACTIVE");
     assert_eq!(segments["segments"][0]["origin"], "INGESTION");
     assert_eq!(segments["segments"][0]["event_day"], "2026-08-20");
@@ -378,6 +396,113 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
             .as_u64()
             .expect("Parquet byte count")
             > 0
+    );
+
+    let query = client
+        .post(format!("{endpoint}/api/v1/query-executions"))
+        .json(&serde_json::json!({
+            "query": "source demo_logs | project @event_time, message, status | sort by -@event_time",
+            "time_range": {
+                "start_inclusive": "2026-08-20T00:00:00.000Z",
+                "end_exclusive": "2026-08-21T00:00:00.000Z"
+            },
+            "output_rows": 1
+        }))
+        .send()
+        .await
+        .expect("execute query");
+    assert_eq!(query.status(), StatusCode::OK);
+    assert!(query.headers().contains_key("X-Request-Id"));
+    let query = json(query).await;
+    let query_id = query["query_id"].as_str().expect("query identity");
+    let parsed_query_id = Uuid::parse_str(query_id).expect("UUID query identity");
+    assert_eq!(parsed_query_id.get_version_num(), 7);
+    assert_eq!(parsed_query_id.to_string(), query_id);
+    assert_eq!(query["source_id"], source_id);
+    assert_eq!(query["active_schema_id"], target_schema_id);
+    assert_eq!(query["active_schema_version"], 1);
+    assert_eq!(
+        query["time_range"]["start_inclusive"],
+        "2026-08-20T00:00:00.000Z"
+    );
+    assert_eq!(
+        query["time_range"]["end_exclusive"],
+        "2026-08-21T00:00:00.000Z"
+    );
+    assert_eq!(query["completion"], "TRUNCATED");
+    assert_eq!(query["truncation_reason"], "OUTPUT_ROWS");
+    assert_eq!(query["diagnostics"], serde_json::json!([]));
+    assert_eq!(
+        query["columns"],
+        serde_json::json!([
+            {
+                "name": "@event_time",
+                "logical_type": "datetime",
+                "nullability": "NON_NULL"
+            },
+            {
+                "name": "message",
+                "logical_type": "utf8",
+                "nullability": "NON_NULL"
+            },
+            {
+                "name": "status",
+                "logical_type": "int32",
+                "nullability": "NULLABLE"
+            }
+        ])
+    );
+    assert_eq!(
+        query["rows"],
+        serde_json::json!([["2026-08-20T12:00:00.000Z", "valid after", 500]])
+    );
+    assert_eq!(query["statistics"]["selected_segments"], 1);
+    assert!(
+        query["statistics"]["selected_parquet_bytes"]
+            .as_u64()
+            .expect("selected Parquet bytes")
+            > 0
+    );
+    assert_eq!(query["statistics"]["output_rows"], 1);
+    assert!(
+        query["statistics"]["output_bytes"]
+            .as_u64()
+            .expect("encoded output bytes")
+            > 2
+    );
+    assert!(
+        query["statistics"]["elapsed_milliseconds"]
+            .as_u64()
+            .is_some()
+    );
+
+    let invalid_query = client
+        .post(format!("{endpoint}/api/v1/query-executions"))
+        .json(&serde_json::json!({
+            "query": "source demo_logs | project statuz",
+            "time_range": {
+                "start_inclusive": "2026-08-20T00:00:00.000Z",
+                "end_exclusive": "2026-08-21T00:00:00.000Z"
+            },
+            "output_rows": 100
+        }))
+        .send()
+        .await
+        .expect("reject invalid query");
+    assert_eq!(invalid_query.status(), StatusCode::BAD_REQUEST);
+    let invalid_query = json(invalid_query).await;
+    assert_eq!(invalid_query["error"]["code"], "QUERY_SEMANTIC_ERROR");
+    assert_eq!(
+        invalid_query["error"]["details"]["diagnostics"][0]["code"],
+        "QUERY_FIELD_NOT_FOUND"
+    );
+    assert_eq!(
+        invalid_query["error"]["details"]["diagnostics"][0]["severity"],
+        "ERROR"
+    );
+    assert_eq!(
+        invalid_query["error"]["details"]["diagnostics"][0]["source_range"]["start"]["line"],
+        1
     );
 
     let dead_letters_url = format!("{endpoint}/api/v1/dead-letters?source_id={source_id}");
@@ -551,6 +676,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     .await;
     assert_eq!(status["phase"], "DEGRADED");
     assert_eq!(status["components"]["object_store"], "DOWN");
+    assert_eq!(status["components"]["query"], "DOWN");
     let unavailable_ingestion = client
         .post(format!(
             "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"
@@ -573,6 +699,31 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     );
     assert_eq!(
         json(unavailable_ingestion).await["error"]["code"],
+        "SERVER_NOT_READY"
+    );
+    let unavailable_query = client
+        .post(format!("{endpoint}/api/v1/query-executions"))
+        .json(&serde_json::json!({
+            "query": "source demo_logs",
+            "time_range": {
+                "start_inclusive": "2026-08-20T00:00:00.000Z",
+                "end_exclusive": "2026-08-21T00:00:00.000Z"
+            },
+            "output_rows": 100
+        }))
+        .send()
+        .await
+        .expect("reject query while unavailable");
+    assert_eq!(unavailable_query.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        unavailable_query
+            .headers()
+            .get("Retry-After")
+            .expect("query readiness retry delay"),
+        "1"
+    );
+    assert_eq!(
+        json(unavailable_query).await["error"]["code"],
         "SERVER_NOT_READY"
     );
     let cached_sources = get_json(

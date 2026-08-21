@@ -15,7 +15,7 @@ use crate::result::{QueryBatchStream, encode_query_result};
 use crate::runtime::{RuntimeFailureKind, runtime_failure_kind};
 use crate::{
     EngineError, HistoricalConversionMetrics, QueryExecutionLimits, QueryObjectStore,
-    QueryResourceLimitExceeded, QueryResult, SnapshotTableProvider,
+    QueryOutputRowLimit, QueryResourceLimitExceeded, QueryResult, SnapshotTableProvider,
 };
 
 const QUERY_EXECUTION_BATCH_ROWS: usize = 256;
@@ -131,7 +131,13 @@ impl QueryEngine {
         &self,
         snapshot: &QuerySnapshot,
         cancellation: &QueryCancellation,
+        output_row_limit: QueryOutputRowLimit,
     ) -> Result<QueryResult, EngineError> {
+        if output_row_limit.get() > self.limits.maximum_result_rows() {
+            return Err(EngineError::execution_invariant(
+                "query output row limit exceeds this engine's configured maximum",
+            ));
+        }
         let started_at = Instant::now();
         let guard = QueryExecutionGuard::new(cancellation, started_at, self.limits.timeout())?;
         tokio::select! {
@@ -139,7 +145,7 @@ impl QueryEngine {
             () = cancellation.cancelled() => Err(EngineError::cancelled()),
             result = tokio::time::timeout(
                 self.limits.timeout(),
-                self.execute_inner(snapshot, started_at, guard),
+                self.execute_inner(snapshot, started_at, guard, output_row_limit),
             ) => result.map_err(|_| EngineError::timeout())?,
         }
     }
@@ -149,6 +155,7 @@ impl QueryEngine {
         snapshot: &QuerySnapshot,
         started_at: Instant,
         guard: QueryExecutionGuard<'_>,
+        output_row_limit: QueryOutputRowLimit,
     ) -> Result<QueryResult, EngineError> {
         guard.ensure_active()?;
         enforce_snapshot_limits(snapshot, &self.limits)?;
@@ -181,6 +188,7 @@ impl QueryEngine {
         encode_query_result(
             snapshot,
             &self.limits,
+            output_row_limit,
             &self.runtime.memory_pool,
             stream,
             started_at,

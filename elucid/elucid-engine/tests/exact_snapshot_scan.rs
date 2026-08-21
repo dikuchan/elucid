@@ -261,7 +261,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     )
     .expect("initialize bounded query engine");
     let result = engine
-        .execute(&typed_snapshot, &QueryCancellation::new())
+        .execute(
+            &typed_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect("execute typed pipeline");
     assert_eq!(
@@ -298,7 +302,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select aggregate pipeline snapshot");
     let result = engine
-        .execute(&aggregate_snapshot, &QueryCancellation::new())
+        .execute(
+            &aggregate_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect("execute aggregate pipeline");
     assert_eq!(
@@ -343,7 +351,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select strict-cast failure snapshot");
     let error = engine
-        .execute(&cast_failure_snapshot, &QueryCancellation::new())
+        .execute(
+            &cast_failure_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("a JSON number cannot be strictly cast to UTF-8");
     assert_eq!(error.code(), EngineErrorCode::QueryCastFailed);
@@ -359,7 +371,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select arithmetic-overflow snapshot");
     let error = engine
-        .execute(&overflow_snapshot, &QueryCancellation::new())
+        .execute(
+            &overflow_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("integer overflow must terminate execution");
     assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
@@ -375,7 +391,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select sum-overflow snapshot");
     let error = engine
-        .execute(&sum_overflow_snapshot, &QueryCancellation::new())
+        .execute(
+            &sum_overflow_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("integer sum overflow must terminate execution");
     assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
@@ -391,7 +411,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select empty aggregate snapshot");
     let result = engine
-        .execute(&empty_snapshot, &QueryCancellation::new())
+        .execute(
+            &empty_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect("execute empty aggregate pipeline");
     assert_eq!(
@@ -408,7 +432,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select typed-result snapshot");
     let encoded = engine
-        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .execute(
+            &encoded_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect("encode typed query result");
     assert_eq!(
@@ -448,16 +476,16 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         ]
     );
 
-    let mut row_limit_configuration = query_limit_configuration(query_scratch.path());
-    row_limit_configuration.maximum_result_rows = 1;
-    let row_limited_engine = QueryEngine::new(
-        query_objects.clone(),
-        Arc::clone(&metrics),
-        QueryExecutionLimits::new(row_limit_configuration).expect("row limits"),
-    )
-    .expect("initialize row-limited query engine");
-    let truncated = row_limited_engine
-        .execute(&encoded_snapshot, &QueryCancellation::new())
+    let requested_output_rows = engine
+        .limits()
+        .output_row_limit(1)
+        .expect("requested output row limit");
+    let truncated = engine
+        .execute(
+            &encoded_snapshot,
+            &QueryCancellation::new(),
+            requested_output_rows,
+        )
         .await
         .expect("truncate query by row count");
     assert_eq!(truncated.rows().len(), 1);
@@ -477,7 +505,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     )
     .expect("initialize byte-limited query engine");
     let truncated = byte_limited_engine
-        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .execute(
+            &encoded_snapshot,
+            &QueryCancellation::new(),
+            byte_limited_engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect("truncate query by encoded bytes");
     assert!(truncated.rows().is_empty());
@@ -498,7 +530,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     )
     .expect("initialize scan-limited query engine");
     let error = scan_limited_engine
-        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .execute(
+            &encoded_snapshot,
+            &QueryCancellation::new(),
+            scan_limited_engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("selected bytes must be checked again before execution");
     assert_eq!(error.code(), EngineErrorCode::QueryResourceLimitExceeded);
@@ -510,7 +546,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     let cancellation = QueryCancellation::new();
     cancellation.cancel();
     let error = engine
-        .execute(&encoded_snapshot, &cancellation)
+        .execute(
+            &encoded_snapshot,
+            &cancellation,
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("pre-cancelled query must not begin execution");
     assert_eq!(error.code(), EngineErrorCode::QueryCancelled);
@@ -524,7 +564,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     )
     .expect("initialize timeout-limited query engine");
     let error = timeout_engine
-        .execute(&encoded_snapshot, &QueryCancellation::new())
+        .execute(
+            &encoded_snapshot,
+            &QueryCancellation::new(),
+            timeout_engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("query execution must honor its deadline");
     assert_eq!(error.code(), EngineErrorCode::QueryTimeout);
@@ -540,7 +584,11 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         .await
         .expect("select oversized-row snapshot");
     let error = engine
-        .execute(&oversized_snapshot, &QueryCancellation::new())
+        .execute(
+            &oversized_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
         .await
         .expect_err("one encoded row must not exceed the reported implementation limit");
     assert_eq!(error.code(), EngineErrorCode::QueryResourceLimitExceeded);
