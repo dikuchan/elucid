@@ -13,6 +13,7 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true, features = ["aws"] }
+prometheus-client = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }

@@ -419,16 +419,17 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
         .await
         .expect("request metrics");
     assert_eq!(metrics.status(), StatusCode::OK);
-    assert!(
+    assert_eq!(
         metrics
             .headers()
             .get("Content-Type")
             .expect("metrics content type")
             .to_str()
-            .expect("metrics content type text")
-            .starts_with("text/plain")
+            .expect("metrics content type text"),
+        "application/openmetrics-text; version=1.0.0; charset=utf-8"
     );
     let metrics = metrics.text().await.expect("read metrics");
+    assert!(metrics.ends_with("# EOF\n"));
     for metric in [
         "elucid_ingestion_http_batches_accepted_total 1",
         "elucid_ingestion_http_batches_rejected_total 6",

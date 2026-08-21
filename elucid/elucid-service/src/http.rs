@@ -181,15 +181,21 @@ async fn metrics(State(state): State<Arc<ApplicationState>>) -> Response {
     let ingestion = snapshot
         .dependencies()
         .map(|dependencies| dependencies.ingestion.status());
-    let body = state.metrics().render(
+    state.metrics().update_spool(
         ingestion.map_or(0, IngestionStatus::used_bytes),
         ingestion.map_or(0, IngestionStatus::pending_batches),
     );
-    (
-        [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
-        body,
-    )
-        .into_response()
+    match state.metrics().encode() {
+        Ok(body) => (
+            [(
+                CONTENT_TYPE,
+                "application/openmetrics-text; version=1.0.0; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn apply_catalog(

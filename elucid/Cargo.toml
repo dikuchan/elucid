@@ -37,6 +37,7 @@ logos = "0.16.0"
 nu-ansi-term = "0.50.3"
 object_store = "0.12.4"
 parquet = "57.1.0"
+prometheus-client = "0.25.0"
 reedline = "0.44.0"
 reqwest = { version = "0.12.28", default-features = false }
 serde = "1.0.228"

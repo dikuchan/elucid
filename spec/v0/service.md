@@ -144,7 +144,7 @@ Capacity rejection occurs before accepting ownership of data. Ingestion and quer
 
 ## 10. Telemetry and errors
 
-`GET /metrics` exposes Prometheus text format. Structured logs and metrics cover startup, HTTP, spool durability, ingestion processing, Parquet construction, object upload/publication/deletion, catalog application, query planning/execution, compaction, retention, recovery, and shutdown.
+`GET /metrics` exposes OpenMetrics 1.0 text format as `application/openmetrics-text; version=1.0.0; charset=utf-8`. Structured logs and metrics cover startup, HTTP, spool durability, ingestion processing, Parquet construction, object upload/publication/deletion, catalog application, query planning/execution, compaction, retention, recovery, and shutdown.
 
 High-cardinality identities, object keys, query text, request bodies, event data, and error messages are excluded from metric labels. Logs may include request, batch, segment, object, query, and compaction identities where needed for bounded operational tracing, but never event payloads by default.
 
