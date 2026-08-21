@@ -4,28 +4,28 @@ The Elucid UI is a same-origin browser application for querying events and inspe
 
 ## Current slice
 
-The current implementation is a static layout reference. It contains representative source, schema, diagnostic, and result data so the information hierarchy can be reviewed before application behavior is added. It performs no HTTP requests, owns no query state machine, and does not claim that the displayed values came from a running server.
+The current implementation is the bounded query workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. Ingestion and storage state and production asset embedding are separate delivery slices.
 
 ## Stack
 
 - React and Vite provide the client-only SPA and production asset build.
 - Mantine Core and Mantine Hooks provide the design system, accessibility behavior, theme tokens, layout primitives, controls, and dense data presentation.
-- TanStack Query will own remote server state, bounded retries, request races, invalidation, and GET cancellation.
+- TanStack Query owns remote server state, bounded read retries, request races, invalidation, GET cancellation, and the non-retrying query mutation.
 - TanStack Table will own the result-grid model without changing the server-defined row order or query semantics.
 - TanStack Virtual will be added only if configured result limits or measurements justify virtualization.
 - TanStack Router will be added when the application has a second addressable screen or useful URL state. The single workspace does not need it yet.
 - TanStack Start is excluded because the Rust process already owns the HTTP server, API, and embedded asset delivery; a second server runtime, SSR, and server functions do not serve this application.
-- CodeMirror 6 will provide the query editor and source-span decorations.
-- Zod will validate unknown JSON once at the HTTP boundary before values enter application code.
-- Strict TypeScript, type-aware ESLint, Prettier, and focused Vitest and Testing Library tests form the frontend quality boundary.
+- CodeMirror 6 provides the query editor, keyboard execution, and source-span decorations.
+- Zod validates unknown JSON once at the HTTP boundary before values enter application code.
+- Strict TypeScript, type-aware ESLint, Prettier, and focused Vitest contract tests form the frontend quality boundary.
 
-Dependencies are installed only in the change that first uses them. The static layout therefore installs React, Mantine, and build-time quality tooling, while TanStack, CodeMirror, Zod, and test dependencies remain documented decisions until their owning behavior lands.
+Dependencies are installed only in the change that first uses them. TanStack Table, TanStack Virtual, TanStack Router, and browser-component test tooling remain deferred until their owning behavior justifies them.
 
 ## State and network boundaries
 
-- TanStack Query will manage source, schema, status, segment, and dead-letter reads. Retry policy must distinguish network and retryable service failures from permanent HTTP and invalid-response failures.
-- Synchronous query execution will use a mutation with automatic retries disabled. Retrying a POST can duplicate expensive work even though Elucid stores no durable query execution.
-- Query cancellation must abort the underlying fetch so the Rust service observes the disconnect and cancels in-process execution.
+- TanStack Query manages source and schema reads in this slice; status, segment, and dead-letter reads join the same boundary when their views land. Read retries are limited to network, overload, timeout, and server failures; permanent HTTP and invalid-response failures are not retried.
+- Synchronous query execution uses a mutation with automatic retries disabled. Retrying a POST can duplicate expensive work even though Elucid stores no durable query execution.
+- Query cancellation aborts the underlying fetch so the Rust service observes the disconnect and cancels in-process execution.
 - Editor text, explicit UTC range, selected source, and presentation preferences are local UI state. They do not belong in the remote-state cache.
 - Every successful and error response enters through one runtime-decoding module. TypeScript declarations alone are not accepted as proof that Rust JSON matches the browser contract.
 
@@ -53,10 +53,12 @@ Run the local development server:
 npm run dev
 ```
 
+The development server proxies `/api` to the validation server at `http://127.0.0.1:58080`. Set `ELUCID_UI_API_TARGET` before starting Vite to use another Elucid listener. Production remains same-origin and does not use this proxy.
+
 Run the complete frontend gate:
 
 ```console
 npm run check
 ```
 
-Individual checks remain available as `npm run format:check`, `npm run lint`, `npm run typecheck`, and `npm run build`.
+Individual checks remain available as `npm run format:check`, `npm run lint`, `npm test`, `npm run typecheck`, and `npm run build`.
