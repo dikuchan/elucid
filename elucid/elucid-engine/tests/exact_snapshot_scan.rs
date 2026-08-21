@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arrow::array::{
-    Array as _, ArrayRef, FixedSizeBinaryArray, StringArray, TimestampMillisecondArray,
+    Array as _, ArrayRef, FixedSizeBinaryArray, Float64Array, Int64Array, StringArray,
+    TimestampMillisecondArray,
 };
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
@@ -12,7 +13,8 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
 use elucid_catalog::{CatalogManifest, LogicalType, Schema};
 use elucid_engine::{
-    EngineErrorCode, HistoricalConversionMetrics, QueryObjectStore, SnapshotTableProvider,
+    EngineErrorCode, HistoricalConversionMetrics, QueryEngine, QueryObjectStore,
+    SnapshotTableProvider,
 };
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogStore, IngestionSegmentRegistration, IngestionSegmentTimes,
@@ -23,6 +25,7 @@ use elucid_storage::{
     ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ParquetSegmentInput,
     ParquetWriteLimit, SegmentId, StoredObjectId, TransferLimit, write_parquet_segment,
 };
+use futures::TryStreamExt as _;
 use object_store::memory::InMemory;
 use object_store::path::Path as ObjectPath;
 use object_store::{ObjectStore, PutPayload};
@@ -44,10 +47,16 @@ source:
         - name: message
           logical_type: utf8
           nullability: NON_NULL
+        - name: attempts
+          logical_type: int64
+          nullability: NON_NULL
     - version: 2
       fields:
         - name: message
           logical_type: utf8
+          nullability: NON_NULL
+        - name: attempts
+          logical_type: int64
           nullability: NON_NULL
         - name: region
           logical_type: utf8
@@ -66,11 +75,13 @@ source:
           mappings:
             - target_field: message
               json_pointer: /message
+            - target_field: attempts
+              json_pointer: /attempts
 "#;
 
 #[tokio::test]
 #[ignore = "requires Docker"]
-async fn exact_snapshot_scan_adapts_history_and_rejects_object_drift() {
+async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_failures() {
     let container = Postgres::default()
         .with_startup_timeout(Duration::from_secs(30))
         .start()
@@ -146,7 +157,8 @@ async fn exact_snapshot_scan_adapts_history_and_rejects_object_drift() {
 
     let request_range = QueryRequestTimeRange::new(timestamp(10, 30), timestamp(12, 0))
         .expect("ordered request range");
-    let snapshot = QuerySnapshotStore::new(pool)
+    let snapshot_store = QuerySnapshotStore::new(pool);
+    let snapshot = snapshot_store
         .select(
             "source logs",
             request_range,
@@ -212,6 +224,167 @@ async fn exact_snapshot_scan_adapts_history_and_rejects_object_drift() {
         ]
     );
     assert_eq!(metrics.failures(LogicalType::Utf8), 1);
+
+    let typed_snapshot = snapshot_store
+        .select(
+            r#"source logs | filter attempts + 1 >= 3 and region != null | project message, adjusted = attempts + 1, original_region = try_cast(rest("region") as utf8), attempts_text = cast(attempts as utf8) | sort -adjusted | take 2"#,
+            request_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select typed pipeline snapshot");
+    let engine = QueryEngine::new(query_objects.clone(), Arc::clone(&metrics));
+    let batches = engine
+        .execute(&typed_snapshot)
+        .await
+        .expect("start typed pipeline")
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("execute typed pipeline");
+    assert_eq!(
+        projected_rows(&batches),
+        vec![
+            ("selected".to_owned(), 5, None, "4".to_owned()),
+            (
+                "historical".to_owned(),
+                3,
+                Some("eu".to_owned()),
+                "2".to_owned(),
+            ),
+        ]
+    );
+
+    let aggregate_snapshot = snapshot_store
+        .select(
+            "source logs | summarize events = count(), known = count(region), total = sum(attempts), mean = avg(attempts), first = min(message), last = max(message) by region | sort region",
+            request_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select aggregate pipeline snapshot");
+    let batches = engine
+        .execute(&aggregate_snapshot)
+        .await
+        .expect("start aggregate pipeline")
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("execute aggregate pipeline");
+    assert_eq!(
+        aggregate_rows(&batches),
+        vec![
+            (
+                Some("eu".to_owned()),
+                1,
+                1,
+                2,
+                2.0,
+                "historical".to_owned(),
+                "historical".to_owned(),
+            ),
+            (
+                Some("us".to_owned()),
+                1,
+                1,
+                4,
+                4.0,
+                "selected".to_owned(),
+                "selected".to_owned(),
+            ),
+            (
+                None,
+                1,
+                0,
+                3,
+                3.0,
+                "invalid".to_owned(),
+                "invalid".to_owned(),
+            ),
+        ]
+    );
+
+    let cast_failure_snapshot = snapshot_store
+        .select(
+            r#"source logs | filter message == "invalid" | project region = cast(rest("region") as utf8)"#,
+            request_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select strict-cast failure snapshot");
+    let error = engine
+        .execute(&cast_failure_snapshot)
+        .await
+        .expect("start strict-cast pipeline")
+        .try_collect::<Vec<_>>()
+        .await
+        .expect_err("a JSON number cannot be strictly cast to UTF-8");
+    assert_eq!(error.code(), EngineErrorCode::QueryCastFailed);
+
+    let overflow_range = QueryRequestTimeRange::new(timestamp(9, 30), timestamp(10, 30))
+        .expect("ordered overflow range");
+    let overflow_snapshot = snapshot_store
+        .select(
+            "source logs | project overflow = attempts + 1",
+            overflow_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select arithmetic-overflow snapshot");
+    let error = engine
+        .execute(&overflow_snapshot)
+        .await
+        .expect("start arithmetic-overflow pipeline")
+        .try_collect::<Vec<_>>()
+        .await
+        .expect_err("integer overflow must terminate execution");
+    assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
+
+    let sum_overflow_range = QueryRequestTimeRange::new(timestamp(9, 30), timestamp(11, 15))
+        .expect("ordered sum-overflow range");
+    let sum_overflow_snapshot = snapshot_store
+        .select(
+            "source logs | summarize total = sum(attempts)",
+            sum_overflow_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select sum-overflow snapshot");
+    let error = engine
+        .execute(&sum_overflow_snapshot)
+        .await
+        .expect("start sum-overflow pipeline")
+        .try_collect::<Vec<_>>()
+        .await
+        .expect_err("integer sum overflow must terminate execution");
+    assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
+
+    let empty_range =
+        QueryRequestTimeRange::new(timestamp(8, 0), timestamp(9, 0)).expect("ordered empty range");
+    let empty_snapshot = snapshot_store
+        .select(
+            "source logs | summarize events = count(), total = sum(attempts), mean = avg(attempts)",
+            empty_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select empty aggregate snapshot");
+    let batches = engine
+        .execute(&empty_snapshot)
+        .await
+        .expect("start empty aggregate pipeline")
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("execute empty aggregate pipeline");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    let batch = batches.first().expect("one empty-aggregate batch");
+    assert_eq!(int64_column(batch, "events").value(0), 0);
+    assert!(int64_column(batch, "total").is_null(0));
+    let mean = batch
+        .column_by_name("mean")
+        .expect("mean column")
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("float64 mean");
+    assert!(mean.is_null(0));
 
     raw_store
         .delete(&ObjectPath::from(old.descriptor.key().as_str()))
@@ -364,6 +537,7 @@ fn old_batch(schema: &Schema) -> RecordBatch {
             "historical",
             "invalid",
         ])),
+        Arc::new(Int64Array::from(vec![i64::MAX, 2, 3])),
         Arc::new(StringArray::from(vec![
             Some(r#"{"region":"outside"}"#),
             Some(r#"{"region":"eu"}"#),
@@ -388,6 +562,7 @@ fn current_batch(schema: &Schema, message: &str, region: &str, time: DateTime<Ut
                 .expect("fixed-size event identity"),
         ),
         Arc::new(StringArray::from(vec![message])),
+        Arc::new(Int64Array::from(vec![4])),
         Arc::new(StringArray::from(vec![region])),
         Arc::new(StringArray::from(vec![None::<&str>])),
     ];
@@ -417,4 +592,82 @@ fn timestamp(hour: u32, minute: u32) -> DateTime<Utc> {
 
 fn uuid(sequence: u64) -> Uuid {
     Uuid::from_u128(0x019d_0000_0000_7000_8000_0000_0000_0000 | u128::from(sequence))
+}
+
+type ProjectedRow = (String, i64, Option<String>, String);
+
+fn projected_rows(batches: &[RecordBatch]) -> Vec<ProjectedRow> {
+    batches
+        .iter()
+        .flat_map(|batch| {
+            let messages = utf8_column(batch, "message");
+            let adjusted = int64_column(batch, "adjusted");
+            let original_regions = utf8_column(batch, "original_region");
+            let attempts = utf8_column(batch, "attempts_text");
+            (0..batch.num_rows())
+                .map(|index| {
+                    (
+                        messages.value(index).to_owned(),
+                        adjusted.value(index),
+                        (!original_regions.is_null(index))
+                            .then(|| original_regions.value(index).to_owned()),
+                        attempts.value(index).to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+type AggregateRow = (Option<String>, i64, i64, i64, f64, String, String);
+
+fn aggregate_rows(batches: &[RecordBatch]) -> Vec<AggregateRow> {
+    batches
+        .iter()
+        .flat_map(|batch| {
+            let regions = utf8_column(batch, "region");
+            let events = int64_column(batch, "events");
+            let known = int64_column(batch, "known");
+            let total = int64_column(batch, "total");
+            let mean = batch
+                .column_by_name("mean")
+                .expect("mean column")
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .expect("float64 mean");
+            let first = utf8_column(batch, "first");
+            let last = utf8_column(batch, "last");
+            (0..batch.num_rows())
+                .map(|index| {
+                    (
+                        (!regions.is_null(index)).then(|| regions.value(index).to_owned()),
+                        events.value(index),
+                        known.value(index),
+                        total.value(index),
+                        mean.value(index),
+                        first.value(index).to_owned(),
+                        last.value(index).to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn utf8_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a StringArray {
+    batch
+        .column_by_name(name)
+        .unwrap_or_else(|| panic!("{name} column"))
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap_or_else(|| panic!("UTF-8 {name}"))
+}
+
+fn int64_column<'a>(batch: &'a RecordBatch, name: &str) -> &'a Int64Array {
+    batch
+        .column_by_name(name)
+        .unwrap_or_else(|| panic!("{name} column"))
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap_or_else(|| panic!("int64 {name}"))
 }

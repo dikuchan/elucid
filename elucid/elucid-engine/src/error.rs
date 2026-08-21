@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use datafusion::error::DataFusionError;
 use elucid_storage::StorageError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9,6 +10,8 @@ pub enum EngineErrorCode {
     PublishedObjectMissing,
     PublishedObjectCorrupt,
     CatalogCorrupt,
+    QueryCastFailed,
+    QueryEvaluationFailed,
     QueryExecutionFailed,
 }
 
@@ -19,6 +22,8 @@ impl EngineErrorCode {
             Self::PublishedObjectMissing => "PUBLISHED_OBJECT_MISSING",
             Self::PublishedObjectCorrupt => "PUBLISHED_OBJECT_CORRUPT",
             Self::CatalogCorrupt => "CATALOG_CORRUPT",
+            Self::QueryCastFailed => "QUERY_CAST_FAILED",
+            Self::QueryEvaluationFailed => "QUERY_EVALUATION_FAILED",
             Self::QueryExecutionFailed => "QUERY_EXECUTION_FAILED",
         }
     }
@@ -71,6 +76,20 @@ impl EngineError {
         }
     }
 
+    pub(crate) fn cast_failed(source: DataFusionError) -> Self {
+        Self {
+            code: EngineErrorCode::QueryCastFailed,
+            source: EngineErrorSource::DataFusion(source),
+        }
+    }
+
+    pub(crate) fn evaluation_failed(source: DataFusionError) -> Self {
+        Self {
+            code: EngineErrorCode::QueryEvaluationFailed,
+            source: EngineErrorSource::DataFusion(source),
+        }
+    }
+
     pub(crate) fn execution_invariant(message: &'static str) -> Self {
         Self::invariant(EngineErrorCode::QueryExecutionFailed, message)
     }
@@ -101,6 +120,8 @@ pub(crate) enum EngineErrorSource {
     Storage(#[source] StorageError),
     #[error("Parquet metadata decoding failed")]
     Parquet(#[source] parquet::errors::ParquetError),
+    #[error("DataFusion query failed")]
+    DataFusion(#[source] DataFusionError),
     #[error("{0}")]
     Invariant(&'static str),
 }
@@ -114,5 +135,11 @@ impl From<StorageError> for EngineErrorSource {
 impl From<parquet::errors::ParquetError> for EngineErrorSource {
     fn from(source: parquet::errors::ParquetError) -> Self {
         Self::Parquet(source)
+    }
+}
+
+impl From<DataFusionError> for EngineErrorSource {
+    fn from(source: DataFusionError) -> Self {
+        Self::DataFusion(source)
     }
 }
