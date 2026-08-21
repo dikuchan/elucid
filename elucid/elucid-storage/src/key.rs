@@ -72,6 +72,32 @@ impl ManagedObjectKey {
         )
     }
 
+    /// Reconstructs a typed Parquet key from exact persisted metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the key is not canonical or does not encode the expected owner and
+    /// object identities.
+    pub fn parse_parquet(
+        value: &str,
+        segment_id: SegmentId,
+        object_id: StoredObjectId,
+    ) -> Result<Self, StorageModelError> {
+        let suffix = format!("segments/{segment_id}/{object_id}.parquet");
+        let root = if value == suffix {
+            ""
+        } else {
+            value
+                .strip_suffix(&format!("/{suffix}"))
+                .ok_or(StorageModelError::ParquetManagedKeyIdentityMismatch)?
+        };
+        let key = Self::parquet(&ManagedRoot::parse(root)?, segment_id, object_id);
+        if key.as_str() != value {
+            return Err(StorageModelError::ParquetManagedKeyIdentityMismatch);
+        }
+        Ok(key)
+    }
+
     #[must_use]
     pub fn dead_letter(root: &ManagedRoot, batch_id: BatchId, object_id: StoredObjectId) -> Self {
         Self::new(
@@ -131,5 +157,36 @@ impl ManagedObjectKey {
 impl Display for ManagedObjectKey {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.path, formatter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::{ManagedObjectKey, ManagedRoot};
+    use crate::{SegmentId, StorageModelError, StoredObjectId};
+
+    #[test]
+    fn persisted_parquet_key_rehydrates_only_for_its_exact_identities() {
+        let root = ManagedRoot::parse("nested/elucid").expect("managed root");
+        let segment_id = SegmentId::from(Uuid::from_u128(1));
+        let object_id = StoredObjectId::from(Uuid::from_u128(2));
+        let key = ManagedObjectKey::parquet(&root, segment_id, object_id);
+
+        let rehydrated = ManagedObjectKey::parse_parquet(key.as_str(), segment_id, object_id)
+            .expect("rehydrate exact key");
+        assert_eq!(rehydrated, key);
+
+        let error = ManagedObjectKey::parse_parquet(
+            key.as_str(),
+            segment_id,
+            StoredObjectId::from(Uuid::from_u128(3)),
+        )
+        .expect_err("different object identity must reject the stored key");
+        assert!(matches!(
+            error,
+            StorageModelError::ParquetManagedKeyIdentityMismatch
+        ));
     }
 }

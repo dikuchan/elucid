@@ -51,29 +51,31 @@ impl QueryTimeContext {
     }
 }
 
-/// Analyzes a query string against an immutable catalog snapshot.
-///
-/// This is the primary entry point for query compilation. It chains:
-/// 1. Lexing and parsing → AST.
-/// 2. Semantic analysis → IR pipeline.
-/// 3. Left-to-right relation and stage validation.
+/// Parses a query and attaches stable diagnostics to syntax failures.
 ///
 /// # Errors
 ///
-/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Syntax`] when parsing
-/// fails or [`AnalyzeErrorCode::Semantic`] when typed analysis fails.
-///
-pub fn analyze(
-    query: &str,
-    catalog: &CatalogSnapshot<'_>,
-    time_context: &QueryTimeContext,
-) -> Result<Analysis, AnalyzeError> {
-    let ast = parser::parse(query).map_err(|error| {
+/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Syntax`] when parsing fails.
+pub fn parse(query: &str) -> Result<ast::Query, AnalyzeError> {
+    parser::parse(query).map_err(|error| {
         let mut error = AnalyzeError::syntax(error.to_string(), error.span());
         semantic::error::finish_diagnostics(error.diagnostics_mut(), query);
         error
-    })?;
-    let mut result = semantic::convert_query(&ast, catalog, time_context);
+    })
+}
+
+/// Analyzes a parsed query against an immutable catalog snapshot.
+///
+/// # Errors
+///
+/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Semantic`] when typed analysis fails.
+pub fn analyze_parsed(
+    query: &str,
+    ast: &ast::Query,
+    catalog: &CatalogSnapshot<'_>,
+    time_context: &QueryTimeContext,
+) -> Result<Analysis, AnalyzeError> {
+    let mut result = semantic::convert_query(ast, catalog, time_context);
     match &mut result {
         Ok(analysis) => {
             semantic::error::finish_diagnostics(analysis.diagnostics_mut(), query);
@@ -81,4 +83,19 @@ pub fn analyze(
         Err(error) => semantic::error::finish_diagnostics(error.diagnostics_mut(), query),
     }
     result
+}
+
+/// Parses and analyzes a query against an immutable catalog snapshot.
+///
+/// # Errors
+///
+/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Syntax`] when parsing fails or
+/// [`AnalyzeErrorCode::Semantic`] when typed analysis fails.
+pub fn analyze(
+    query: &str,
+    catalog: &CatalogSnapshot<'_>,
+    time_context: &QueryTimeContext,
+) -> Result<Analysis, AnalyzeError> {
+    let ast = parse(query)?;
+    analyze_parsed(query, &ast, catalog, time_context)
 }

@@ -355,7 +355,7 @@ enum CatalogPersistenceErrorSource {
     Invariant(&'static str),
 }
 
-fn is_row_decode_error(error: &sqlx::Error) -> bool {
+pub(crate) fn is_row_decode_error(error: &sqlx::Error) -> bool {
     matches!(
         error,
         sqlx::Error::RowNotFound

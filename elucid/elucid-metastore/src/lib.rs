@@ -5,6 +5,7 @@ mod error;
 mod inspection;
 mod migration;
 mod publication;
+mod query;
 
 pub use catalog::{CatalogApplyOutcome, CatalogSnapshot, CatalogStore};
 pub use error::{
@@ -24,4 +25,9 @@ pub use publication::{
     IngestionSegmentTimes, ObjectPublicationState, ObjectUploadRecordOutcome, OrphanGracePeriod,
     PublicationOutcome, PublicationStore, ReconciliationLimit, RegistrationOutcome,
     RetentionPeriod, StoredObjectState, UnreferencedOutputReconciliation,
+};
+pub use query::{
+    MAXIMUM_QUERY_SNAPSHOT_SEGMENTS, QueryRequestTimeRange, QuerySegment, QuerySnapshot,
+    QuerySnapshotError, QuerySnapshotErrorKind, QuerySnapshotLimitExceeded, QuerySnapshotLimits,
+    QuerySnapshotModelError, QuerySnapshotStore,
 };

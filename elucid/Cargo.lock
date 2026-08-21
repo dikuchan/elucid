@@ -1887,6 +1887,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "elucid-catalog",
+ "elucid-language",
  "elucid-storage",
  "serde_json",
  "sqlx",

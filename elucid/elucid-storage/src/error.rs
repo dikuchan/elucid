@@ -22,6 +22,9 @@ pub enum StorageModelError {
         source: object_store::path::Error,
     },
 
+    #[error("stored Parquet object key does not match its segment and object identities")]
+    ParquetManagedKeyIdentityMismatch,
+
     #[error("object format version must be positive")]
     ObjectFormatVersionMustBePositive,
 
