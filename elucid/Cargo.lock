@@ -1835,15 +1835,23 @@ name = "elucid-engine"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "bytes",
+ "chrono",
  "datafusion",
  "elucid-catalog",
  "elucid-language",
+ "elucid-metastore",
+ "elucid-storage",
+ "futures",
  "object_store",
  "parquet",
+ "serde_json",
+ "sqlx",
  "tempfile",
+ "testcontainers-modules",
+ "thiserror",
  "tokio",
- "url",
  "uuid",
 ]
 

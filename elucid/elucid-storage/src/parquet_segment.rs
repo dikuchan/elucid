@@ -6,13 +6,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrow::array::{Array as _, FixedSizeBinaryArray, TimestampMillisecondArray};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema as ArrowSchema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use elucid_catalog::{Schema, SchemaId, SourceId};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::metadata::KeyValue;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 
 use crate::{
@@ -305,23 +306,11 @@ fn validate_parquet_segment_blocking(
     let file = File::open(&path).map_err(StorageError::parquet_invalid_io)?;
     let reader =
         ParquetRecordBatchReaderBuilder::try_new(file).map_err(StorageError::parquet_invalid)?;
-    if reader.schema().fields() != expectation.arrow_schema.fields() {
-        return Err(StorageError::parquet_invalid_invariant(
-            "Parquet Arrow schema does not match the stored schema",
-        ));
-    }
-    let metadata = reader.metadata();
-    let expected_rows = i64::try_from(expectation.row_count).map_err(|_| {
-        StorageError::parquet_invalid_invariant("expected Parquet row count is out of range")
-    })?;
-    if metadata.file_metadata().num_rows() != expected_rows {
-        return Err(StorageError::parquet_invalid_invariant(
-            "Parquet footer row count does not match the segment",
-        ));
-    }
-    validate_footer(metadata.file_metadata().key_value_metadata(), &expectation)?;
-    validate_row_groups(metadata.row_groups(), expected_rows)?;
-    let row_group_count = metadata.num_row_groups();
+    let row_group_count = validate_parquet_segment_metadata(
+        reader.schema().as_ref(),
+        reader.metadata(),
+        &expectation,
+    )?;
     drop(reader);
 
     let (byte_size, digest) = hash_exact_file(&path)?;
@@ -346,6 +335,37 @@ fn validate_parquet_segment_blocking(
         object_descriptor,
         row_group_count,
     })
+}
+
+/// Validates the decoded schema and footer metadata of one immutable Parquet segment.
+///
+/// This is shared by the local writer and exact-object readers so both boundaries enforce the
+/// same stored-schema, identity, row-count, row-group, and compression contract.
+///
+/// # Errors
+///
+/// Returns `PARQUET_INVALID` when decoded metadata contradicts the expected segment.
+pub fn validate_parquet_segment_metadata(
+    arrow_schema: &ArrowSchema,
+    metadata: &ParquetMetaData,
+    expectation: &ParquetSegmentExpectation,
+) -> Result<usize, StorageError> {
+    if arrow_schema.fields() != expectation.arrow_schema.fields() {
+        return Err(StorageError::parquet_invalid_invariant(
+            "Parquet Arrow schema does not match the stored schema",
+        ));
+    }
+    let expected_rows = i64::try_from(expectation.row_count).map_err(|_| {
+        StorageError::parquet_invalid_invariant("expected Parquet row count is out of range")
+    })?;
+    if metadata.file_metadata().num_rows() != expected_rows {
+        return Err(StorageError::parquet_invalid_invariant(
+            "Parquet footer row count does not match the segment",
+        ));
+    }
+    validate_footer(metadata.file_metadata().key_value_metadata(), expectation)?;
+    validate_row_groups(metadata.row_groups(), expected_rows)?;
+    Ok(metadata.num_row_groups())
 }
 
 fn validate_footer(

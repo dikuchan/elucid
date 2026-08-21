@@ -7,17 +7,25 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+arrow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
 datafusion = { workspace = true }
+futures = { workspace = true }
 object_store = { workspace = true }
-url = { workspace = true }
+parquet = { workspace = true, features = ["arrow", "object_store"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 
+elucid-catalog = { workspace = true }
 elucid-language = { workspace = true }
+elucid-metastore = { workspace = true }
+elucid-storage = { workspace = true }
 
 [dev-dependencies]
-arrow = { workspace = true }
 bytes = { workspace = true }
-elucid-catalog = { workspace = true }
-parquet = { workspace = true, features = ["arrow"] }
+sqlx = { workspace = true, features = ["chrono"] }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+testcontainers-modules = { workspace = true, features = ["postgres"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 uuid = { workspace = true }

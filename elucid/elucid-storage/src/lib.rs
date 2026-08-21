@@ -15,7 +15,7 @@ pub use key::{ManagedObjectKey, ManagedObjectKind, ManagedRoot, ObjectOwner};
 pub use parquet_segment::{
     PARQUET_FORMAT_VERSION, PARQUET_MAX_ROW_GROUP_ROWS, ParquetSegmentExpectation,
     ParquetSegmentInput, ParquetWriteLimit, StagedParquetSegment, validate_parquet_segment,
-    write_parquet_segment,
+    validate_parquet_segment_metadata, write_parquet_segment,
 };
 pub use store::{
     ImmutableObjectStore, ObjectDeleteOutcome, ObjectUploadOutcome, ObjectVerificationOutcome,
