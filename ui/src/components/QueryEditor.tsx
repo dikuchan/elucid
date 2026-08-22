@@ -7,6 +7,7 @@ import { basicSetup } from 'codemirror';
 import type { QueryDiagnostic } from '../api/contracts';
 import classes from '../App.module.css';
 import { diagnosticsForEditor } from '../query/diagnostics';
+import { eqlLanguageSupport } from '../query/eql';
 
 interface QueryEditorProps {
   readonly value: string;
@@ -46,6 +47,7 @@ export function QueryEditor({
         doc: initialValueRef.current,
         extensions: [
           basicSetup,
+          eqlLanguageSupport,
           lintGutter(),
           EditorView.lineWrapping,
           editableCompartment.of(EditorView.editable.of(true)),

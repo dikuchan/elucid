@@ -15,11 +15,13 @@ The current implementation is a bounded query and operations workspace. It reads
 - TanStack Virtual will be added only if configured result limits or measurements justify virtualization.
 - TanStack Router will be added when the application has a second addressable screen or useful URL state. The local Query/Operations switch does not create a second URL or require a router.
 - TanStack Start is excluded because the Rust process already owns the HTTP server, API, and embedded asset delivery; a second server runtime, SSR, and server functions do not serve this application.
-- CodeMirror 6 provides the query editor, keyboard execution, and source-span decorations.
+- CodeMirror 6 and a generated incremental Lezer parser provide the query editor, EQL syntax highlighting, keyboard execution, and source-span decorations.
 - Zod validates unknown JSON once at the HTTP boundary before values enter application code.
 - Strict TypeScript, type-aware ESLint, Prettier, and focused Vitest contract tests form the frontend quality boundary.
 
 Dependencies are installed only in the change that first uses them. TanStack Table, TanStack Virtual, TanStack Router, and browser-component test tooling remain deferred until their owning behavior justifies them.
+
+The browser grammar exists only to classify tokens for responsive highlighting while a query is being edited. The Rust lexer and parser remain authoritative for language acceptance, and backend diagnostics remain an independent source-span layer rather than being inferred from Lezer recovery nodes.
 
 ## State and network boundaries
 

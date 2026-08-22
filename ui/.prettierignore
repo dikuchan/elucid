@@ -1,3 +1,5 @@
 dist/
 node_modules/
 package-lock.json
+src/query/eql.grammar
+src/query/eql-parser.ts

@@ -1,0 +1,222 @@
+@top Query { SourceExpression (Pipe Stage)* }
+
+SourceExpression {
+  contextual<"source"> Identifier StartBound? EndBound?
+}
+
+StartBound { reserved<"start_inclusive"> Assign TimeExpression }
+EndBound { reserved<"end_exclusive"> Assign TimeExpression }
+
+TimeExpression {
+  DatetimeConstructor |
+  reserved<"now"> |
+  TimeOperation+
+}
+
+TimeOperation {
+  compactTimeUnit<"@s"> |
+  compactTimeUnit<"@m"> |
+  compactTimeUnit<"@h"> |
+  compactTimeUnit<"@d"> |
+  At TimeUnit |
+  (Plus | Minus) Integer? TimeUnit
+}
+
+TimeUnit {
+  contextual<"s"> |
+  contextual<"m"> |
+  contextual<"h"> |
+  contextual<"d">
+}
+
+Stage {
+  FilterStage |
+  ProjectStage |
+  SortStage |
+  TakeStage |
+  SummarizeStage
+}
+
+FilterStage { contextual<"filter"> Expression }
+
+ProjectStage { contextual<"project"> commaSep1<Projection> }
+
+Projection {
+  Identifier Assign Expression |
+  Expression
+}
+
+SortStage { contextual<"sort"> reserved<"by">? commaSep1<SortItem> }
+
+SortItem { (Plus | Minus)? FieldReference }
+
+TakeStage { contextual<"take"> Minus? Integer }
+
+SummarizeStage {
+  contextual<"summarize"> commaSep1<Measure> (reserved<"by"> commaSep1<FieldReference>)?
+}
+
+Measure { (Identifier Assign)? AggregateCall }
+
+AggregateCall { AggregateName LeftParen FieldReference? RightParen }
+
+AggregateName {
+  reserved<"count"> |
+  reserved<"sum"> |
+  reserved<"min"> |
+  reserved<"max"> |
+  reserved<"avg">
+}
+
+Expression { LogicalOr }
+
+LogicalOr { LogicalAnd (reserved<"or"> LogicalAnd)* }
+
+LogicalAnd { Comparison (reserved<"and"> Comparison)* }
+
+Comparison { Additive ((Equal | NotEqual | GreaterEqual | Greater | LessEqual | Less) Additive)? }
+
+Additive { Multiplicative ((Plus | Minus) Multiplicative)* }
+
+Multiplicative { Unary ((Multiply | Divide) Unary)* }
+
+Unary { (reserved<"not"> | Minus)? Primary }
+
+Primary {
+  IntegerConstructor |
+  FloatingConstructor |
+  DatetimeConstructor |
+  EidConstructor |
+  CastExpression |
+  RemainderExpression |
+  Literal |
+  FieldReference |
+  LeftParen Expression RightParen
+}
+
+IntegerConstructor { IntegerType LeftParen Minus? Integer RightParen }
+
+FloatingConstructor { FloatingType LeftParen Minus? (Integer | Float) RightParen }
+
+DatetimeConstructor { reserved<"datetime"> LeftParen String RightParen }
+
+EidConstructor { reserved<"eid"> LeftParen String RightParen }
+
+CastExpression {
+  (reserved<"cast"> | reserved<"try_cast">)
+  LeftParen
+  Expression
+  reserved<"as">
+  LogicalType
+  RightParen
+}
+
+RemainderExpression {
+  (reserved<"rest"> | reserved<"rest_exists">) LeftParen String RightParen
+}
+
+Literal {
+  Integer |
+  Float |
+  String |
+  reserved<"true"> |
+  reserved<"false"> |
+  reserved<"null">
+}
+
+FieldReference { Identifier | SystemIdentifier }
+
+Identifier {
+  PlainIdentifier |
+  QuotedIdentifier |
+  contextual<"source"> |
+  contextual<"filter"> |
+  contextual<"project"> |
+  contextual<"sort"> |
+  contextual<"take"> |
+  contextual<"summarize"> |
+  contextual<"s"> |
+  contextual<"m"> |
+  contextual<"h"> |
+  contextual<"d">
+}
+
+IntegerType {
+  reserved<"int32"> |
+  reserved<"int64"> |
+  reserved<"uint32"> |
+  reserved<"uint64">
+}
+
+FloatingType { reserved<"float32"> | reserved<"float64"> }
+
+LogicalType {
+  reserved<"bool"> |
+  IntegerType |
+  FloatingType |
+  reserved<"utf8"> |
+  reserved<"datetime"> |
+  reserved<"eid"> |
+  reserved<"json">
+}
+
+commaSep1<content> { content (Comma content)* }
+
+contextual<word> { @extend[@name={word}]<PlainIdentifier, word> }
+
+reserved<word> { @specialize[@name={word}]<PlainIdentifier, word> }
+
+compactTimeUnit<word> {
+  @extend[@name={word}]<SystemIdentifier, word>
+}
+
+@skip { whitespace }
+
+@tokens {
+  whitespace { @whitespace+ }
+
+  Pipe { "|" }
+  LeftParen { "(" }
+  RightParen { ")" }
+  Comma { "," }
+  At { "@" }
+
+  Plus { "+" }
+  Minus { "-" }
+  Multiply { "*" }
+  Divide { "/" }
+  Equal { "==" }
+  NotEqual { "!=" }
+  GreaterEqual { ">=" }
+  Greater { ">" }
+  LessEqual { "<=" }
+  Less { "<" }
+  Assign { "=" }
+
+  PlainIdentifier { identifierStart identifierContinue* }
+  QuotedIdentifier { "`" identifierStart identifierContinue* "`" }
+  SystemIdentifier { "@" identifierStart identifierContinue* }
+
+  Integer { "0" | $[1-9] @digit* }
+  Float {
+    ("0" | $[1-9] @digit*)
+    ("." @digit+ ($[eE] $[+\-]? @digit+)? | $[eE] $[+\-]? @digit+)
+  }
+
+  String {
+    "\"" ("\\" _ | !["\\\n\r])* "\""?
+  }
+
+  identifierStart { @asciiLetter | "_" }
+  identifierContinue { @asciiLetter | @digit | "_" }
+
+  @precedence {
+    Float,
+    Integer
+  }
+
+  @precedence {
+    SystemIdentifier,
+    At
+  }
+}
