@@ -270,9 +270,10 @@ export function App() {
                   step={1}
                   value={form.startUtc}
                   onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setForm((current) => ({
                       ...current,
-                      startUtc: event.currentTarget.value,
+                      startUtc: value,
                     }));
                     setFormProblems([]);
                   }}
@@ -286,9 +287,10 @@ export function App() {
                   step={1}
                   value={form.endUtc}
                   onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setForm((current) => ({
                       ...current,
-                      endUtc: event.currentTarget.value,
+                      endUtc: value,
                     }));
                     setFormProblems([]);
                   }}
@@ -303,9 +305,10 @@ export function App() {
                   step={1}
                   value={form.outputRows}
                   onChange={(event) => {
+                    const value = event.currentTarget.value;
                     setForm((current) => ({
                       ...current,
-                      outputRows: event.currentTarget.value,
+                      outputRows: value,
                     }));
                     setFormProblems([]);
                   }}
