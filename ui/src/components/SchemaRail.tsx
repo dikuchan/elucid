@@ -155,7 +155,7 @@ function LoadedSchema({ source }: Readonly<{ source: SourceDetail }>) {
               </Text>
             )}
             {field.historicalRemainderPointer === null ? null : (
-              <Text size="xs" c="cyan.4" mt={5}>
+              <Text size="xs" c="cyan.8" mt={5}>
                 Historical: {field.historicalRemainderPointer}
               </Text>
             )}

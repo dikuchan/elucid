@@ -1,10 +1,8 @@
 .shell {
-  --elucid-border: light-dark(
-    var(--mantine-color-gray-3),
-    var(--mantine-color-dark-5)
-  );
-  --elucid-surface: light-dark(var(--mantine-color-white), #111419);
-  --elucid-surface-raised: light-dark(var(--mantine-color-gray-0), #161a20);
+  --elucid-border: var(--mantine-color-gray-3);
+  --elucid-canvas: #f3f2ee;
+  --elucid-surface: #fbfaf7;
+  --elucid-surface-raised: #f0efeb;
 }
 
 .header {
@@ -24,8 +22,8 @@
   font-weight: 800;
   background: linear-gradient(
     145deg,
-    var(--mantine-color-cyan-3),
-    var(--mantine-color-cyan-6)
+    var(--mantine-color-cyan-2),
+    var(--mantine-color-cyan-5)
   );
   border-radius: var(--mantine-radius-sm);
   box-shadow: 0 0 24px
@@ -64,12 +62,12 @@
 .sourceActive {
   background: color-mix(
     in srgb,
-    var(--mantine-color-cyan-8) 20%,
+    var(--mantine-color-cyan-5) 14%,
     var(--elucid-surface-raised)
   );
   border-color: color-mix(
     in srgb,
-    var(--mantine-color-cyan-6) 48%,
+    var(--mantine-color-cyan-7) 38%,
     transparent
   );
 }
@@ -97,10 +95,10 @@
   background:
     radial-gradient(
       circle at 42% -18%,
-      color-mix(in srgb, var(--mantine-color-cyan-9) 18%, transparent),
+      color-mix(in srgb, var(--mantine-color-cyan-3) 24%, transparent),
       transparent 42%
     ),
-    #0b0d10;
+    var(--elucid-canvas);
 }
 
 .workspace {
@@ -142,7 +140,7 @@
 
 .queryEditor :global(.cm-editor) {
   min-height: 152px;
-  color: var(--mantine-color-gray-1);
+  color: var(--mantine-color-dark-7);
   font-family: var(--mantine-font-family-monospace);
   font-size: var(--mantine-font-size-sm);
   background: transparent;
@@ -162,25 +160,25 @@
 
 .queryEditor :global(.cm-content) {
   padding: 12px 0;
-  caret-color: var(--mantine-color-cyan-4);
+  caret-color: var(--mantine-color-cyan-8);
 }
 
 .queryEditor :global(.cm-gutters) {
-  color: var(--mantine-color-dark-2);
+  color: var(--mantine-color-gray-6);
   background: var(--elucid-surface-raised);
   border-right-color: var(--elucid-border);
 }
 
 .queryEditor :global(.cm-activeLine),
 .queryEditor :global(.cm-activeLineGutter) {
-  background: color-mix(in srgb, var(--mantine-color-cyan-9) 12%, transparent);
+  background: color-mix(in srgb, var(--mantine-color-cyan-4) 12%, transparent);
 }
 
 .queryEditor :global(.cm-selectionBackground),
 .queryEditor :global(.cm-content ::selection) {
   background: color-mix(
     in srgb,
-    var(--mantine-color-cyan-7) 45%,
+    var(--mantine-color-cyan-4) 38%,
     transparent
   ) !important;
 }
@@ -223,12 +221,12 @@
 }
 
 .monospaceCell {
-  color: var(--mantine-color-cyan-2);
+  color: var(--mantine-color-cyan-9);
   white-space: nowrap;
 }
 
 .numericCell {
-  color: var(--mantine-color-yellow-3);
+  color: var(--mantine-color-orange-9);
   text-align: right;
   white-space: nowrap;
 }

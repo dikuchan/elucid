@@ -37,7 +37,7 @@ Dependencies are installed only in the change that first uses them. TanStack Tab
 - The right rail owns the active schema, field details, and immutable schema history for the selected source.
 - Operational ingestion and storage views will reuse this shell in the next UI slice instead of adding an unrelated dashboard.
 
-The application uses system fonts and local bundled styles. Production code must not load scripts, fonts, styles, source maps, or other assets from external origins.
+The application uses system fonts, local bundled styles, and one forced light color scheme. It does not follow the system theme or expose a theme switch. Production code must not load scripts, fonts, styles, source maps, or other assets from external origins.
 
 ## Commands
 

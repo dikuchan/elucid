@@ -1,5 +1,5 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -13,7 +13,7 @@ body,
 }
 
 body {
-  background: #0b0d10;
+  background: #f3f2ee;
 }
 
 button,

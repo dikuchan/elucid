@@ -28,7 +28,11 @@ const queryClient = new QueryClient({
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <MantineProvider defaultColorScheme="dark" theme={theme}>
+      <MantineProvider
+        defaultColorScheme="light"
+        forceColorScheme="light"
+        theme={theme}
+      >
         <App />
       </MantineProvider>
     </QueryClientProvider>

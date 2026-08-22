@@ -256,7 +256,7 @@ function ResultStatistics({
   return (
     <Box className={classes.resultsFooter}>
       {execution.completion === 'TRUNCATED' ? (
-        <Text size="xs" c="yellow.4" px="md" pt="sm">
+        <Text size="xs" c="orange.8" px="md" pt="sm">
           Result stopped at the configured{' '}
           {execution.truncationReason === 'OUTPUT_ROWS'
             ? 'row limit'
