@@ -8,6 +8,7 @@ import {
   Button,
   Group,
   Paper,
+  SegmentedControl,
   Skeleton,
   Stack,
   Text,
@@ -18,13 +19,17 @@ import {
 import {
   ApiClientError,
   executeQuery,
+  getOperationalStatus,
   getSource,
+  listDeadLetters,
+  listSegments,
   listSources,
   readRetryDelay,
   shouldRetryRead,
 } from './api/client';
 import type { QueryExecutionRequest } from './api/client';
 import type {
+  OperationalStatus,
   QueryDiagnostic,
   QueryExecution,
   SourceDetail,
@@ -32,6 +37,11 @@ import type {
   SourceList,
   SourceSummary,
 } from './api/contracts';
+import { OperationsWorkspace } from './components/OperationsWorkspace';
+import type {
+  OperationalStatusState,
+  SourceOperationalState,
+} from './components/OperationsWorkspace';
 import { QueryResults } from './components/QueryResults';
 import type { QueryResultState } from './components/QueryResults';
 import { SchemaRail } from './components/SchemaRail';
@@ -56,14 +66,28 @@ interface RunningQuery {
 }
 
 type RunDisposition = 'ordinary' | 'cancellation-requested' | 'cancelled';
+type WorkspaceMode = 'query' | 'operations';
+
+const OPERATIONAL_STATUS_REFRESH_MILLISECONDS = 2_500;
+const OPERATIONAL_LIST_REFRESH_MILLISECONDS = 5_000;
 
 export function App() {
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('query');
   const sourcesQuery = useQuery({
     queryKey: ['sources'],
     queryFn: ({ signal }) => listSources(signal),
     retry: shouldRetryRead,
     retryDelay: readRetryDelay,
     staleTime: 10_000,
+  });
+  const operationalStatusQuery = useQuery({
+    queryKey: ['operational-status'],
+    queryFn: ({ signal }) => getOperationalStatus(signal),
+    retry: shouldRetryRead,
+    retryDelay: readRetryDelay,
+    staleTime: 1_000,
+    refetchInterval: OPERATIONAL_STATUS_REFRESH_MILLISECONDS,
+    refetchIntervalInBackground: false,
   });
   const [requestedSourceId, setRequestedSourceId] = useState<SourceId | null>(
     null,
@@ -86,6 +110,36 @@ export function App() {
     retry: shouldRetryRead,
     retryDelay: readRetryDelay,
     staleTime: 10_000,
+  });
+  const sourceOperationsEnabled =
+    workspaceMode === 'operations' && selectedSource !== null;
+  const segmentQuery = useQuery({
+    queryKey: ['segments', selectedSource?.sourceId ?? null],
+    queryFn:
+      workspaceMode !== 'operations' || selectedSource === null
+        ? skipToken
+        : ({ signal }) => listSegments(selectedSource.sourceId, signal),
+    retry: shouldRetryRead,
+    retryDelay: readRetryDelay,
+    staleTime: 2_000,
+    refetchInterval: sourceOperationsEnabled
+      ? OPERATIONAL_LIST_REFRESH_MILLISECONDS
+      : false,
+    refetchIntervalInBackground: false,
+  });
+  const deadLetterQuery = useQuery({
+    queryKey: ['dead-letters', selectedSource?.sourceId ?? null],
+    queryFn:
+      workspaceMode !== 'operations' || selectedSource === null
+        ? skipToken
+        : ({ signal }) => listDeadLetters(selectedSource.sourceId, signal),
+    retry: shouldRetryRead,
+    retryDelay: readRetryDelay,
+    staleTime: 2_000,
+    refetchInterval: sourceOperationsEnabled
+      ? OPERATIONAL_LIST_REFRESH_MILLISECONDS
+      : false,
+    refetchIntervalInBackground: false,
   });
 
   const queryMutation = useMutation({
@@ -151,6 +205,23 @@ export function App() {
     queryMutation.data?.diagnostics ?? [],
     queryMutation.error,
   );
+  const operationalStatusState = deriveOperationalStatusState(
+    operationalStatusQuery.status,
+    operationalStatusQuery.data,
+    operationalStatusQuery.error,
+  );
+  const segmentState = deriveSourceOperationalState(
+    selectedSource,
+    segmentQuery.status,
+    segmentQuery.data,
+    segmentQuery.error,
+  );
+  const deadLetterState = deriveSourceOperationalState(
+    selectedSource,
+    deadLetterQuery.status,
+    deadLetterQuery.data,
+    deadLetterQuery.error,
+  );
 
   const runQuery = () => {
     if (queryMutation.isPending || selectedSource === null) {
@@ -193,6 +264,14 @@ export function App() {
     }
   };
 
+  const refreshOperations = () => {
+    void operationalStatusQuery.refetch();
+    if (selectedSource !== null) {
+      void segmentQuery.refetch();
+      void deadLetterQuery.refetch();
+    }
+  };
+
   return (
     <AppShell
       header={{ height: 58 }}
@@ -212,13 +291,32 @@ export function App() {
                 Elucid
               </Title>
               <Text size="xs" c="dimmed">
-                Event query workspace
+                Event data workspace
               </Text>
             </Box>
           </Group>
           <Group gap="xs" wrap="nowrap">
-            <ApiBadge status={sourcesQuery.status} />
-            <Badge variant="dot" color="cyan" size="sm">
+            <SegmentedControl
+              size="xs"
+              value={workspaceMode}
+              data={[
+                { label: 'Query', value: 'query' },
+                { label: 'Operations', value: 'operations' },
+              ]}
+              onChange={(value) => {
+                if (isWorkspaceMode(value)) {
+                  setWorkspaceMode(value);
+                }
+              }}
+              aria-label="Workspace view"
+            />
+            <ServiceBadge state={operationalStatusState} />
+            <Badge
+              variant="dot"
+              color="cyan"
+              size="sm"
+              className={classes.sameOriginBadge}
+            >
               same origin
             </Badge>
           </Group>
@@ -236,153 +334,170 @@ export function App() {
       </AppShell.Navbar>
 
       <AppShell.Main className={classes.main}>
-        <Box className={classes.workspace}>
-          <Paper withBorder radius="md" p="md" className={classes.contextPanel}>
-            <Group
-              justify="space-between"
-              align="flex-end"
-              wrap="wrap"
-              gap="md"
+        {workspaceMode === 'query' ? (
+          <Box className={classes.workspace}>
+            <Paper
+              withBorder
+              radius="md"
+              p="md"
+              className={classes.contextPanel}
             >
-              <Box>
-                <Text
-                  size="xs"
-                  fw={700}
-                  tt="uppercase"
-                  c="dimmed"
-                  className={classes.eyebrow}
-                >
-                  Selected source
-                </Text>
-                <Group gap="xs" mt={4}>
-                  <Text fw={650}>{selectedSource?.name ?? 'None'}</Text>
-                  {selectedSource === null ? null : (
-                    <Badge size="xs" variant="light" color="cyan">
-                      active schema v{selectedSource.activeSchemaVersion}
-                    </Badge>
-                  )}
-                </Group>
-              </Box>
-              <Group gap="xs" align="flex-end" wrap="wrap">
-                <TextInput
-                  label="From · UTC"
-                  type="datetime-local"
-                  step={1}
-                  value={form.startUtc}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({
-                      ...current,
-                      startUtc: value,
-                    }));
-                    setFormProblems([]);
-                  }}
-                  disabled={queryMutation.isPending}
-                  size="xs"
-                  className={classes.timeInput}
-                />
-                <TextInput
-                  label="To · UTC"
-                  type="datetime-local"
-                  step={1}
-                  value={form.endUtc}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({
-                      ...current,
-                      endUtc: value,
-                    }));
-                    setFormProblems([]);
-                  }}
-                  disabled={queryMutation.isPending}
-                  size="xs"
-                  className={classes.timeInput}
-                />
-                <TextInput
-                  label="Output rows"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={form.outputRows}
-                  onChange={(event) => {
-                    const value = event.currentTarget.value;
-                    setForm((current) => ({
-                      ...current,
-                      outputRows: value,
-                    }));
-                    setFormProblems([]);
-                  }}
-                  disabled={queryMutation.isPending}
-                  size="xs"
-                  className={classes.rowsInput}
-                />
-                <Button
-                  size="xs"
-                  variant="default"
-                  disabled={!queryMutation.isPending}
-                  onClick={cancelQuery}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="xs"
-                  disabled={selectedSource === null || queryMutation.isPending}
-                  onClick={runQuery}
-                >
-                  Run query
-                </Button>
-              </Group>
-            </Group>
-          </Paper>
-
-          {formProblems.length === 0 ? null : (
-            <Alert color="red" variant="light" title="Cannot run query">
-              <Stack gap={2}>
-                {formProblems.map((problem) => (
-                  <Text key={problem} size="xs">
-                    {problem}
+              <Group
+                justify="space-between"
+                align="flex-end"
+                wrap="wrap"
+                gap="md"
+              >
+                <Box>
+                  <Text
+                    size="xs"
+                    fw={700}
+                    tt="uppercase"
+                    c="dimmed"
+                    className={classes.eyebrow}
+                  >
+                    Selected source
                   </Text>
-                ))}
-              </Stack>
-            </Alert>
-          )}
-
-          <Paper withBorder radius="md" className={classes.editorPanel}>
-            <Group
-              justify="space-between"
-              px="md"
-              py="sm"
-              className={classes.panelHeader}
-            >
-              <Group gap="xs">
-                <Text size="sm" fw={650}>
-                  Query
-                </Text>
-                <Badge size="xs" variant="outline" color="gray">
-                  Elucid QL
-                </Badge>
+                  <Group gap="xs" mt={4}>
+                    <Text fw={650}>{selectedSource?.name ?? 'None'}</Text>
+                    {selectedSource === null ? null : (
+                      <Badge size="xs" variant="light" color="cyan">
+                        active schema v{selectedSource.activeSchemaVersion}
+                      </Badge>
+                    )}
+                  </Group>
+                </Box>
+                <Group gap="xs" align="flex-end" wrap="wrap">
+                  <TextInput
+                    label="From · UTC"
+                    type="datetime-local"
+                    step={1}
+                    value={form.startUtc}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setForm((current) => ({
+                        ...current,
+                        startUtc: value,
+                      }));
+                      setFormProblems([]);
+                    }}
+                    disabled={queryMutation.isPending}
+                    size="xs"
+                    className={classes.timeInput}
+                  />
+                  <TextInput
+                    label="To · UTC"
+                    type="datetime-local"
+                    step={1}
+                    value={form.endUtc}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setForm((current) => ({
+                        ...current,
+                        endUtc: value,
+                      }));
+                      setFormProblems([]);
+                    }}
+                    disabled={queryMutation.isPending}
+                    size="xs"
+                    className={classes.timeInput}
+                  />
+                  <TextInput
+                    label="Output rows"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={form.outputRows}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value;
+                      setForm((current) => ({
+                        ...current,
+                        outputRows: value,
+                      }));
+                      setFormProblems([]);
+                    }}
+                    disabled={queryMutation.isPending}
+                    size="xs"
+                    className={classes.rowsInput}
+                  />
+                  <Button
+                    size="xs"
+                    variant="default"
+                    disabled={!queryMutation.isPending}
+                    onClick={cancelQuery}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="xs"
+                    disabled={
+                      selectedSource === null || queryMutation.isPending
+                    }
+                    onClick={runQuery}
+                  >
+                    Run query
+                  </Button>
+                </Group>
               </Group>
-              <Text size="xs" c="dimmed">
-                Ctrl/⌘ ↵ to run
-              </Text>
-            </Group>
-            <Suspense fallback={<Skeleton height={152} radius={0} />}>
-              <QueryEditor
-                value={form.query}
-                diagnostics={diagnostics}
-                disabled={queryMutation.isPending}
-                onChange={(query) => {
-                  setForm((current) => ({ ...current, query }));
-                  setFormProblems([]);
-                }}
-                onRun={runQuery}
-              />
-            </Suspense>
-            <QueryDiagnostics diagnostics={diagnostics} />
-          </Paper>
+            </Paper>
 
-          <QueryResults state={resultState} />
-        </Box>
+            {formProblems.length === 0 ? null : (
+              <Alert color="red" variant="light" title="Cannot run query">
+                <Stack gap={2}>
+                  {formProblems.map((problem) => (
+                    <Text key={problem} size="xs">
+                      {problem}
+                    </Text>
+                  ))}
+                </Stack>
+              </Alert>
+            )}
+
+            <Paper withBorder radius="md" className={classes.editorPanel}>
+              <Group
+                justify="space-between"
+                px="md"
+                py="sm"
+                className={classes.panelHeader}
+              >
+                <Group gap="xs">
+                  <Text size="sm" fw={650}>
+                    Query
+                  </Text>
+                  <Badge size="xs" variant="outline" color="gray">
+                    Elucid QL
+                  </Badge>
+                </Group>
+                <Text size="xs" c="dimmed">
+                  Ctrl/⌘ ↵ to run
+                </Text>
+              </Group>
+              <Suspense fallback={<Skeleton height={152} radius={0} />}>
+                <QueryEditor
+                  value={form.query}
+                  diagnostics={diagnostics}
+                  disabled={queryMutation.isPending}
+                  onChange={(query) => {
+                    setForm((current) => ({ ...current, query }));
+                    setFormProblems([]);
+                  }}
+                  onRun={runQuery}
+                />
+              </Suspense>
+              <QueryDiagnostics diagnostics={diagnostics} />
+            </Paper>
+
+            <QueryResults state={resultState} />
+          </Box>
+        ) : (
+          <OperationsWorkspace
+            source={selectedSource}
+            statusState={operationalStatusState}
+            segmentState={segmentState}
+            deadLetterState={deadLetterState}
+            onRefresh={refreshOperations}
+          />
+        )}
       </AppShell.Main>
 
       <AppShell.Aside className={classes.rail}>
@@ -445,11 +560,9 @@ function QueryDiagnostics({
   );
 }
 
-function ApiBadge({
-  status,
-}: Readonly<{ status: 'pending' | 'error' | 'success' }>) {
-  switch (status) {
-    case 'pending':
+function ServiceBadge({ state }: Readonly<{ state: OperationalStatusState }>) {
+  switch (state.kind) {
+    case 'loading':
       return (
         <Badge variant="light" color="gray" size="sm">
           Connecting
@@ -461,10 +574,14 @@ function ApiBadge({
           API unavailable
         </Badge>
       );
-    case 'success':
+    case 'ready':
       return (
-        <Badge variant="light" color="teal" size="sm">
-          API connected
+        <Badge
+          variant="light"
+          color={servicePhaseColor(state.status.phase)}
+          size="sm"
+        >
+          {state.status.phase}
         </Badge>
       );
   }
@@ -525,6 +642,38 @@ function deriveSchemaRailState(
   return { kind: 'ready', source: data };
 }
 
+function deriveOperationalStatusState(
+  status: 'pending' | 'error' | 'success',
+  data: OperationalStatus | undefined,
+  error: Error | null,
+): OperationalStatusState {
+  if (status === 'pending') {
+    return { kind: 'loading' };
+  }
+  if (status === 'error' || data === undefined) {
+    return { kind: 'error', message: readableError(error) };
+  }
+  return { kind: 'ready', status: data };
+}
+
+function deriveSourceOperationalState<Value>(
+  selectedSource: SourceSummary | null,
+  status: 'pending' | 'error' | 'success',
+  data: Value | undefined,
+  error: Error | null,
+): SourceOperationalState<Value> {
+  if (selectedSource === null) {
+    return { kind: 'no-source' };
+  }
+  if (status === 'pending') {
+    return { kind: 'loading' };
+  }
+  if (status === 'error' || data === undefined) {
+    return { kind: 'error', message: readableError(error) };
+  }
+  return { kind: 'ready', value: data };
+}
+
 function deriveResultState(
   status: 'idle' | 'pending' | 'error' | 'success',
   data: QueryExecution | undefined,
@@ -564,6 +713,23 @@ function currentDiagnostics(
 
 function isCancellation(error: Error): boolean {
   return error instanceof ApiClientError && error.failure.kind === 'aborted';
+}
+
+function isWorkspaceMode(value: string): value is WorkspaceMode {
+  return value === 'query' || value === 'operations';
+}
+
+function servicePhaseColor(phase: OperationalStatus['phase']): string {
+  switch (phase) {
+    case 'READY':
+      return 'teal';
+    case 'DEGRADED':
+      return 'orange';
+    case 'STARTING':
+      return 'gray';
+    case 'DRAINING':
+      return 'orange';
+  }
 }
 
 function readableError(error: Error | null): string {

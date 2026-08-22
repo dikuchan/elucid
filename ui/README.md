@@ -4,16 +4,16 @@ The Elucid UI is a same-origin browser application for querying events and inspe
 
 ## Current slice
 
-The current implementation is the bounded query workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. Ingestion and storage state and production asset embedding are separate delivery slices.
+The current implementation is a bounded query and operations workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. The operations view shows component health, effective limits, durable spool usage, publication backlog, maintenance ownership, and bounded segment and dead-letter lists for the selected source. Production asset embedding remains a separate delivery slice.
 
 ## Stack
 
 - React and Vite provide the client-only SPA and production asset build.
 - Mantine Core and Mantine Hooks provide the design system, accessibility behavior, theme tokens, layout primitives, controls, and dense data presentation.
-- TanStack Query owns remote server state, bounded read retries, request races, invalidation, GET cancellation, and the non-retrying query mutation.
+- TanStack Query owns remote server state, bounded read retries, request races, invalidation, GET cancellation, fixed operational polling, and the non-retrying query mutation.
 - TanStack Table will own the result-grid model without changing the server-defined row order or query semantics.
 - TanStack Virtual will be added only if configured result limits or measurements justify virtualization.
-- TanStack Router will be added when the application has a second addressable screen or useful URL state. The single workspace does not need it yet.
+- TanStack Router will be added when the application has a second addressable screen or useful URL state. The local Query/Operations switch does not create a second URL or require a router.
 - TanStack Start is excluded because the Rust process already owns the HTTP server, API, and embedded asset delivery; a second server runtime, SSR, and server functions do not serve this application.
 - CodeMirror 6 provides the query editor, keyboard execution, and source-span decorations.
 - Zod validates unknown JSON once at the HTTP boundary before values enter application code.
@@ -23,7 +23,7 @@ Dependencies are installed only in the change that first uses them. TanStack Tab
 
 ## State and network boundaries
 
-- TanStack Query manages source and schema reads in this slice; status, segment, and dead-letter reads join the same boundary when their views land. Read retries are limited to network, overload, timeout, and server failures; permanent HTTP and invalid-response failures are not retried.
+- TanStack Query manages source, schema, status, segment, and dead-letter reads. Status refreshes every 2.5 seconds; source-specific operational lists refresh every 5 seconds only while the Operations view is active. Read retries are limited to network, overload, timeout, and server failures; permanent HTTP and invalid-response failures are not retried.
 - Synchronous query execution uses a mutation with automatic retries disabled. Retrying a POST can duplicate expensive work even though Elucid stores no durable query execution.
 - Query cancellation aborts the underlying fetch so the Rust service observes the disconnect and cancels in-process execution.
 - Editor text, explicit UTC range, selected source, and presentation preferences are local UI state. They do not belong in the remote-state cache.
@@ -31,11 +31,11 @@ Dependencies are installed only in the change that first uses them. TanStack Tab
 
 ## Layout
 
-- The header identifies the application and reserves space for deployment and service health.
+- The header identifies the application, switches between Query and Operations locally, and shows the service phase.
 - The left rail owns bounded source selection.
-- The center workspace owns the explicit UTC range, output-row limit, query editor, source-span diagnostics, run and cancel controls, result table, completion state, and execution statistics.
+- The center workspace owns either the explicit UTC range, output-row limit, query editor, source-span diagnostics, run and cancel controls, result table, completion state, and execution statistics, or the bounded operational status, segment, and dead-letter views.
 - The right rail owns the active schema, field details, and immutable schema history for the selected source.
-- Operational ingestion and storage views will reuse this shell in the next UI slice instead of adding an unrelated dashboard.
+- Query and Operations reuse the same selected source, source rail, schema rail, and application shell.
 
 The application uses system fonts, local bundled styles, and one forced light color scheme. It does not follow the system theme or expose a theme switch. Production code must not load scripts, fonts, styles, source maps, or other assets from external origins.
 

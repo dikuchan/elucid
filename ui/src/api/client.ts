@@ -1,13 +1,19 @@
 import {
   ApiContractError,
+  decodeDeadLetterList,
   decodeErrorEnvelope,
+  decodeOperationalStatus,
   decodeQueryExecution,
+  decodeSegmentList,
   decodeSourceDetail,
   decodeSourceList,
 } from './contracts';
 import type {
+  DeadLetterList,
+  OperationalStatus,
   QueryDiagnostic,
   QueryExecution,
+  SegmentList,
   SourceDetail,
   SourceId,
   SourceList,
@@ -63,6 +69,38 @@ export async function getSource(
     `/api/v1/sources/${encodeURIComponent(sourceId)}`,
     getRequest(signal),
     decodeSourceDetail,
+  );
+}
+
+export async function getOperationalStatus(
+  signal?: AbortSignal,
+): Promise<OperationalStatus> {
+  return requestJson(
+    '/api/v1/status',
+    getRequest(signal),
+    decodeOperationalStatus,
+  );
+}
+
+export async function listSegments(
+  sourceId: SourceId,
+  signal?: AbortSignal,
+): Promise<SegmentList> {
+  return requestJson(
+    `/api/v1/segments?source_id=${encodeURIComponent(sourceId)}`,
+    getRequest(signal),
+    decodeSegmentList,
+  );
+}
+
+export async function listDeadLetters(
+  sourceId: SourceId,
+  signal?: AbortSignal,
+): Promise<DeadLetterList> {
+  return requestJson(
+    `/api/v1/dead-letters?source_id=${encodeURIComponent(sourceId)}`,
+    getRequest(signal),
+    decodeDeadLetterList,
   );
 }
 

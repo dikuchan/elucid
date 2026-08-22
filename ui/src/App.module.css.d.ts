@@ -1,6 +1,8 @@
 declare const classes: {
   readonly brandMark: string;
   readonly brandTitle: string;
+  readonly componentGrid: string;
+  readonly componentHealth: string;
   readonly contextPanel: string;
   readonly diagnostic: string;
   readonly diagnostics: string;
@@ -9,10 +11,16 @@ declare const classes: {
   readonly fieldName: string;
   readonly fieldRow: string;
   readonly header: string;
+  readonly healthDot: string;
   readonly identity: string;
+  readonly limit: string;
+  readonly limitGrid: string;
   readonly main: string;
   readonly monospaceCell: string;
   readonly numericCell: string;
+  readonly operationCard: string;
+  readonly operationalListPanel: string;
+  readonly operationalState: string;
   readonly panelHeader: string;
   readonly queryEditor: string;
   readonly rail: string;
@@ -22,10 +30,12 @@ declare const classes: {
   readonly resultCell: string;
   readonly resultState: string;
   readonly rowsInput: string;
+  readonly sameOriginBadge: string;
   readonly schemaVersion: string;
   readonly shell: string;
   readonly sourceActive: string;
   readonly sourceIdle: string;
+  readonly statusPanel: string;
   readonly tableScroll: string;
   readonly timeInput: string;
   readonly truncate: string;
