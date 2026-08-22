@@ -120,6 +120,100 @@ async fn dropping_server_releases_its_bound_listener() {
 }
 
 #[tokio::test]
+async fn embedded_ui_is_available_before_dependencies_without_masking_missing_resources() {
+    let dependency = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stalled dependency");
+    let dependency_address = dependency.local_addr().expect("dependency address");
+    let stalled_dependency = tokio::spawn(async move {
+        let (_connection, _) = dependency.accept().await.expect("accept PostgreSQL probe");
+        std::future::pending::<()>().await;
+    });
+    let local = TempDir::new().expect("create local storage root");
+    let document = runtime_configuration(
+        "http://127.0.0.1:9",
+        local.path().join("spool").to_str().expect("spool path"),
+        local.path().join("scratch").to_str().expect("scratch path"),
+    );
+    let environment = Environment::from_pairs([
+        (
+            "ELUCID_METASTORE__POSTGRESQL_URL",
+            format!("postgresql://postgres:postgres@{dependency_address}/postgres"),
+        ),
+        ("ELUCID_OBJECT_STORE__ACCESS_KEY_ID", "unused".into()),
+        ("ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY", "unused".into()),
+    ]);
+    let configuration = RuntimeConfiguration::from_toml(&document, &environment)
+        .expect("decode runtime configuration");
+    let server = start(configuration).await.expect("bind server");
+    let endpoint = format!("http://{}", server.local_address());
+    let client = Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()
+        .expect("build HTTP client");
+
+    let root = client
+        .get(format!("{endpoint}/"))
+        .send()
+        .await
+        .expect("request UI root");
+    assert_eq!(root.status(), StatusCode::OK);
+    assert_eq!(
+        root.headers().get("content-type").expect("UI content type"),
+        "text/html; charset=utf-8"
+    );
+    assert_eq!(
+        root.headers()
+            .get("cache-control")
+            .expect("UI cache policy"),
+        "no-cache"
+    );
+    assert!(root.headers().contains_key("content-security-policy"));
+    let index = root.text().await.expect("read UI root");
+    assert!(index.contains("<div id=\"root\"></div>"));
+    let asset_path = referenced_asset_path(&index);
+
+    let asset = client
+        .get(format!("{endpoint}{asset_path}"))
+        .send()
+        .await
+        .expect("request embedded UI asset");
+    assert_eq!(asset.status(), StatusCode::OK);
+    assert_eq!(
+        asset
+            .headers()
+            .get("cache-control")
+            .expect("asset cache policy"),
+        "public, max-age=31536000, immutable"
+    );
+
+    let spa_route = client
+        .get(format!("{endpoint}/workspace/demo_logs"))
+        .send()
+        .await
+        .expect("request UI route");
+    assert_eq!(spa_route.status(), StatusCode::OK);
+    assert_eq!(spa_route.text().await.expect("read UI route"), index);
+
+    for path in ["/api/v1/missing", "/assets/missing.js"] {
+        let missing = client
+            .get(format!("{endpoint}{path}"))
+            .send()
+            .await
+            .expect("request missing resource");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND, "path: {path}");
+        assert_eq!(
+            json(missing).await["error"]["code"],
+            "NOT_FOUND",
+            "path: {path}"
+        );
+    }
+
+    drop(server);
+    stalled_dependency.abort();
+}
+
+#[tokio::test]
 #[ignore = "requires Docker"]
 async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_outage() {
     let postgres = Postgres::default()
@@ -1272,6 +1366,15 @@ async fn wait_for_admission_state(client: &Client, url: &str, expected: &str) ->
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+fn referenced_asset_path(index: &str) -> &str {
+    let start = index.find("/assets/").expect("UI references an asset");
+    let remainder = &index[start..];
+    let end = remainder
+        .find(['\"', '\''])
+        .expect("asset reference terminator");
+    &remainder[..end]
 }
 
 async fn json(response: reqwest::Response) -> Value {

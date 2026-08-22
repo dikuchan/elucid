@@ -4,7 +4,7 @@ The Elucid UI is a same-origin browser application for querying events and inspe
 
 ## Current slice
 
-The current implementation is a bounded query and operations workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. The operations view shows component health, effective limits, durable spool usage, publication backlog, maintenance ownership, and bounded segment and dead-letter lists for the selected source. Production asset embedding remains a separate delivery slice.
+The current implementation is a bounded query and operations workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. The operations view shows component health, effective limits, durable spool usage, publication backlog, maintenance ownership, and bounded segment and dead-letter lists for the selected source. The production build generates an ignored asset directory that `elucid-service` embeds; the release binary needs neither Node.js nor a separate frontend process.
 
 ## Stack
 
@@ -41,6 +41,14 @@ The application uses system fonts, local bundled styles, and one forced light co
 
 ## Commands
 
+Build the complete release from the repository root:
+
+```console
+make build
+```
+
+The build installs frontend dependencies from the exact lockfile, recreates the ignored production assets, and then runs a locked Cargo release build. The resulting binary is `elucid/target/release/elucid`.
+
 Install the exact lockfile:
 
 ```console
@@ -53,7 +61,7 @@ Run the local development server:
 npm run dev
 ```
 
-The development server proxies `/api` to the validation server at `http://127.0.0.1:58080`. Set `ELUCID_UI_API_TARGET` before starting Vite to use another Elucid listener. Production remains same-origin and does not use this proxy.
+The development server proxies `/api` to the Elucid server at `http://127.0.0.1:58080`. Set `ELUCID_UI_API_TARGET` before starting Vite to use another Elucid listener. Production remains same-origin and does not use this proxy.
 
 Run the complete frontend gate:
 

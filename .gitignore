@@ -1,5 +1,6 @@
 **/.DS_Store
 target/
+elucid/elucid-service/ui-assets/
 .idea/
 .elucid/
 

@@ -82,7 +82,7 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
         .route("/api/v1/dead-letters/{object_id}", get(read_dead_letter))
         .route("/api/v1/query-executions", post(execute_query))
         .method_not_allowed_fallback(method_not_allowed)
-        .fallback(not_found)
+        .fallback(ui_or_not_found)
         .layer(middleware::from_fn_with_state(
             request_timeout,
             enforce_request_timeout,
@@ -868,8 +868,9 @@ async fn read_dead_letter(
     }
 }
 
-async fn not_found() -> ApiError {
-    ApiError::not_found()
+async fn ui_or_not_found(request: Request) -> Response {
+    crate::ui::response(request.method(), request.uri().path())
+        .unwrap_or_else(|| ApiError::not_found().into_response())
 }
 
 async fn method_not_allowed() -> ApiError {
