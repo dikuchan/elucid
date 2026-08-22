@@ -1,0 +1,7 @@
+.git
+.elucid
+**/.DS_Store
+elucid/target
+elucid/elucid-service/ui-assets
+ui/dist
+ui/node_modules

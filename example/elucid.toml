@@ -1,5 +1,5 @@
 [server]
-listen_address = "127.0.0.1:58080"
+listen_address = "0.0.0.0:58080"
 request_timeout_seconds = 60
 shutdown_timeout_seconds = 15
 
@@ -7,15 +7,15 @@ shutdown_timeout_seconds = 15
 maximum_connections = 10
 
 [object_store]
-endpoint = "http://127.0.0.1:59000"
+endpoint = "http://minio:9000"
 bucket = "elucid"
-root_prefix = "validation"
+root_prefix = "example"
 request_timeout_seconds = 5
 
 [local_storage]
-spool_path = "/tmp/elucid-validation/spool"
+spool_path = "/var/lib/elucid/spool"
 spool_capacity_bytes = 2147483648
-scratch_path = "/tmp/elucid-validation/scratch"
+scratch_path = "/var/lib/elucid/scratch"
 scratch_capacity_bytes = 2147483648
 
 [ingestion]

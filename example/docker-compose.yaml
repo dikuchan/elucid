@@ -1,0 +1,120 @@
+name: elucid-example
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: elucid
+      POSTGRES_PASSWORD: elucid-example
+      POSTGRES_USER: elucid
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=elucid --dbname=elucid"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 10s
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_PASSWORD: elucid-example
+      MINIO_ROOT_USER: elucid
+    ports:
+      - "127.0.0.1:59000:9000"
+      - "127.0.0.1:59001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 10s
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-02-21T16-00-46Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_BUCKET: elucid
+      MINIO_ROOT_PASSWORD: elucid-example
+      MINIO_ROOT_USER: elucid
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        mc alias set example http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "example/$${MINIO_BUCKET}"
+    restart: "no"
+
+  elucid:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: elucid-example:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      ELUCID_METASTORE__POSTGRESQL_URL: postgresql://elucid:elucid-example@postgres:5432/elucid
+      ELUCID_OBJECT_STORE__ACCESS_KEY_ID: elucid
+      ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY: elucid-example
+    ports:
+      - "127.0.0.1:58080:58080"
+    volumes:
+      - ./elucid.toml:/etc/elucid/elucid.toml:ro
+      - elucid-spool:/var/lib/elucid/spool
+      - elucid-scratch:/var/lib/elucid/scratch
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:58080/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+    stop_grace_period: 20s
+
+  catalog-init:
+    image: elucid-example:local
+    pull_policy: never
+    depends_on:
+      elucid:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        if curl --fail --silent --show-error http://elucid:58080/api/v1/sources | grep --fixed-strings --quiet '"name":"demo_logs"'
+        then
+          echo "demo_logs catalog already exists; leaving it unchanged"
+        else
+          exec elucid catalog apply --endpoint http://elucid:58080 --file /example/catalog/demo-logs.yaml
+        fi
+    volumes:
+      - ./catalog:/example/catalog:ro
+    restart: "no"
+
+  vector:
+    image: timberio/vector:0.57.0-debian
+    depends_on:
+      catalog-init:
+        condition: service_completed_successfully
+    command: ["--config", "/etc/vector/vector.yaml", "--require-healthy", "true"]
+    volumes:
+      - ./vector.yaml:/etc/vector/vector.yaml:ro
+      - vector-data:/var/lib/vector
+    stop_grace_period: 20s
+
+volumes:
+  elucid-scratch:
+  elucid-spool:
+  minio-data:
+  postgres-data:
+  vector-data:

@@ -1,0 +1,54 @@
+data_dir: /var/lib/vector
+
+sources:
+  demo_logs:
+    type: demo_logs
+    format: shuffle
+    interval: 1.0
+    lines:
+      - '{"message":"Blocked login","service":"auth","status":401,"region":"eu-west-1","actor":"alice"}'
+      - '{"message":"Gateway failure","service":"edge","status":502,"region":"us-east-1","trace_id":"demo-trace"}'
+      - '{"message":"Background job completed","service":"worker","region":"eu-central-1","duration_ms":37}'
+      - '{"message":"Invalid status fixture","service":"auth","status":"not-an-integer","region":"eu-west-1"}'
+    decoding:
+      codec: json
+
+transforms:
+  prepare_for_elucid:
+    type: remap
+    inputs:
+      - demo_logs
+    source: |
+      .timestamp = format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ")
+      del(.source_type)
+
+sinks:
+  elucid:
+    type: http
+    inputs:
+      - prepare_for_elucid
+    uri: http://elucid:58080/api/v1/sources/demo_logs/inputs/vector/events
+    method: post
+    compression: none
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    batch:
+      max_bytes: 4194304
+      max_events: 16
+      timeout_secs: 15
+    buffer:
+      type: disk
+      max_size: 536870912
+      when_full: block
+    healthcheck:
+      enabled: true
+      uri: http://elucid:58080/health/ready
+    request:
+      headers:
+        Content-Type: application/x-ndjson
+      timeout_secs: 65
+      retry_max_duration_secs: 30
+    retry_strategy:
+      type: default
