@@ -459,6 +459,7 @@ impl OperationalStore {
             WHERE input.source_id = $1
               AND object.kind = 'DEAD_LETTER'
               AND object.state = 'PUBLISHED'
+              AND object.retention_deadline > CURRENT_TIMESTAMP
             ORDER BY object.published_at DESC, object.object_id
             LIMIT $2
             "#,
@@ -494,6 +495,7 @@ impl OperationalStore {
             WHERE object.object_id = $1
               AND object.kind = 'DEAD_LETTER'
               AND object.state = 'PUBLISHED'
+              AND object.retention_deadline > CURRENT_TIMESTAMP
             "#,
         )
         .bind(object_id.as_uuid())

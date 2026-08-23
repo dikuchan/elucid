@@ -71,7 +71,7 @@ async fn assert_table_contract(pool: &PgPool) {
         .fetch_all(pool)
         .await
         .expect("load SQLx migration ledger");
-    assert_eq!(applied.len(), 2);
+    assert_eq!(applied.len(), 3);
     assert_eq!(applied[0].get::<i64, _>("version"), 1);
     assert_eq!(applied[0].get::<String, _>("description"), "control plane");
     assert!(applied[0].get::<bool, _>("success"));
@@ -81,6 +81,12 @@ async fn assert_table_contract(pool: &PgPool) {
         "query executions"
     );
     assert!(applied[1].get::<bool, _>("success"));
+    assert_eq!(applied[2].get::<i64, _>("version"), 3);
+    assert_eq!(
+        applied[2].get::<String, _>("description"),
+        "retention expiration"
+    );
+    assert!(applied[2].get::<bool, _>("success"));
 }
 
 async fn assert_index_contract(pool: &PgPool) {
@@ -99,6 +105,7 @@ async fn assert_index_contract(pool: &PgPool) {
         "segments_by_claimed_run",
         "segments_by_producing_run",
         "segments_compaction_candidates",
+        "segments_retention_candidates",
         "segments_terminal_reclamation",
         "stored_objects_by_delete_request",
         "stored_objects_by_retention_deadline",

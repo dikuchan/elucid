@@ -57,7 +57,7 @@ fn json_version_exposes_the_packaging_contract() {
     assert_eq!(object["storage_format_version"], 1);
     assert_eq!(
         object["supported_metastore_migration_range"],
-        serde_json::json!({"minimum_version": 1, "maximum_version": 2})
+        serde_json::json!({"minimum_version": 1, "maximum_version": 3})
     );
 }
 
