@@ -16,6 +16,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use utoipa::ToSchema;
 
 use elucid_engine::QueryObjectStore;
 use elucid_metastore::{
@@ -35,7 +36,7 @@ const OBJECT_STORE_REGION: &str = "us-east-1";
 const OBJECT_STORE_HEALTH_PREFIX: &str = ".elucid-health-probe";
 const MAINTENANCE_LOCK_NAME: &str = "elucid:maintenance";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ToSchema)]
 #[non_exhaustive]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ComponentStatus {
@@ -44,7 +45,7 @@ pub(crate) enum ComponentStatus {
     Down,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ToSchema)]
 pub(crate) struct ComponentHealth {
     pub(crate) postgresql: ComponentStatus,
     pub(crate) object_store: ComponentStatus,

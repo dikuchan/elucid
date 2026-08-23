@@ -17,6 +17,7 @@ The first build downloads public container images, frontend packages, and Rust c
 The local endpoints are:
 
 - Elucid UI and API: `http://127.0.0.1:58080`
+- Swagger UI: `http://127.0.0.1:58080/swagger` (`http://127.0.0.1:58080/openapi.json` for the raw document)
 - Elucid metrics: `http://127.0.0.1:58080/metrics`
 - PostgreSQL: `127.0.0.1:55432`
 - MinIO API: `http://127.0.0.1:59000`

@@ -22,6 +22,8 @@ tokio = { workspace = true, features = ["fs", "io-util", "net", "rt", "signal", 
 tokio-util = { workspace = true, features = ["rt"] }
 toml_edit = { workspace = true, features = ["parse", "serde"] }
 url = { workspace = true }
+utoipa = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 elucid-catalog = { workspace = true }

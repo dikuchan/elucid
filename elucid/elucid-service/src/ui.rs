@@ -47,12 +47,14 @@ fn is_spa_route(path: &str) -> bool {
 }
 
 fn is_reserved_path(path: &str) -> bool {
-    ["/api", "/health", "/metrics"].iter().any(|prefix| {
-        path == *prefix
-            || path
-                .strip_prefix(prefix)
-                .is_some_and(|rest| rest.starts_with('/'))
-    })
+    ["/api", "/health", "/metrics", "/openapi.json", "/swagger"]
+        .iter()
+        .any(|prefix| {
+            path == *prefix
+                || path
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
 }
 
 fn asset_response(method: &Method, asset: &EmbeddedAsset) -> Response {

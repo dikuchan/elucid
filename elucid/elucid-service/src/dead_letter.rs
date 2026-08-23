@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt as _;
+use utoipa::ToSchema;
 
 use elucid_ingestion::{DeadLetterCode, DeadLetterEntry, PayloadEncoding, PayloadExtent};
 use elucid_storage::{
@@ -42,9 +43,10 @@ impl StagedDeadLetterObject {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DeadLetterDocumentEntry {
+    #[schema(format = Uuid)]
     batch_id: String,
     line_number: u64,
     input_position: u64,
@@ -86,7 +88,7 @@ impl DeadLetterDocumentEntry {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 enum DeadLetterDocumentCode {
     #[serde(rename = "RECORD_INVALID_UTF8")]
     InvalidUtf8,
@@ -139,7 +141,7 @@ impl TryFrom<DeadLetterCode> for DeadLetterDocumentCode {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct DeadLetterDocumentPayload {
     encoding: DeadLetterDocumentEncoding,
@@ -147,7 +149,7 @@ struct DeadLetterDocumentPayload {
     content: String,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum DeadLetterDocumentEncoding {
     Utf8,
@@ -166,7 +168,7 @@ impl TryFrom<PayloadEncoding> for DeadLetterDocumentEncoding {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum DeadLetterDocumentExtent {
     Complete,

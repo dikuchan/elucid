@@ -53,6 +53,8 @@ tokio-stream = "0.1.18"
 tokio-util = "0.7.17"
 toml_edit = { version = "0.23.9", default-features = false }
 url = "2.5.7"
+utoipa = { version = "5.5.0", features = ["chrono", "uuid"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "debug-embed", "vendored"] }
 uuid = "1.19.0"
 yaml-rust2 = { version = "0.11.1", default-features = false }
 

@@ -195,6 +195,90 @@ async fn embedded_ui_is_available_before_dependencies_without_masking_missing_re
     assert_eq!(spa_route.status(), StatusCode::OK);
     assert_eq!(spa_route.text().await.expect("read UI route"), index);
 
+    let swagger = client
+        .get(format!("{endpoint}/swagger"))
+        .send()
+        .await
+        .expect("request Swagger UI");
+    assert_eq!(swagger.status(), StatusCode::OK);
+    assert!(swagger.headers().contains_key("x-request-id"));
+    assert!(
+        swagger
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/html"))
+    );
+    assert!(
+        swagger
+            .text()
+            .await
+            .expect("read Swagger UI")
+            .contains("<title>Swagger UI</title>")
+    );
+
+    let openapi = client
+        .get(format!("{endpoint}/openapi.json"))
+        .send()
+        .await
+        .expect("request OpenAPI document");
+    assert_eq!(openapi.status(), StatusCode::OK);
+    assert!(openapi.headers().contains_key("x-request-id"));
+    assert!(
+        openapi
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("application/json"))
+    );
+    let openapi = json(openapi).await;
+    assert_eq!(openapi["openapi"], "3.1.0");
+    let paths = openapi["paths"].as_object().expect("OpenAPI paths");
+    for path in [
+        "/health/live",
+        "/health/ready",
+        "/metrics",
+        "/api/v1/status",
+        "/api/v1/catalog-applications",
+        "/api/v1/sources",
+        "/api/v1/sources/{source_id}",
+        "/api/v1/segments",
+        "/api/v1/query-executions",
+        "/api/v1/dead-letters",
+        "/api/v1/dead-letters/{object_id}",
+        "/api/v1/sources/{source_name}/inputs/{input_name}/events",
+    ] {
+        assert!(paths.contains_key(path), "undocumented route: {path}");
+    }
+    for (path, media_type) in [
+        ("/api/v1/catalog-applications", "application/yaml"),
+        ("/api/v1/query-executions", "application/json"),
+        (
+            "/api/v1/sources/{source_name}/inputs/{input_name}/events",
+            "application/x-ndjson",
+        ),
+    ] {
+        assert!(
+            paths[path]["post"]["requestBody"]["content"]
+                .get(media_type)
+                .is_some(),
+            "incorrect request media type for {path}"
+        );
+    }
+    let schemas = openapi["components"]["schemas"]
+        .as_object()
+        .expect("OpenAPI component schemas");
+    assert!(
+        schemas["ErrorEnvelope"]["properties"]
+            .get("error")
+            .is_some()
+    );
+    assert!(
+        schemas["QueryExecutionResponse"]["properties"]
+            .get("rows")
+            .is_some()
+    );
+
     for path in ["/api/v1/missing", "/assets/missing.js"] {
         let missing = client
             .get(format!("{endpoint}{path}"))

@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, SchemaType, Type};
+use utoipa::openapi::{KnownFormat, RefOr, SchemaFormat};
+use utoipa::{OpenApi, PartialSchema, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use elucid_catalog::{
@@ -58,6 +62,36 @@ const MAXIMUM_DEAD_LETTER_RESPONSE_BYTES: u64 = 1_048_576;
 const RETRY_AFTER_SECONDS: u64 = 1;
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        liveness,
+        readiness,
+        status,
+        metrics,
+        apply_catalog,
+        ingest_events,
+        list_sources,
+        get_source,
+        list_segments,
+        execute_query,
+        list_dead_letters,
+        read_dead_letter,
+    ),
+    info(
+        title = "Elucid API",
+        description = "Elucid ingestion, catalog, query, and operational API. Every response includes X-Request-Id. This server has no authentication and must only be exposed in a trusted environment."
+    ),
+    tags(
+        (name = "health", description = "Process and dependency health"),
+        (name = "operations", description = "Runtime status and metrics"),
+        (name = "catalog", description = "Catalog application and inspection"),
+        (name = "ingestion", description = "Durable NDJSON ingestion and dead letters"),
+        (name = "query", description = "Synchronous EQL execution"),
+    )
+)]
+struct ApiDocumentation;
+
 pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
     let request_timeout = Duration::from_secs(
         state
@@ -91,14 +125,32 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
             "/api/v1/sources/{source_name}/inputs/{input_name}/events",
             post(ingest_events),
         )
+        .merge(SwaggerUi::new("/swagger").url("/openapi.json", ApiDocumentation::openapi()))
         .layer(middleware::from_fn(request_identity))
         .with_state(state)
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/live",
+    tag = "health",
+    summary = "Check process liveness",
+    responses((status = 200, description = "The process runtime can make progress", body = LivenessResponse))
+)]
 async fn liveness() -> Json<LivenessResponse> {
     Json(LivenessResponse { status: "UP" })
 }
 
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    tag = "health",
+    summary = "Check request readiness",
+    responses(
+        (status = 200, description = "The server admits ingestion and query requests", body = ReadinessResponse),
+        (status = 503, description = "A required dependency or local capability is unavailable", body = ErrorEnvelope),
+    )
+)]
 async fn readiness(State(state): State<Arc<ApplicationState>>) -> Response {
     let snapshot = state.snapshot();
     if snapshot.is_ready() {
@@ -111,6 +163,13 @@ async fn readiness(State(state): State<Arc<ApplicationState>>) -> Response {
     ApiError::server_not_ready(readiness_details(&snapshot)).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/status",
+    tag = "operations",
+    summary = "Inspect runtime status",
+    responses((status = 200, description = "Bounded runtime and backlog summary", body = StatusResponse))
+)]
 async fn status(State(state): State<Arc<ApplicationState>>) -> Json<StatusResponse> {
     let snapshot = state.snapshot();
     let configuration = state.configuration();
@@ -184,6 +243,16 @@ async fn status(State(state): State<Arc<ApplicationState>>) -> Json<StatusRespon
     })
 }
 
+#[utoipa::path(
+    get,
+    path = "/metrics",
+    tag = "operations",
+    summary = "Read OpenMetrics metrics",
+    responses(
+        (status = 200, description = "OpenMetrics 1.0 metrics", body = String, content_type = "application/openmetrics-text; version=1.0.0; charset=utf-8"),
+        (status = 500, description = "Metrics encoding failed")
+    )
+)]
 async fn metrics(State(state): State<Arc<ApplicationState>>) -> Response {
     let snapshot = state.snapshot();
     let ingestion = snapshot
@@ -206,6 +275,23 @@ async fn metrics(State(state): State<Arc<ApplicationState>>) -> Response {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/catalog-applications",
+    tag = "catalog",
+    summary = "Apply a complete catalog manifest",
+    request_body(content = String, description = "Complete catalog manifest", content_type = "application/yaml"),
+    responses(
+        (status = 200, description = "Catalog state was applied or was already identical", body = CatalogApplicationResponse),
+        (status = 400, description = "Malformed request", body = ErrorEnvelope),
+        (status = 409, description = "Catalog history conflicts with durable state", body = ErrorEnvelope),
+        (status = 413, description = "Catalog document exceeds the configured limit", body = ErrorEnvelope),
+        (status = 415, description = "Content-Type is not application/yaml", body = ErrorEnvelope),
+        (status = 422, description = "Catalog document violates the catalog contract", body = ErrorEnvelope),
+        (status = 500, description = "Durable catalog state is corrupt or an internal error occurred", body = ErrorEnvelope),
+        (status = 503, description = "PostgreSQL or server readiness is unavailable", body = ErrorEnvelope),
+    )
+)]
 async fn apply_catalog(
     State(state): State<Arc<ApplicationState>>,
     headers: HeaderMap,
@@ -238,6 +324,28 @@ async fn apply_catalog(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/sources/{source_name}/inputs/{input_name}/events",
+    tag = "ingestion",
+    summary = "Durably queue NDJSON events",
+    params(
+        ("source_name" = String, Path, description = "Catalog source name"),
+        ("input_name" = String, Path, description = "Catalog input name"),
+    ),
+    request_body(content = String, description = "Newline-delimited JSON events", content_type = "application/x-ndjson"),
+    responses(
+        (status = 202, description = "The complete request body is durable in the local spool", body = IngestionAcceptedResponse),
+        (status = 400, description = "Malformed request or invalid path identity", body = ErrorEnvelope),
+        (status = 404, description = "Source or input does not exist", body = ErrorEnvelope),
+        (status = 408, description = "Request body did not become durable before the request deadline", body = ErrorEnvelope),
+        (status = 413, description = "Batch exceeds an admission limit", body = ErrorEnvelope),
+        (status = 415, description = "Content-Type or Content-Encoding is unsupported", body = ErrorEnvelope),
+        (status = 429, description = "Ingestion capacity is exhausted before ownership", body = ErrorEnvelope),
+        (status = 500, description = "Durability outcome is ambiguous", body = ErrorEnvelope),
+        (status = 503, description = "The server is not ready or is draining", body = ErrorEnvelope),
+    )
+)]
 async fn ingest_events(
     State(state): State<Arc<ApplicationState>>,
     Path((source_name, input_name)): Path<(String, String)>,
@@ -595,6 +703,16 @@ impl From<BodyReadFailure> for AdmittedIngestionOutcome {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources",
+    tag = "catalog",
+    summary = "List catalog sources",
+    responses(
+        (status = 200, description = "Bounded source list", body = SourceListResponse),
+        (status = 503, description = "Catalog is not available", body = ErrorEnvelope),
+    )
+)]
 async fn list_sources(State(state): State<Arc<ApplicationState>>) -> Response {
     let runtime = state.snapshot();
     let Some(dependencies) = runtime.dependencies() else {
@@ -619,6 +737,19 @@ async fn list_sources(State(state): State<Arc<ApplicationState>>) -> Response {
     .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/sources/{source_id}",
+    tag = "catalog",
+    summary = "Inspect one catalog source",
+    params(("source_id" = String, Path, format = Uuid, description = "Source UUID")),
+    responses(
+        (status = 200, description = "Source schema and active ingestion profiles", body = SourceDetail),
+        (status = 400, description = "Source identity is not a UUID", body = ErrorEnvelope),
+        (status = 404, description = "Source does not exist", body = ErrorEnvelope),
+        (status = 503, description = "Catalog is not available", body = ErrorEnvelope),
+    )
+)]
 async fn get_source(
     State(state): State<Arc<ApplicationState>>,
     Path(source_id): Path<String>,
@@ -638,6 +769,21 @@ async fn get_source(
     Json(SourceDetail::from_source(source)).into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/segments",
+    tag = "operations",
+    summary = "List published segments",
+    params(SegmentListQuery),
+    responses(
+        (status = 200, description = "Bounded operational segment list", body = SegmentListResponse),
+        (status = 400, description = "Query parameters are invalid", body = ErrorEnvelope),
+        (status = 404, description = "Source does not exist", body = ErrorEnvelope),
+        (status = 409, description = "Publication state changed concurrently", body = ErrorEnvelope),
+        (status = 500, description = "Publication metadata is corrupt or an internal error occurred", body = ErrorEnvelope),
+        (status = 503, description = "Catalog or PostgreSQL is unavailable", body = ErrorEnvelope),
+    )
+)]
 async fn list_segments(
     State(state): State<Arc<ApplicationState>>,
     query: Result<Query<SegmentListQuery>, axum::extract::rejection::QueryRejection>,
@@ -690,6 +836,24 @@ async fn list_segments(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/query-executions",
+    tag = "query",
+    summary = "Execute an EQL query synchronously",
+    request_body(content = QueryExecutionRequest, description = "Synchronous EQL query", content_type = "application/json"),
+    responses(
+        (status = 200, description = "Completed or deliberately truncated query result", body = QueryExecutionResponse),
+        (status = 400, description = "Malformed request or invalid query", body = ErrorEnvelope),
+        (status = 408, description = "Query exceeded its execution timeout", body = ErrorEnvelope),
+        (status = 413, description = "Query request exceeds the request limit", body = ErrorEnvelope),
+        (status = 415, description = "Content-Type is not application/json", body = ErrorEnvelope),
+        (status = 422, description = "Query evaluation or resource limit failed", body = ErrorEnvelope),
+        (status = 429, description = "Query admission capacity is exhausted", body = ErrorEnvelope),
+        (status = 500, description = "Published data or internal query state is invalid", body = ErrorEnvelope),
+        (status = 503, description = "The server is not ready, is draining, or query execution was cancelled", body = ErrorEnvelope),
+    )
+)]
 async fn execute_query(State(state): State<Arc<ApplicationState>>, request: Request) -> Response {
     if !has_json_content_type(request.headers()) {
         return ApiError::unsupported_query_media_type().into_response();
@@ -760,6 +924,21 @@ async fn execute_query(State(state): State<Arc<ApplicationState>>, request: Requ
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/dead-letters",
+    tag = "ingestion",
+    summary = "List published dead-letter objects",
+    params(DeadLetterListQuery),
+    responses(
+        (status = 200, description = "Bounded published dead-letter object list", body = DeadLetterListResponse),
+        (status = 400, description = "Query parameters are invalid", body = ErrorEnvelope),
+        (status = 404, description = "Source does not exist", body = ErrorEnvelope),
+        (status = 409, description = "Publication state changed concurrently", body = ErrorEnvelope),
+        (status = 500, description = "Publication metadata is corrupt or an internal error occurred", body = ErrorEnvelope),
+        (status = 503, description = "Catalog or PostgreSQL is unavailable", body = ErrorEnvelope),
+    )
+)]
 async fn list_dead_letters(
     State(state): State<Arc<ApplicationState>>,
     query: Result<Query<DeadLetterListQuery>, axum::extract::rejection::QueryRejection>,
@@ -803,6 +982,20 @@ async fn list_dead_letters(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/v1/dead-letters/{object_id}",
+    tag = "ingestion",
+    summary = "Read one dead-letter object",
+    params(("object_id" = String, Path, format = Uuid, description = "Dead-letter object UUID")),
+    responses(
+        (status = 200, description = "Bounded decoded dead-letter entries", body = DeadLetterReadResponse),
+        (status = 400, description = "Object identity is not a UUID", body = ErrorEnvelope),
+        (status = 404, description = "Dead-letter object does not exist", body = ErrorEnvelope),
+        (status = 500, description = "Stored object is corrupt or an internal error occurred", body = ErrorEnvelope),
+        (status = 503, description = "PostgreSQL or object storage is unavailable", body = ErrorEnvelope),
+    )
+)]
 async fn read_dead_letter(
     State(state): State<Arc<ApplicationState>>,
     Path(object_id): Path<String>,
@@ -1012,18 +1205,18 @@ fn status_maintenance_without_dependencies(
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct LivenessResponse {
     status: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ReadinessResponse {
     status: &'static str,
     components: ComponentHealth,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum ServicePhase {
     Starting,
@@ -1032,14 +1225,14 @@ enum ServicePhase {
     Draining,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum AdmissionState {
     Open,
     Closed,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct StatusResponse {
     phase: ServicePhase,
     admission: AdmissionState,
@@ -1050,7 +1243,7 @@ struct StatusResponse {
     maintenance: MaintenanceStatus,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct EffectiveLimits {
     maximum_http_batch_bytes: u64,
     maximum_http_batch_records: u64,
@@ -1088,21 +1281,23 @@ impl EffectiveLimits {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct IngestionAcceptedResponse {
+    #[schema(format = Uuid)]
     batch_id: String,
     state: IngestionAcceptedState,
+    #[schema(format = DateTime)]
     ingestion_time: String,
     body_bytes: u64,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum IngestionAcceptedState {
     DurablyQueued,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SpoolStatus {
     capacity_bytes: u64,
     used_bytes: u64,
@@ -1110,7 +1305,7 @@ struct SpoolStatus {
     oldest_queued_age_seconds: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct PublicationStatus {
     status: ComponentStatus,
     pending_batches: u64,
@@ -1119,7 +1314,7 @@ struct PublicationStatus {
     uploaded_objects: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct QueryExecutionRequest {
     query: String,
@@ -1127,7 +1322,7 @@ struct QueryExecutionRequest {
     output_rows: u64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 struct QueryTimeRangeRequest {
     start_inclusive: DateTime<Utc>,
@@ -1218,13 +1413,60 @@ impl Serialize for QueryExecutionResponse {
     }
 }
 
-#[derive(Serialize)]
+impl PartialSchema for QueryExecutionResponse {
+    fn schema() -> RefOr<utoipa::openapi::schema::Schema> {
+        let uuid = || {
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Uuid)))
+        };
+        let completion = ObjectBuilder::new()
+            .schema_type(Type::String)
+            .enum_values(Some(["COMPLETE", "TRUNCATED"]));
+        ObjectBuilder::new()
+            .property("query_id", uuid())
+            .property("source_id", uuid())
+            .property("active_schema_id", uuid())
+            .property("active_schema_version", u64::schema())
+            .property("time_range", QueryTimeRangeResponse::schema())
+            .property("columns", Vec::<QueryColumnResponse>::schema())
+            .property(
+                "rows",
+                ArrayBuilder::new().items(
+                    ArrayBuilder::new()
+                        .items(ObjectBuilder::new().schema_type(SchemaType::AnyValue)),
+                ),
+            )
+            .property("completion", completion)
+            .property("truncation_reason", Option::<String>::schema())
+            .property("diagnostics", Vec::<QueryDiagnosticResponse>::schema())
+            .property("statistics", QueryStatisticsResponse::schema())
+            .required("query_id")
+            .required("source_id")
+            .required("active_schema_id")
+            .required("active_schema_version")
+            .required("time_range")
+            .required("columns")
+            .required("rows")
+            .required("completion")
+            .required("truncation_reason")
+            .required("diagnostics")
+            .required("statistics")
+            .into()
+    }
+}
+
+impl ToSchema for QueryExecutionResponse {}
+
+#[derive(Serialize, ToSchema)]
 struct QueryTimeRangeResponse {
+    #[schema(format = DateTime)]
     start_inclusive: String,
+    #[schema(format = DateTime)]
     end_exclusive: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QueryColumnResponse {
     name: String,
     logical_type: &'static str,
@@ -1241,7 +1483,7 @@ impl QueryColumnResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QueryDiagnosticResponse {
     code: &'static str,
     severity: &'static str,
@@ -1267,13 +1509,13 @@ impl QueryDiagnosticResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QuerySpanResponse {
     start_byte: usize,
     end_byte: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QuerySourceRangeResponse {
     start: QuerySourcePositionResponse,
     end: QuerySourcePositionResponse,
@@ -1288,7 +1530,7 @@ impl From<elucid_language::SourceRange> for QuerySourceRangeResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QuerySourcePositionResponse {
     line: usize,
     column: usize,
@@ -1303,7 +1545,7 @@ impl From<elucid_language::SourcePosition> for QuerySourcePositionResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QueryStatisticsResponse {
     selected_segments: u64,
     selected_parquet_bytes: u64,
@@ -1324,43 +1566,57 @@ impl From<QueryExecutionStatistics> for QueryStatisticsResponse {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 struct SegmentListQuery {
+    #[param(format = Uuid)]
     source_id: String,
     state: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 #[serde(deny_unknown_fields)]
 struct DeadLetterListQuery {
+    #[param(format = Uuid)]
     source_id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SegmentListResponse {
     completion: ListCompletion,
     limit: usize,
     segments: Vec<SegmentResponse>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SegmentResponse {
+    #[schema(format = Uuid)]
     segment_id: String,
+    #[schema(format = Uuid)]
     source_id: String,
+    #[schema(format = Uuid)]
     schema_id: String,
     schema_version: u64,
     state: &'static str,
     origin: &'static str,
+    #[schema(format = Date)]
     event_day: String,
     row_count: u64,
     uncompressed_bytes: u64,
     parquet_bytes: u64,
+    #[schema(format = DateTime)]
     minimum_event_time: String,
+    #[schema(format = DateTime)]
     maximum_event_time: String,
+    #[schema(format = DateTime)]
     minimum_ingestion_time: String,
+    #[schema(format = DateTime)]
     maximum_ingestion_time: String,
+    #[schema(format = DateTime)]
     published_at: Option<String>,
+    #[schema(format = DateTime)]
     retired_at: Option<String>,
 }
 
@@ -1387,21 +1643,27 @@ impl From<&SegmentInspection> for SegmentResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct DeadLetterListResponse {
     completion: ListCompletion,
     limit: usize,
     dead_letters: Vec<DeadLetterSummaryResponse>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct DeadLetterSummaryResponse {
+    #[schema(format = Uuid)]
     object_id: String,
+    #[schema(format = Uuid)]
     source_id: String,
+    #[schema(format = Uuid)]
     input_id: String,
+    #[schema(format = Uuid)]
     batch_id: String,
     byte_size: u64,
+    #[schema(format = DateTime)]
     published_at: String,
+    #[schema(format = DateTime)]
     retention_deadline: String,
 }
 
@@ -1419,7 +1681,7 @@ impl From<&DeadLetterSummary> for DeadLetterSummaryResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct DeadLetterReadResponse {
     object: DeadLetterSummaryResponse,
     completion: ListCompletion,
@@ -1427,13 +1689,14 @@ struct DeadLetterReadResponse {
     entries: Vec<DeadLetterDocumentEntry>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct MaintenanceStatus {
     ownership: StatusMaintenanceOwnership,
+    #[schema(value_type = Vec<Object>)]
     recent_compactions: [(); 0],
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum StatusMaintenanceOwnership {
     Starting,
@@ -1452,16 +1715,17 @@ impl From<MaintenanceOwnership> for StatusMaintenanceOwnership {
     }
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum CatalogApplicationResult {
     Applied,
     Unchanged,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct CatalogApplicationResponse {
     outcome: CatalogApplicationResult,
+    #[schema(format = Uuid)]
     source_id: String,
     active_schema_version: u64,
     active_input_profile_revisions: Vec<ActiveInputProfile>,
@@ -1488,10 +1752,12 @@ impl CatalogApplicationResponse {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ActiveInputProfile {
+    #[schema(format = Uuid)]
     input_id: String,
     input_name: String,
+    #[schema(format = Uuid)]
     profile_revision_id: String,
     revision: u64,
 }
@@ -1508,7 +1774,7 @@ impl ActiveInputProfile {
     }
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum ListCompletion {
     Complete,
@@ -1525,15 +1791,16 @@ impl ListCompletion {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SourceListResponse {
     completion: ListCompletion,
     limit: usize,
     sources: Vec<SourceSummary>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SourceSummary {
+    #[schema(format = Uuid)]
     source_id: String,
     name: String,
     display_name: String,
@@ -1551,8 +1818,9 @@ impl SourceSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SourceDetail {
+    #[schema(format = Uuid)]
     source_id: String,
     name: String,
     display_name: String,
@@ -1582,8 +1850,9 @@ impl SourceDetail {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SchemaSummary {
+    #[schema(format = Uuid)]
     schema_id: String,
     version: u64,
 }
@@ -1597,8 +1866,9 @@ impl SchemaSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct SchemaDetail {
+    #[schema(format = Uuid)]
     schema_id: String,
     version: u64,
     fields: Vec<FieldSummary>,
@@ -1618,8 +1888,9 @@ impl SchemaDetail {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct FieldSummary {
+    #[schema(format = Uuid)]
     field_id: String,
     name: String,
     logical_type: &'static str,
@@ -1645,8 +1916,9 @@ impl FieldSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct InputSummary {
+    #[schema(format = Uuid)]
     input_id: String,
     name: String,
     active_profile: IngestionProfileSummary,
@@ -1662,10 +1934,12 @@ impl InputSummary {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct IngestionProfileSummary {
+    #[schema(format = Uuid)]
     profile_revision_id: String,
     revision: u64,
+    #[schema(format = Uuid)]
     target_schema_id: String,
     maximum_record_bytes: u64,
     event_time_json_pointer: String,
@@ -2067,19 +2341,19 @@ impl IntoResponse for ApiError {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ErrorEnvelope {
     error: ErrorBody,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ErrorBody {
     code: &'static str,
     message: &'static str,
     details: ErrorDetails,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 #[serde(untagged)]
 enum ErrorDetails {
     Empty(EmptyDetails),
@@ -2088,21 +2362,21 @@ enum ErrorDetails {
     Query(QueryErrorDetails),
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct EmptyDetails {}
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ReadinessDetails {
     phase: ServicePhase,
     components: ComponentHealth,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct CatalogErrorDetails {
     path: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct QueryErrorDetails {
     diagnostics: Vec<QueryDiagnosticResponse>,
 }

@@ -70,6 +70,8 @@ Every response includes `X-Request-Id`; a valid caller-supplied UUID is preserve
 
 Error messages and details are bounded and never contain credentials, stack traces, complete request bodies, event values, or object-store secrets.
 
+`GET /swagger` serves an embedded Swagger UI and `GET /openapi.json` serves its generated OpenAPI 3.1 document. Both remain available before readiness and require no runtime access to external assets.
+
 ## 5. Catalog, source, and status API
 
 `POST /api/v1/catalog-applications` accepts one `application/yaml` catalog document and applies [Catalog](catalog.md#6-catalog-application). Success returns the source identity, active schema version, active input-profile revisions, and whether durable state changed.
