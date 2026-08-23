@@ -6,7 +6,7 @@ use crate::MetastoreMigrationError;
 static MIGRATOR: Migrator = sqlx::migrate!();
 
 pub const MINIMUM_SUPPORTED_MIGRATION_VERSION: u64 = 1;
-pub const MAXIMUM_SUPPORTED_MIGRATION_VERSION: u64 = 1;
+pub const MAXIMUM_SUPPORTED_MIGRATION_VERSION: u64 = 2;
 
 /// Applies the migrations embedded in this crate and validates previously applied migrations.
 ///

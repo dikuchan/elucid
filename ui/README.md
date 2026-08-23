@@ -4,13 +4,13 @@ The Elucid UI is a same-origin browser application for querying events and inspe
 
 ## Current slice
 
-The current implementation is a bounded query and operations workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. The operations view shows component health, effective limits, durable spool usage, publication backlog, maintenance ownership, and bounded segment and dead-letter lists for the selected source. The production build generates an ignored asset directory that `elucid-service` embeds; the release binary needs neither Node.js nor a separate frontend process.
+The current implementation is a bounded query and operations workspace. It reads the source list and active schema from the same-origin API, runs and cancels synchronous queries, restores bounded recent query requests without automatic execution, validates every response before it enters application state, maps Rust UTF-8 diagnostic spans into the editor, and renders typed rows and execution statistics. The operations view shows component health, effective limits, durable spool usage, publication backlog, maintenance ownership, and bounded segment and dead-letter lists for the selected source. The production build generates an ignored asset directory that `elucid-service` embeds; the release binary needs neither Node.js nor a separate frontend process.
 
 ## Stack
 
 - React and Vite provide the client-only SPA and production asset build.
 - Mantine Core and Mantine Hooks provide the design system, accessibility behavior, theme tokens, layout primitives, controls, and dense data presentation.
-- TanStack Query owns remote server state, bounded read retries, request races, invalidation, GET cancellation, fixed operational polling, and the non-retrying query mutation.
+- TanStack Query owns remote server state, bounded read retries, request races, query-history invalidation, GET cancellation, fixed operational polling, and the non-retrying query mutation.
 - TanStack Table will own the result-grid model without changing the server-defined row order or query semantics.
 - TanStack Virtual will be added only if configured result limits or measurements justify virtualization.
 - TanStack Router will be added when the application has a second addressable screen or useful URL state. The local Query/Operations switch does not create a second URL or require a router.
@@ -25,8 +25,8 @@ The browser grammar exists only to classify tokens for responsive highlighting w
 
 ## State and network boundaries
 
-- TanStack Query manages source, schema, status, segment, and dead-letter reads. Status refreshes every 2.5 seconds; source-specific operational lists refresh every 5 seconds only while the Operations view is active. Read retries are limited to network, overload, timeout, and server failures; permanent HTTP and invalid-response failures are not retried.
-- Synchronous query execution uses a mutation with automatic retries disabled. Retrying a POST can duplicate expensive work even though Elucid stores no durable query execution.
+- TanStack Query manages source, schema, recent query request, status, segment, and dead-letter reads. Status refreshes every 2.5 seconds; source-specific operational lists refresh every 5 seconds only while the Operations view is active; recent queries load only while the History panel is open. Read retries are limited to network, overload, timeout, and server failures; permanent HTTP and invalid-response failures are not retried.
+- Synchronous query execution uses a mutation with automatic retries disabled. Retrying a POST can duplicate expensive work and creates another request-history entry even though Elucid stores no durable result or execution lifecycle state.
 - Query cancellation aborts the underlying fetch so the Rust service observes the disconnect and cancels in-process execution.
 - Editor text, explicit UTC range, selected source, and presentation preferences are local UI state. They do not belong in the remote-state cache.
 - Every successful and error response enters through one runtime-decoding module. TypeScript declarations alone are not accepted as proof that Rust JSON matches the browser contract.
@@ -36,7 +36,7 @@ The browser grammar exists only to classify tokens for responsive highlighting w
 - The header identifies the application, switches between Query and Operations locally, and shows the service phase.
 - The left rail owns bounded source selection.
 - The center workspace owns either the explicit UTC range, output-row limit, query editor, source-span diagnostics, run and cancel controls, result table, completion state, and execution statistics, or the bounded operational status, segment, and dead-letter views.
-- The right rail owns the active schema, field details, and immutable schema history for the selected source.
+- The right rail switches between the active schema with immutable schema history and the bounded recent query-request list. Selecting a recent request restores editor text, UTC range, and output-row limit, clears the previous result, and does not execute the request.
 - Query and Operations reuse the same selected source, source rail, schema rail, and application shell.
 
 The application uses system fonts, local bundled styles, and one forced light color scheme. It does not follow the system theme or expose a theme switch. Production code must not load scripts, fonts, styles, source maps, or other assets from external origins.

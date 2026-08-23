@@ -6,6 +6,7 @@ mod inspection;
 mod migration;
 mod publication;
 mod query;
+mod query_execution;
 
 pub use catalog::{CatalogApplyOutcome, CatalogSnapshot, CatalogStore};
 pub use error::{
@@ -30,4 +31,9 @@ pub use query::{
     MAXIMUM_QUERY_SNAPSHOT_SEGMENTS, QueryRequestTimeRange, QuerySegment, QuerySnapshot,
     QuerySnapshotError, QuerySnapshotErrorKind, QuerySnapshotLimitExceeded, QuerySnapshotLimits,
     QuerySnapshotModelError, QuerySnapshotStore,
+};
+pub use query_execution::{
+    BoundedQueryExecutions, MAXIMUM_RETAINED_QUERY_EXECUTIONS, NewQueryExecution, QueryExecutionId,
+    QueryExecutionListLimit, QueryExecutionModelError, QueryExecutionPersistenceError,
+    QueryExecutionPersistenceErrorKind, QueryExecutionRecord, QueryExecutionStore,
 };

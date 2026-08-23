@@ -1,4 +1,5 @@
 import type { QueryExecutionRequest } from '../api/client';
+import type { QueryExecutionSummary } from '../api/contracts';
 
 export interface QueryFormValues {
   readonly query: string;
@@ -69,10 +70,22 @@ export function defaultQueryForSource(sourceName: string): string {
   return `source ${sourceName}\n| sort by -@event_time\n| take 100`;
 }
 
+export function queryFormFromExecution(
+  execution: QueryExecutionSummary,
+): QueryFormValues {
+  return {
+    query: execution.query,
+    startUtc: execution.timeRange.startInclusive.slice(0, -1),
+    endUtc: execution.timeRange.endExclusive.slice(0, -1),
+    outputRows: execution.outputRows,
+  };
+}
+
 function parseUtcInput(value: string): string | null {
-  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/u.exec(
-    value,
-  );
+  const match =
+    /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/u.exec(
+      value,
+    );
   if (match === null) {
     return null;
   }
@@ -80,10 +93,11 @@ function parseUtcInput(value: string): string | null {
   const hours = match[2];
   const minutes = match[3];
   const seconds = match[4] ?? '00';
+  const millisecondsText = (match[5] ?? '').padEnd(3, '0');
   if (date === undefined || hours === undefined || minutes === undefined) {
     return null;
   }
-  const canonical = `${date}T${hours}:${minutes}:${seconds}.000Z`;
+  const canonical = `${date}T${hours}:${minutes}:${seconds}.${millisecondsText}Z`;
   const milliseconds = Date.parse(canonical);
   if (
     !Number.isFinite(milliseconds) ||

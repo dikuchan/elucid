@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 
-import { buildQueryRequest } from './form';
+import { buildQueryRequest, queryFormFromExecution } from './form';
 
 describe('query request form', () => {
   test('treats datetime-local text as an explicit UTC range', () => {
@@ -55,6 +55,37 @@ describe('query request form', () => {
         'The UTC end must be later than the start.',
         'Output rows must be a positive safe integer.',
       ],
+    });
+  });
+
+  test('restores an execution request exactly enough to run it again', () => {
+    const form = queryFormFromExecution({
+      queryId: '019d1234-5678-7abc-8123-456789abcdef',
+      query: 'source demo_logs\n| take 100',
+      timeRange: {
+        startInclusive: '2026-08-20T12:34:56.123Z',
+        endExclusive: '2026-08-21T01:02:03.456Z',
+      },
+      outputRows: '100',
+      submittedAt: '2026-08-23T12:34:56.789Z',
+    });
+
+    expect(form).toEqual({
+      query: 'source demo_logs\n| take 100',
+      startUtc: '2026-08-20T12:34:56.123',
+      endUtc: '2026-08-21T01:02:03.456',
+      outputRows: '100',
+    });
+    expect(buildQueryRequest(form)).toEqual({
+      kind: 'valid',
+      request: {
+        query: 'source demo_logs\n| take 100',
+        timeRange: {
+          startInclusive: '2026-08-20T12:34:56.123Z',
+          endExclusive: '2026-08-21T01:02:03.456Z',
+        },
+        outputRows: 100,
+      },
     });
   });
 });

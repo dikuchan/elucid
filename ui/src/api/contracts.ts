@@ -4,6 +4,7 @@ const sourceIdSchema = z.uuid().brand<'SourceId'>();
 const schemaIdSchema = z.uuid().brand<'SchemaId'>();
 const queryIdSchema = z.uuid().brand<'QueryId'>();
 const boundedStringSchema = z.string().max(4096);
+const queryTextSchema = z.string().max(1_048_576);
 const identifierSchema = z.string().min(1).max(255);
 const safeUnsignedIntegerSchema = z
   .number()
@@ -11,6 +12,13 @@ const safeUnsignedIntegerSchema = z
   .min(0)
   .max(Number.MAX_SAFE_INTEGER);
 const positiveSafeIntegerSchema = safeUnsignedIntegerSchema.min(1);
+const positiveUnsigned64StringSchema = z
+  .string()
+  .regex(/^[1-9]\d{0,19}$/u)
+  .refine(
+    (value) => integerStringInRange(value, 1n, 18_446_744_073_709_551_615n),
+    { message: 'value exceeds the unsigned 64-bit range' },
+  );
 const utcDateTimeSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u);
@@ -319,7 +327,15 @@ const queryTimeRangeWireSchema = z
     start_inclusive: utcDateTimeSchema,
     end_exclusive: utcDateTimeSchema,
   })
-  .strict();
+  .strict()
+  .refine(
+    (range) =>
+      Date.parse(range.start_inclusive) < Date.parse(range.end_exclusive),
+    {
+      path: ['end_exclusive'],
+      message: 'end_exclusive must be later than start_inclusive',
+    },
+  );
 
 const queryColumnWireSchema = z
   .object({
@@ -430,6 +446,33 @@ const queryExecutionWireSchema = z
         }
       });
     });
+  });
+
+const queryExecutionSummaryWireSchema = z
+  .object({
+    query_id: queryIdSchema,
+    query: queryTextSchema,
+    time_range: queryTimeRangeWireSchema,
+    output_rows: positiveUnsigned64StringSchema,
+    submitted_at: utcDateTimeSchema,
+  })
+  .strict();
+
+const queryExecutionListWireSchema = z
+  .object({
+    completion: listCompletionSchema,
+    limit: positiveSafeIntegerSchema,
+    query_executions: z.array(queryExecutionSummaryWireSchema),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    validateBoundedList(
+      response.completion,
+      response.limit,
+      response.query_executions.length,
+      'query_executions',
+      context,
+    );
   });
 
 const errorEnvelopeWireSchema = z
@@ -635,6 +678,23 @@ export interface QueryExecution {
     readonly outputBytes: number;
     readonly elapsedMilliseconds: number;
   };
+}
+
+export interface QueryExecutionSummary {
+  readonly queryId: string;
+  readonly query: string;
+  readonly timeRange: {
+    readonly startInclusive: string;
+    readonly endExclusive: string;
+  };
+  readonly outputRows: string;
+  readonly submittedAt: string;
+}
+
+export interface QueryExecutionList {
+  readonly completion: 'COMPLETE' | 'TRUNCATED';
+  readonly limit: number;
+  readonly queryExecutions: readonly QueryExecutionSummary[];
 }
 
 export interface ApiErrorEnvelope {
@@ -848,6 +908,28 @@ export function decodeQueryExecution(input: unknown): QueryExecution {
       outputBytes: response.statistics.output_bytes,
       elapsedMilliseconds: response.statistics.elapsed_milliseconds,
     },
+  };
+}
+
+export function decodeQueryExecutionList(input: unknown): QueryExecutionList {
+  const response = decode(
+    queryExecutionListWireSchema,
+    input,
+    'query execution list response',
+  );
+  return {
+    completion: response.completion,
+    limit: response.limit,
+    queryExecutions: response.query_executions.map((execution) => ({
+      queryId: execution.query_id,
+      query: execution.query,
+      timeRange: {
+        startInclusive: execution.time_range.start_inclusive,
+        endExclusive: execution.time_range.end_exclusive,
+      },
+      outputRows: execution.output_rows,
+      submittedAt: execution.submitted_at,
+    })),
   };
 }
 

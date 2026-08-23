@@ -20,7 +20,8 @@ use utoipa::ToSchema;
 
 use elucid_engine::QueryObjectStore;
 use elucid_metastore::{
-    CatalogStore, OperationalStore, PublicationStore, QuerySnapshotStore, install,
+    CatalogStore, OperationalStore, PublicationStore, QueryExecutionStore, QuerySnapshotStore,
+    install,
 };
 use elucid_storage::ImmutableObjectStore;
 
@@ -520,6 +521,7 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
     let queries = QueryBoundary::new(
         configuration.query(),
         configuration.local_storage(),
+        QueryExecutionStore::new(pool.clone()),
         QuerySnapshotStore::new(pool.clone()),
         query_objects,
     )

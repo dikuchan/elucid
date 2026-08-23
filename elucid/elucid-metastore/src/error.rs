@@ -367,7 +367,7 @@ pub(crate) fn is_row_decode_error(error: &sqlx::Error) -> bool {
     )
 }
 
-fn is_database_conflict(error: &sqlx::Error) -> bool {
+pub(crate) fn is_database_conflict(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .and_then(sqlx::error::DatabaseError::code)

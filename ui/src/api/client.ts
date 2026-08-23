@@ -4,6 +4,7 @@ import {
   decodeErrorEnvelope,
   decodeOperationalStatus,
   decodeQueryExecution,
+  decodeQueryExecutionList,
   decodeSegmentList,
   decodeSourceDetail,
   decodeSourceList,
@@ -13,6 +14,7 @@ import type {
   OperationalStatus,
   QueryDiagnostic,
   QueryExecution,
+  QueryExecutionList,
   SegmentList,
   SourceDetail,
   SourceId,
@@ -128,6 +130,16 @@ export async function executeQuery(
       signal,
     },
     decodeQueryExecution,
+  );
+}
+
+export async function listQueryExecutions(
+  signal?: AbortSignal,
+): Promise<QueryExecutionList> {
+  return requestJson(
+    '/api/v1/query-executions',
+    getRequest(signal),
+    decodeQueryExecutionList,
   );
 }
 

@@ -12,6 +12,8 @@ declare const classes: {
   readonly fieldRow: string;
   readonly header: string;
   readonly healthDot: string;
+  readonly historyItem: string;
+  readonly historyQuery: string;
   readonly identity: string;
   readonly limit: string;
   readonly limitGrid: string;

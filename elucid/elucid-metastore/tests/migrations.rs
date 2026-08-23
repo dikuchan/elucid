@@ -59,6 +59,7 @@ async fn assert_table_contract(pool: &PgPool) {
             "compaction_runs",
             "ingestion_profile_revisions",
             "inputs",
+            "query_executions",
             "schema_versions",
             "segments",
             "sources",
@@ -70,10 +71,16 @@ async fn assert_table_contract(pool: &PgPool) {
         .fetch_all(pool)
         .await
         .expect("load SQLx migration ledger");
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 2);
     assert_eq!(applied[0].get::<i64, _>("version"), 1);
     assert_eq!(applied[0].get::<String, _>("description"), "control plane");
     assert!(applied[0].get::<bool, _>("success"));
+    assert_eq!(applied[1].get::<i64, _>("version"), 2);
+    assert_eq!(
+        applied[1].get::<String, _>("description"),
+        "query executions"
+    );
+    assert!(applied[1].get::<bool, _>("success"));
 }
 
 async fn assert_index_contract(pool: &PgPool) {
@@ -87,6 +94,7 @@ async fn assert_index_contract(pool: &PgPool) {
     .collect::<BTreeSet<_>>();
     let required = [
         "compaction_runs_by_state_and_update",
+        "query_executions_recent",
         "segments_active_query",
         "segments_by_claimed_run",
         "segments_by_producing_run",

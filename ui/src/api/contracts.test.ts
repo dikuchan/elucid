@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import {
   decodeErrorEnvelope,
   decodeQueryExecution,
+  decodeQueryExecutionList,
   decodeSourceDetail,
 } from './contracts';
 
@@ -106,5 +107,33 @@ describe('API response decoding', () => {
         invented_statistics: { rows: 42 },
       }),
     ).toThrow(/unrecognized/iu);
+  });
+
+  test('decodes a bounded query execution list without losing 64-bit row limits', () => {
+    const decoded = decodeQueryExecutionList({
+      completion: 'COMPLETE',
+      limit: 50,
+      query_executions: [
+        {
+          query_id: '019d1234-5678-7abc-8123-456789abcdef',
+          query: 'source demo_logs | take 100',
+          time_range: {
+            start_inclusive: '2026-08-20T00:00:00.123Z',
+            end_exclusive: '2026-08-21T00:00:00.456Z',
+          },
+          output_rows: '18446744073709551615',
+          submitted_at: '2026-08-23T12:34:56.789Z',
+        },
+      ],
+    });
+
+    expect(decoded.queryExecutions[0]?.outputRows).toBe('18446744073709551615');
+    expect(() =>
+      decodeQueryExecutionList({
+        completion: 'TRUNCATED',
+        limit: 2,
+        query_executions: [],
+      }),
+    ).toThrow(/truncated/iu);
   });
 });

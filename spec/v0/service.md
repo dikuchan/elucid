@@ -122,7 +122,11 @@ The success response contains query identity, resolved source and schema identit
 
 Rows are arrays aligned with columns. `int64` and `uint64` use decimal strings, `eid` uses 32 lowercase hexadecimal characters, other finite scalar values use their natural JSON representation, `datetime` uses an RFC 3339 UTC string with millisecond precision, and `json` returns parsed JSON.
 
-There is no PostgreSQL query-execution table, asynchronous queue, polling endpoint, or durable query state. Disconnect, timeout, or shutdown cancels the in-process query.
+After concurrency admission and output-row validation, the service assigns the UUIDv7 query identity and durably inserts the request descriptor into `query_executions` before language analysis, snapshot selection, or engine execution. The descriptor contains the exact query text, explicit request range, requested output rows, and PostgreSQL submission time. Requests rejected before that boundary are not recorded. Once the insert commits, later syntax, semantic, execution, cancellation, and client-response failures do not remove it; a persistence failure fails the query rather than silently omitting history.
+
+`GET /api/v1/query-executions` returns the newest 50 request descriptors in submission order and reports whether the list is truncated. `output_rows` is a decimal string so the full unsigned 64-bit value survives JSON clients. PostgreSQL retains only the newest 100 descriptors; each insert serializes the short insert-and-prune transaction so concurrent requests cannot make retention unbounded.
+
+This bounded request log is not durable query orchestration. It stores no result rows, diagnostics, completion outcome, execution status, queue state, or resumable work. There is no polling endpoint or asynchronous execution state machine. Disconnect, timeout, or shutdown still cancels the in-process query, while an already committed request descriptor remains available for form restoration.
 
 ## 8. Embedded web application
 
@@ -132,6 +136,7 @@ The V0 UI provides:
 
 - source selection and active-schema inspection;
 - a query editor with an explicit time range;
+- bounded recent query history that restores query text, range, and output-row limit without automatically executing it;
 - typed result columns, rows, diagnostics, truncation, elapsed time, and scanned segments/bytes;
 - bounded segment inspection showing ingestion and compaction changes;
 - ingestion spool, publication, dead-letter, and compaction status from bounded API data and metrics.
@@ -140,7 +145,7 @@ The UI stores no credentials because V0 has no authentication. It does not requi
 
 ## 9. Limits and backpressure
 
-The service bounds HTTP headers and bodies, spool bytes, record bytes, concurrent requests, open builders, staging bytes, uploads, selected query segments and bytes, query memory and spill, output rows and bytes, dead-letter responses, compaction inputs and outputs, maintenance batches, and object-store concurrency.
+The service bounds HTTP headers and bodies, spool bytes, record bytes, concurrent requests, open builders, staging bytes, uploads, retained and returned query descriptors, selected query segments and bytes, query memory and spill, output rows and bytes, dead-letter responses, compaction inputs and outputs, maintenance batches, and object-store concurrency.
 
 Capacity rejection occurs before accepting ownership of data. Ingestion and query admission return `429 CAPACITY_EXHAUSTED`; dependency or readiness rejection returns `503 SERVER_NOT_READY` with bounded `Retry-After`; a running query exceeding its own bound returns its named query error or a successful configured truncation.
 

@@ -38,6 +38,8 @@ use elucid_ingestion::{
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind, DeadLetterSummary,
     OperationalLimit, OperationalSegmentState, PublicationError, PublicationErrorKind,
+    QueryExecutionId, QueryExecutionListLimit, QueryExecutionModelError,
+    QueryExecutionPersistenceError, QueryExecutionPersistenceErrorKind, QueryExecutionRecord,
     QueryRequestTimeRange, QuerySnapshotError, QuerySnapshotErrorKind, SegmentInspection,
 };
 use elucid_storage::{
@@ -58,6 +60,7 @@ const MAXIMUM_CATALOG_DOCUMENT_BYTES: usize = 1_048_576;
 const MAXIMUM_QUERY_REQUEST_BYTES: u64 = 1_048_576;
 const MAXIMUM_SOURCE_LIST_ITEMS: usize = 100;
 const MAXIMUM_OPERATIONAL_LIST_ITEMS: u64 = 100;
+const MAXIMUM_QUERY_EXECUTION_LIST_ITEMS: u64 = 50;
 const MAXIMUM_DEAD_LETTER_RESPONSE_BYTES: u64 = 1_048_576;
 const RETRY_AFTER_SECONDS: u64 = 1;
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -74,6 +77,7 @@ const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
         list_sources,
         get_source,
         list_segments,
+        list_query_executions,
         execute_query,
         list_dead_letters,
         read_dead_letter,
@@ -87,7 +91,7 @@ const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
         (name = "operations", description = "Runtime status and metrics"),
         (name = "catalog", description = "Catalog application and inspection"),
         (name = "ingestion", description = "Durable NDJSON ingestion and dead letters"),
-        (name = "query", description = "Synchronous EQL execution"),
+        (name = "query", description = "Synchronous EQL execution and recent requests"),
     )
 )]
 struct ApiDocumentation;
@@ -114,7 +118,10 @@ pub(crate) fn router(state: Arc<ApplicationState>) -> Router {
         .route("/api/v1/segments", get(list_segments))
         .route("/api/v1/dead-letters", get(list_dead_letters))
         .route("/api/v1/dead-letters/{object_id}", get(read_dead_letter))
-        .route("/api/v1/query-executions", post(execute_query))
+        .route(
+            "/api/v1/query-executions",
+            get(list_query_executions).post(execute_query),
+        )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(ui_or_not_found)
         .layer(middleware::from_fn_with_state(
@@ -837,6 +844,41 @@ async fn list_segments(
 }
 
 #[utoipa::path(
+    get,
+    path = "/api/v1/query-executions",
+    tag = "query",
+    summary = "List recent query executions",
+    responses(
+        (status = 200, description = "Bounded recent query execution list", body = QueryExecutionListResponse),
+        (status = 500, description = "Stored query execution metadata is invalid", body = ErrorEnvelope),
+        (status = 503, description = "The server or PostgreSQL is unavailable", body = ErrorEnvelope),
+    )
+)]
+async fn list_query_executions(State(state): State<Arc<ApplicationState>>) -> Response {
+    let runtime = state.snapshot();
+    let Some(dependencies) = runtime.dependencies() else {
+        return ApiError::server_not_ready(readiness_details(&runtime)).into_response();
+    };
+    let limit = match QueryExecutionListLimit::new(MAXIMUM_QUERY_EXECUTION_LIST_ITEMS) {
+        Ok(limit) => limit,
+        Err(_) => return ApiError::internal().into_response(),
+    };
+    match dependencies.queries.recent(limit).await {
+        Ok(executions) => Json(QueryExecutionListResponse {
+            completion: ListCompletion::from_truncated(executions.is_truncated()),
+            limit: executions.limit(),
+            query_executions: executions
+                .items()
+                .iter()
+                .map(QueryExecutionSummaryResponse::from)
+                .collect(),
+        })
+        .into_response(),
+        Err(error) => ApiError::query_execution_persistence(error).into_response(),
+    }
+}
+
+#[utoipa::path(
     post,
     path = "/api/v1/query-executions",
     tag = "query",
@@ -911,14 +953,15 @@ async fn execute_query(State(state): State<Arc<ApplicationState>>, request: Requ
         Ok(request_range) => request_range,
         Err(_) => return ApiError::invalid_request().into_response(),
     };
+    let query_id = QueryExecutionId::from(Uuid::now_v7());
     let completed = match admitted
-        .execute(request.query, request_range, request.output_rows)
+        .execute(query_id, request.query, request_range, request.output_rows)
         .await
     {
         Ok(completed) => completed,
         Err(error) => return ApiError::query(error).into_response(),
     };
-    match QueryExecutionResponse::new(Uuid::now_v7(), completed) {
+    match QueryExecutionResponse::new(query_id, completed) {
         Ok(response) => Json(response).into_response(),
         Err(error) => error.into_response(),
     }
@@ -1329,6 +1372,40 @@ struct QueryTimeRangeRequest {
     end_exclusive: DateTime<Utc>,
 }
 
+#[derive(Serialize, ToSchema)]
+struct QueryExecutionListResponse {
+    completion: ListCompletion,
+    limit: usize,
+    query_executions: Vec<QueryExecutionSummaryResponse>,
+}
+
+#[derive(Serialize, ToSchema)]
+struct QueryExecutionSummaryResponse {
+    #[schema(format = Uuid)]
+    query_id: String,
+    query: String,
+    time_range: QueryTimeRangeResponse,
+    output_rows: String,
+    #[schema(format = DateTime)]
+    submitted_at: String,
+}
+
+impl From<&QueryExecutionRecord> for QueryExecutionSummaryResponse {
+    fn from(execution: &QueryExecutionRecord) -> Self {
+        let time_range = execution.time_range();
+        Self {
+            query_id: execution.query_id().to_string(),
+            query: execution.query().to_owned(),
+            time_range: QueryTimeRangeResponse {
+                start_inclusive: format_timestamp(time_range.start_inclusive()),
+                end_exclusive: format_timestamp(time_range.end_exclusive()),
+            },
+            output_rows: execution.output_rows().to_string(),
+            submitted_at: format_timestamp(execution.submitted_at()),
+        }
+    }
+}
+
 struct QueryExecutionResponse {
     query_id: String,
     source_id: String,
@@ -1341,7 +1418,7 @@ struct QueryExecutionResponse {
 }
 
 impl QueryExecutionResponse {
-    fn new(query_id: Uuid, completed: CompletedQuery) -> Result<Self, ApiError> {
+    fn new(query_id: QueryExecutionId, completed: CompletedQuery) -> Result<Self, ApiError> {
         let snapshot = completed.snapshot();
         let time_range = snapshot.time_range();
         let start_inclusive = DateTime::<Utc>::from_timestamp_millis(
@@ -2145,6 +2222,15 @@ impl ApiError {
 
     fn query(error: QueryFailure) -> Self {
         match error {
+            QueryFailure::ExecutionModel(error) => match error {
+                QueryExecutionModelError::QueryTextTooLarge { .. } => {
+                    Self::query_request_too_large()
+                }
+                QueryExecutionModelError::OutputRowsMustBePositive => Self::invalid_request(),
+                QueryExecutionModelError::ListLimitOutOfRange { .. } => Self::internal(),
+                _ => Self::internal(),
+            },
+            QueryFailure::Persistence(error) => Self::query_execution_persistence(error),
             QueryFailure::Snapshot(error) => Self::query_snapshot(error),
             QueryFailure::Engine(error) => Self::query_engine(error),
             QueryFailure::OutputRowLimit(error) => match error {
@@ -2159,6 +2245,23 @@ impl ApiError {
                 "QUERY_CANCELLED",
                 "Query execution was cancelled",
             ),
+        }
+    }
+
+    fn query_execution_persistence(error: QueryExecutionPersistenceError) -> Self {
+        match error.kind() {
+            QueryExecutionPersistenceErrorKind::Conflict => Self::plain(
+                StatusCode::CONFLICT,
+                "METASTORE_CONFLICT",
+                "Metastore state changed concurrently",
+            ),
+            QueryExecutionPersistenceErrorKind::Unavailable => Self::metastore_unavailable(),
+            QueryExecutionPersistenceErrorKind::Corrupt => Self::plain(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "METASTORE_CORRUPT",
+                "Metastore state is corrupt",
+            ),
+            _ => Self::internal(),
         }
     }
 

@@ -293,6 +293,37 @@
   border-radius: var(--mantine-radius-sm);
 }
 
+.historyItem {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--mantine-radius-sm);
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.historyItem:hover:not(:disabled) {
+  background: var(--elucid-surface-raised);
+  border-color: var(--elucid-border);
+}
+
+.historyItem:focus-visible {
+  outline: 2px solid var(--mantine-color-cyan-5);
+  outline-offset: 1px;
+}
+
+.historyItem:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.historyQuery {
+  font-family: var(--mantine-font-family-monospace);
+  white-space: pre-wrap;
+}
+
 .identity {
   font-family: var(--mantine-font-family-monospace);
 }

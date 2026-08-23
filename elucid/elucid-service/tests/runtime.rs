@@ -278,6 +278,10 @@ async fn embedded_ui_is_available_before_dependencies_without_masking_missing_re
             .get("rows")
             .is_some()
     );
+    assert!(
+        paths["/api/v1/query-executions"].get("get").is_some(),
+        "query execution history is missing from OpenAPI"
+    );
 
     for path in ["/api/v1/missing", "/assets/missing.js"] {
         let missing = client
@@ -683,6 +687,53 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
         invalid_query["error"]["details"]["diagnostics"][0]["source_range"]["start"]["line"],
         1
     );
+
+    let query_executions = get_json(
+        &client,
+        &format!("{endpoint}/api/v1/query-executions"),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(query_executions["completion"], "COMPLETE");
+    assert_eq!(query_executions["limit"], 50);
+    let query_executions = query_executions["query_executions"]
+        .as_array()
+        .expect("query execution list");
+    assert_eq!(query_executions.len(), 2);
+    assert_eq!(
+        query_executions[0]["query"],
+        "source demo_logs | project statuz"
+    );
+    assert_eq!(query_executions[0]["output_rows"], "100");
+    assert_eq!(
+        query_executions[0]["time_range"]["start_inclusive"],
+        "2026-08-20T00:00:00.000Z"
+    );
+    assert_eq!(
+        query_executions[0]["time_range"]["end_exclusive"],
+        "2026-08-21T00:00:00.000Z"
+    );
+    let invalid_query_id = query_executions[0]["query_id"]
+        .as_str()
+        .expect("invalid query identity");
+    assert_eq!(
+        Uuid::parse_str(invalid_query_id)
+            .expect("UUID invalid query identity")
+            .get_version_num(),
+        7
+    );
+    DateTime::parse_from_rfc3339(
+        query_executions[0]["submitted_at"]
+            .as_str()
+            .expect("query submission time"),
+    )
+    .expect("RFC 3339 query submission time");
+    assert_eq!(query_executions[1]["query_id"], query_id);
+    assert_eq!(
+        query_executions[1]["query"],
+        "source demo_logs | project @event_time, message, status | sort by -@event_time"
+    );
+    assert_eq!(query_executions[1]["output_rows"], "1");
 
     let dead_letters_url = format!("{endpoint}/api/v1/dead-letters?source_id={source_id}");
     let dead_letters = wait_for_list_items(&client, &dead_letters_url, "dead_letters", 1).await;

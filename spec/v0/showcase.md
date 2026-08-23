@@ -63,6 +63,7 @@ The browser application provides:
 - an editor for the v0 query language and explicit UTC time range;
 - typed result columns and values;
 - diagnostics with source spans;
+- bounded recent query requests that restore the editor, UTC range, and row limit without automatic execution;
 - completion or truncation, elapsed time, selected segments, and selected bytes;
 - a bounded segment list showing ingestion inputs and compaction outputs;
 - spool backlog, dead-letter summaries, and compaction status.
@@ -77,7 +78,7 @@ Implementation and review proceed in this order:
 2. Apply the demo catalog and inspect its source, schema, and input in the UI.
 3. Send the fixture through the checked-in Vector configuration and receive `202 DURABLY_QUEUED` after local fsync rather than S3 publication.
 4. Observe spool backlog drain and immutable Parquet segments become `ACTIVE`.
-5. Run filter, projection, sorting, limiting, and aggregation queries in the browser and compare deterministic results.
+5. Run filter, projection, sorting, limiting, and aggregation queries in the browser, compare deterministic results, and restore successful and invalid requests from bounded history without rerunning them automatically.
 6. Inspect malformed records through the dead-letter UI/API while valid records from the same batches remain queryable.
 7. Apply the additive `region` schema and profile revisions and verify one query over old remainder-backed and new promoted values.
 8. Restart Elucid after acknowledging a batch but before its publication; verify recovery publishes each durable local occurrence once without requiring the sender to resend it.

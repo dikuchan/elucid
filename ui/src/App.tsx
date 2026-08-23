@@ -1,11 +1,17 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { skipToken, useMutation, useQuery } from '@tanstack/react-query';
+import {
+  skipToken,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import {
   Alert,
   AppShell,
   Badge,
   Box,
   Button,
+  Divider,
   Group,
   Paper,
   SegmentedControl,
@@ -22,6 +28,7 @@ import {
   getOperationalStatus,
   getSource,
   listDeadLetters,
+  listQueryExecutions,
   listSegments,
   listSources,
   readRetryDelay,
@@ -32,6 +39,8 @@ import type {
   OperationalStatus,
   QueryDiagnostic,
   QueryExecution,
+  QueryExecutionList,
+  QueryExecutionSummary,
   SourceDetail,
   SourceId,
   SourceList,
@@ -44,6 +53,8 @@ import type {
 } from './components/OperationsWorkspace';
 import { QueryResults } from './components/QueryResults';
 import type { QueryResultState } from './components/QueryResults';
+import { QueryHistoryRail } from './components/QueryHistoryRail';
+import type { QueryHistoryRailState } from './components/QueryHistoryRail';
 import { SchemaRail } from './components/SchemaRail';
 import type { SchemaRailState } from './components/SchemaRail';
 import { SourceRail } from './components/SourceRail';
@@ -52,6 +63,7 @@ import {
   buildQueryRequest,
   defaultQueryForSource,
   initialQueryForm,
+  queryFormFromExecution,
 } from './query/form';
 import classes from './App.module.css';
 
@@ -67,12 +79,15 @@ interface RunningQuery {
 
 type RunDisposition = 'ordinary' | 'cancellation-requested' | 'cancelled';
 type WorkspaceMode = 'query' | 'operations';
+type AsideMode = 'schema' | 'history';
 
 const OPERATIONAL_STATUS_REFRESH_MILLISECONDS = 2_500;
 const OPERATIONAL_LIST_REFRESH_MILLISECONDS = 5_000;
 
 export function App() {
+  const queryClient = useQueryClient();
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('query');
+  const [asideMode, setAsideMode] = useState<AsideMode>('schema');
   const sourcesQuery = useQuery({
     queryKey: ['sources'],
     queryFn: ({ signal }) => listSources(signal),
@@ -141,6 +156,16 @@ export function App() {
       : false,
     refetchIntervalInBackground: false,
   });
+  const queryExecutionsQuery = useQuery({
+    queryKey: ['query-executions'],
+    queryFn:
+      asideMode === 'history'
+        ? ({ signal }) => listQueryExecutions(signal)
+        : skipToken,
+    retry: shouldRetryRead,
+    retryDelay: readRetryDelay,
+    staleTime: 2_000,
+  });
 
   const queryMutation = useMutation({
     mutationFn: ({ request, controller }: RunningQuery) =>
@@ -156,6 +181,7 @@ export function App() {
       setRunDisposition(isCancellation(error) ? 'cancelled' : 'ordinary');
     },
     onSettled: (_data, _error, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ['query-executions'] });
       if (abortControllerRef.current === variables.controller) {
         abortControllerRef.current = null;
       }
@@ -192,6 +218,11 @@ export function App() {
     sourceDetailQuery.status,
     sourceDetailQuery.data,
     sourceDetailQuery.error,
+  );
+  const queryHistoryRailState = deriveQueryHistoryRailState(
+    queryExecutionsQuery.status,
+    queryExecutionsQuery.data,
+    queryExecutionsQuery.error,
   );
   const resultState = deriveResultState(
     queryMutation.status,
@@ -270,6 +301,17 @@ export function App() {
       void segmentQuery.refetch();
       void deadLetterQuery.refetch();
     }
+  };
+
+  const restoreQuery = (execution: QueryExecutionSummary) => {
+    if (queryMutation.isPending) {
+      return;
+    }
+    resetQuery();
+    setRunDisposition('ordinary');
+    setFormProblems([]);
+    setForm(queryFormFromExecution(execution));
+    setWorkspaceMode('query');
   };
 
   return (
@@ -358,7 +400,7 @@ export function App() {
                   <TextInput
                     label="From · UTC"
                     type="datetime-local"
-                    step={1}
+                    step={0.001}
                     value={form.startUtc}
                     onChange={(event) => {
                       const value = event.currentTarget.value;
@@ -375,7 +417,7 @@ export function App() {
                   <TextInput
                     label="To · UTC"
                     type="datetime-local"
-                    step={1}
+                    step={0.001}
                     value={form.endUtc}
                     onChange={(event) => {
                       const value = event.currentTarget.value;
@@ -488,12 +530,41 @@ export function App() {
       </AppShell.Main>
 
       <AppShell.Aside className={classes.rail}>
-        <SchemaRail
-          state={schemaRailState}
-          onRetry={() => {
-            void sourceDetailQuery.refetch();
-          }}
-        />
+        <AppShell.Section p="sm">
+          <SegmentedControl
+            fullWidth
+            size="xs"
+            value={asideMode}
+            data={[
+              { label: 'Schema', value: 'schema' },
+              { label: 'History', value: 'history' },
+            ]}
+            onChange={(value) => {
+              if (isAsideMode(value)) {
+                setAsideMode(value);
+              }
+            }}
+            aria-label="Right panel"
+          />
+        </AppShell.Section>
+        <Divider />
+        {asideMode === 'schema' ? (
+          <SchemaRail
+            state={schemaRailState}
+            onRetry={() => {
+              void sourceDetailQuery.refetch();
+            }}
+          />
+        ) : (
+          <QueryHistoryRail
+            state={queryHistoryRailState}
+            disabled={queryMutation.isPending}
+            onSelect={restoreQuery}
+            onRetry={() => {
+              void queryExecutionsQuery.refetch();
+            }}
+          />
+        )}
       </AppShell.Aside>
     </AppShell>
   );
@@ -629,6 +700,23 @@ function deriveSchemaRailState(
   return { kind: 'ready', source: data };
 }
 
+function deriveQueryHistoryRailState(
+  status: 'pending' | 'error' | 'success',
+  data: QueryExecutionList | undefined,
+  error: Error | null,
+): QueryHistoryRailState {
+  if (status === 'pending') {
+    return { kind: 'loading' };
+  }
+  if (status === 'error' || data === undefined) {
+    return { kind: 'error', message: readableError(error) };
+  }
+  if (data.queryExecutions.length === 0) {
+    return { kind: 'empty' };
+  }
+  return { kind: 'ready', list: data };
+}
+
 function deriveOperationalStatusState(
   status: 'pending' | 'error' | 'success',
   data: OperationalStatus | undefined,
@@ -704,6 +792,10 @@ function isCancellation(error: Error): boolean {
 
 function isWorkspaceMode(value: string): value is WorkspaceMode {
   return value === 'query' || value === 'operations';
+}
+
+function isAsideMode(value: string): value is AsideMode {
+  return value === 'schema' || value === 'history';
 }
 
 function servicePhaseColor(phase: OperationalStatus['phase']): string {

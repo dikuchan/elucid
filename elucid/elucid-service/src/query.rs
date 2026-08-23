@@ -10,6 +10,8 @@ use elucid_engine::{
     QueryOutputRowLimitError, QueryResult,
 };
 use elucid_metastore::{
+    BoundedQueryExecutions, NewQueryExecution, QueryExecutionId, QueryExecutionListLimit,
+    QueryExecutionModelError, QueryExecutionPersistenceError, QueryExecutionStore,
     QueryRequestTimeRange, QuerySnapshot, QuerySnapshotError, QuerySnapshotLimits,
     QuerySnapshotStore,
 };
@@ -23,6 +25,7 @@ pub(crate) struct QueryBoundary {
 
 #[derive(Debug)]
 struct QueryShared {
+    executions: QueryExecutionStore,
     snapshots: QuerySnapshotStore,
     snapshot_limits: QuerySnapshotLimits,
     engine: QueryEngine,
@@ -34,6 +37,7 @@ impl QueryBoundary {
     pub(crate) fn new(
         query: &QueryConfiguration,
         local_storage: &LocalStorageConfiguration,
+        executions: QueryExecutionStore,
         snapshots: QuerySnapshotStore,
         objects: QueryObjectStore,
     ) -> Result<Self, QueryInitializationError> {
@@ -61,6 +65,7 @@ impl QueryBoundary {
         )?;
         Ok(Self {
             inner: Arc::new(QueryShared {
+                executions,
                 snapshots,
                 snapshot_limits,
                 engine,
@@ -93,6 +98,13 @@ impl QueryBoundary {
         })
     }
 
+    pub(crate) async fn recent(
+        &self,
+        limit: QueryExecutionListLimit,
+    ) -> Result<BoundedQueryExecutions, QueryExecutionPersistenceError> {
+        self.inner.executions.recent(limit).await
+    }
+
     pub(crate) fn begin_shutdown(&self) {
         self.inner.concurrency.close();
         self.inner.shutdown.cancel();
@@ -121,6 +133,7 @@ pub(crate) struct AdmittedQuery {
 impl AdmittedQuery {
     pub(crate) async fn execute(
         self,
+        query_id: QueryExecutionId,
         query: String,
         request_range: QueryRequestTimeRange,
         output_rows: u64,
@@ -131,13 +144,21 @@ impl AdmittedQuery {
             .limits()
             .output_row_limit(output_rows)
             .map_err(QueryFailure::OutputRowLimit)?;
+        let execution = NewQueryExecution::new(query_id, query, request_range, output_rows)
+            .map_err(QueryFailure::ExecutionModel)?;
+        let execution = self
+            .inner
+            .executions
+            .record(execution)
+            .await
+            .map_err(QueryFailure::Persistence)?;
         let snapshot_shutdown = self.inner.shutdown.clone();
         let snapshot = tokio::select! {
             biased;
             () = snapshot_shutdown.cancelled_owned() => return Err(QueryFailure::Cancelled),
             result = self.inner.snapshots.select(
-                &query,
-                request_range,
+                execution.query(),
+                execution.time_range(),
                 self.inner.snapshot_limits,
             ) => result.map_err(QueryFailure::Snapshot)?,
         };
@@ -189,6 +210,8 @@ impl CompletedQuery {
 
 #[derive(Debug)]
 pub(crate) enum QueryFailure {
+    ExecutionModel(QueryExecutionModelError),
+    Persistence(QueryExecutionPersistenceError),
     Snapshot(QuerySnapshotError),
     Engine(EngineError),
     OutputRowLimit(QueryOutputRowLimitError),
