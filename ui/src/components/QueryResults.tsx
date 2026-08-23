@@ -107,18 +107,18 @@ function ResultBody({ state }: Readonly<{ state: QueryResultState }>) {
       return (
         <EmptyResult
           title="No query result"
-          message="Run the query to read an exact segment snapshot."
+          message="Run a query to see results."
         />
       );
     case 'running':
-      return <PendingResult message="Planning and scanning exact objects…" />;
+      return <PendingResult message="Running query…" />;
     case 'cancelling':
-      return <PendingResult message="Waiting for query cancellation…" />;
+      return <PendingResult message="Cancelling query…" />;
     case 'cancelled':
       return (
         <EmptyResult
           title="Query cancelled"
-          message="The browser disconnected the in-process execution."
+          message="No results were returned."
         />
       );
     case 'error':
@@ -128,7 +128,7 @@ function ResultBody({ state }: Readonly<{ state: QueryResultState }>) {
         return (
           <EmptyResult
             title="No matching rows"
-            message="The query completed successfully for this UTC range."
+            message="No rows matched this query and time range."
           />
         );
       }
@@ -289,7 +289,7 @@ function ResultStatistics({
           title={execution.queryId}
           className={classes.identity}
         >
-          Exact snapshot · schema v{execution.activeSchemaVersion} · query{' '}
+          Schema v{execution.activeSchemaVersion} · query{' '}
           {execution.queryId.slice(0, 8)}
         </Text>
       </Group>

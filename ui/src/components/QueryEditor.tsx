@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { lintGutter, setDiagnostics } from '@codemirror/lint';
 import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap } from '@codemirror/view';
+import { EditorView } from '@codemirror/view';
 import { basicSetup } from 'codemirror';
 
 import type { QueryDiagnostic } from '../api/contracts';
 import classes from '../App.module.css';
 import { diagnosticsForEditor } from '../query/diagnostics';
 import { eqlLanguageSupport } from '../query/eql';
+import { queryRunKeymap } from '../query/shortcuts';
 
 interface QueryEditorProps {
   readonly value: string;
@@ -55,15 +56,9 @@ export function QueryEditor({
             'aria-label': 'Query editor',
             'aria-keyshortcuts': 'Control+Enter Meta+Enter',
           }),
-          keymap.of([
-            {
-              key: 'Mod-Enter',
-              run: () => {
-                onRunRef.current();
-                return true;
-              },
-            },
-          ]),
+          queryRunKeymap(() => {
+            onRunRef.current();
+          }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onChangeRef.current(update.state.doc.toString());

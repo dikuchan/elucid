@@ -24,13 +24,11 @@ declare const classes: {
   readonly panelHeader: string;
   readonly queryEditor: string;
   readonly rail: string;
-  readonly railFooter: string;
   readonly resultsFooter: string;
   readonly resultsPanel: string;
   readonly resultCell: string;
   readonly resultState: string;
   readonly rowsInput: string;
-  readonly sameOriginBadge: string;
   readonly schemaVersion: string;
   readonly shell: string;
   readonly sourceActive: string;

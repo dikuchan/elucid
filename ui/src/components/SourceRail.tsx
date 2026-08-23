@@ -86,11 +86,6 @@ export function SourceRail({ state, onSelect, onRetry }: SourceRailProps) {
           />
         </Box>
       </AppShell.Section>
-      <AppShell.Section p="md" className={classes.railFooter}>
-        <Text size="xs" c="dimmed">
-          {sourceFooter(state)}
-        </Text>
-      </AppShell.Section>
     </>
   );
 }
@@ -146,10 +141,7 @@ function SourceListBody({
       return (
         <Box p="sm">
           <Text size="sm" fw={650}>
-            No sources
-          </Text>
-          <Text size="xs" c="dimmed" mt={4}>
-            Apply a catalog before running queries.
+            No sources configured
           </Text>
         </Box>
       );
@@ -197,20 +189,5 @@ function SourceListBody({
           })}
         </Stack>
       );
-  }
-}
-
-function sourceFooter(state: SourceRailState): string {
-  switch (state.kind) {
-    case 'loading':
-      return 'Loading the bounded catalog…';
-    case 'error':
-      return 'Catalog read failed';
-    case 'empty':
-      return 'Catalog is empty';
-    case 'ready':
-      return state.list.completion === 'TRUNCATED'
-        ? `Showing the first ${String(state.list.limit)} sources`
-        : 'Bounded catalog view';
   }
 }

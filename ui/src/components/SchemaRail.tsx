@@ -58,7 +58,7 @@ function SchemaHeading({ state }: Readonly<{ state: SchemaRailState }>) {
     case 'none':
       return (
         <Text size="xs" c="dimmed" mt="xs">
-          Select a source to inspect its schema.
+          Select a source to view its schema.
         </Text>
       );
     case 'loading':

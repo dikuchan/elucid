@@ -69,9 +69,6 @@ export function OperationsWorkspace({
               <Text fw={650}>
                 {source?.displayName ?? 'No source selected'}
               </Text>
-              <Badge size="xs" variant="outline" color="gray">
-                bounded live state
-              </Badge>
             </Group>
           </Box>
           <Button size="xs" variant="default" onClick={onRefresh}>
@@ -161,9 +158,9 @@ function LoadedOperationalOverview({
         <OperationalCard
           label="Maintenance"
           value={status.maintenance.ownership}
-          badge={`${String(status.maintenance.recentCompactions.length)} recent`}
-          badgeColor={maintenanceColor(status.maintenance.ownership)}
-          detail="Compaction ownership and recent bounded work"
+          badge={status.components.maintenance}
+          badgeColor={componentColor(status.components.maintenance)}
+          detail={`${String(status.maintenance.recentCompactions.length)} recent compactions`}
         />
       </SimpleGrid>
 
@@ -499,7 +496,7 @@ function OperationalListState<
   switch (state.kind) {
     case 'no-source':
       return (
-        <EmptyOperationalState message="Select a source to inspect its operational state." />
+        <EmptyOperationalState message="Select a source to view its segments and dead letters." />
       );
     case 'loading':
       return (
@@ -514,7 +511,7 @@ function OperationalListState<
         <Center className={classes.operationalState}>
           <Stack gap={4} align="center">
             <Text size="sm" fw={650}>
-              Operational list unavailable
+              Data unavailable
             </Text>
             <Text size="xs" c="dimmed" ta="center">
               {state.message}
@@ -588,21 +585,6 @@ function componentColor(status: ComponentStatus): string {
       return 'orange';
     case 'DOWN':
       return 'red';
-  }
-}
-
-function maintenanceColor(
-  ownership: OperationalStatus['maintenance']['ownership'],
-): string {
-  switch (ownership) {
-    case 'OWNED':
-      return 'teal';
-    case 'STANDBY':
-      return 'orange';
-    case 'STARTING':
-      return 'gray';
-    case 'DISABLED':
-      return 'gray';
   }
 }
 

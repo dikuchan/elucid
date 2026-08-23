@@ -40,10 +40,6 @@
   border-color: var(--elucid-border);
 }
 
-.railFooter {
-  border-top: 1px solid var(--elucid-border);
-}
-
 .eyebrow {
   letter-spacing: 0.08em;
 }
@@ -309,10 +305,6 @@
 }
 
 @media (max-width: 47.99em) {
-  .sameOriginBadge {
-    display: none;
-  }
-
   .workspace {
     padding: var(--mantine-spacing-xs);
   }

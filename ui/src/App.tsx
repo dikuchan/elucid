@@ -286,14 +286,9 @@ export function App() {
             <Box className={classes.brandMark} aria-hidden="true">
               E
             </Box>
-            <Box>
-              <Title order={1} size="h4" className={classes.brandTitle}>
-                Elucid
-              </Title>
-              <Text size="xs" c="dimmed">
-                Event data workspace
-              </Text>
-            </Box>
+            <Title order={1} size="h4" className={classes.brandTitle}>
+              Elucid
+            </Title>
           </Group>
           <Group gap="xs" wrap="nowrap">
             <SegmentedControl
@@ -308,17 +303,9 @@ export function App() {
                   setWorkspaceMode(value);
                 }
               }}
-              aria-label="Workspace view"
+              aria-label="Main view"
             />
             <ServiceBadge state={operationalStatusState} />
-            <Badge
-              variant="dot"
-              color="cyan"
-              size="sm"
-              className={classes.sameOriginBadge}
-            >
-              same origin
-            </Badge>
           </Group>
         </Group>
       </AppShell.Header>
@@ -469,7 +456,7 @@ export function App() {
                   </Badge>
                 </Group>
                 <Text size="xs" c="dimmed">
-                  Ctrl/⌘ ↵ to run
+                  ⌘/Ctrl + Enter
                 </Text>
               </Group>
               <Suspense fallback={<Skeleton height={152} radius={0} />}>
@@ -734,7 +721,7 @@ function servicePhaseColor(phase: OperationalStatus['phase']): string {
 
 function readableError(error: Error | null): string {
   if (error === null) {
-    return 'The API did not return usable data.';
+    return 'No data was returned.';
   }
   if (!(error instanceof ApiClientError)) {
     return error.message;
@@ -747,6 +734,6 @@ function readableError(error: Error | null): string {
     case 'http':
       return `${error.failure.code}: ${error.failure.message}`;
     case 'invalid-response':
-      return 'The server returned data that does not match the UI contract.';
+      return 'The server returned an invalid response.';
   }
 }
