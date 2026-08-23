@@ -1,32 +1,70 @@
 data_dir: /var/lib/vector
 
 sources:
-  demo_logs:
+  generated_http_logs:
+    type: demo_logs
+    format: json
+    interval: 0.002
+    decoding:
+      codec: json
+
+  invalid_status_fixture:
     type: demo_logs
     format: shuffle
-    interval: 1.0
+    interval: 60.0
     lines:
-      - '{"message":"Blocked login","service":"auth","status":401,"region":"eu-west-1","actor":"alice"}'
-      - '{"message":"Gateway failure","service":"edge","status":502,"region":"us-east-1","trace_id":"demo-trace"}'
-      - '{"message":"Background job completed","service":"worker","region":"eu-central-1","duration_ms":37}'
       - '{"message":"Invalid status fixture","service":"auth","status":"not-an-integer","region":"eu-west-1"}'
     decoding:
       codec: json
 
 transforms:
-  prepare_for_elucid:
+  prepare_generated_http_logs:
     type: remap
     inputs:
-      - demo_logs
+      - generated_http_logs
+    source: |
+      .message = join!([
+        to_string!(.method),
+        to_string!(.request),
+        to_string!(.protocol),
+        to_string!(.status),
+      ], " ")
+      .status = to_int!(.status)
+      service_roll = random_int(min: 0, max: 3)
+      .service = if service_roll == 0 {
+        "auth"
+      } else if service_roll == 1 {
+        "edge"
+      } else {
+        "api"
+      }
+      region_roll = random_int(min: 0, max: 3)
+      .region = if region_roll == 0 {
+        "eu-west-1"
+      } else if region_roll == 1 {
+        "us-east-1"
+      } else {
+        "eu-central-1"
+      }
+      .trace_id = uuid_v7()
+      .timestamp = format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ")
+      del(.source_type)
+
+  prepare_invalid_status_fixture:
+    type: remap
+    inputs:
+      - invalid_status_fixture
     source: |
       .timestamp = format_timestamp!(now(), format: "%Y-%m-%dT%H:%M:%S%.3fZ")
+      .fixture_id = uuid_v7()
       del(.source_type)
 
 sinks:
   elucid:
     type: http
     inputs:
-      - prepare_for_elucid
+      - prepare_generated_http_logs
+      - prepare_invalid_status_fixture
     uri: http://elucid:58080/api/v1/sources/demo_logs/inputs/vector/events
     method: post
     compression: none
@@ -36,8 +74,8 @@ sinks:
       method: newline_delimited
     batch:
       max_bytes: 4194304
-      max_events: 16
-      timeout_secs: 15
+      max_events: 5000
+      timeout_secs: 2
     buffer:
       type: disk
       max_size: 536870912

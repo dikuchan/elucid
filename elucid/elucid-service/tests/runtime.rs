@@ -491,6 +491,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
             .expect("Parquet byte count")
             > 0
     );
+    wait_for_status(&client, &format!("{endpoint}/health/ready"), StatusCode::OK).await;
 
     let query = client
         .post(format!("{endpoint}/api/v1/query-executions"))

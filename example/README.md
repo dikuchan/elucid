@@ -36,11 +36,15 @@ The current implementation reports the maintenance component as `DEGRADED` becau
 
 ## Continuous ingestion
 
-Vector emits one event per second from a fixed set of security-event templates. It writes newline-delimited JSON with an explicit `application/x-ndjson` content type, batches at most 16 events or 4 MiB, formats event time at Elucid's millisecond precision, and keeps a bounded 512 MiB disk buffer with blocking backpressure.
+Vector generates randomized HTTP logs at a nominal rate of 500 events per second. Each event has varying request, host, method, protocol, status, byte count, referer, and user values; the transform adds a UUIDv7 trace ID, assigns a low-cardinality service and region, converts status to an integer, and formats event time at Elucid's millisecond precision. The actual rate depends on the host and on downstream backpressure.
 
-Three templates are valid. One intentionally sends `status` as a string, so each mixed batch proves that valid rows remain queryable while the invalid row is published as a dead letter. Extra fields such as `actor`, `trace_id`, `duration_ms`, and the initial `region` value are preserved in `@rest`.
+The HTTP sink writes newline-delimited JSON with an explicit `application/x-ndjson` content type and batches at most 5,000 events, 4 MiB, or two seconds. Elucid keeps builders open across these transport batches and seals them after at most ten seconds, so an unconstrained run produces roughly 5,000-row segments instead of one Parquet object per HTTP request. Vector retains a bounded 512 MiB disk buffer with blocking backpressure.
 
-Allow up to one 15-second Vector batch interval, then inspect ingestion and publication:
+A separate fixture emits one record with an invalid status at startup and every 60 seconds. This keeps dead-letter handling continuously observable without making object publication for rejected records dominate the normal ingestion workload. Generated fields not declared by the active schema, including the HTTP request details, trace ID, and initial region value, are preserved in `@rest`.
+
+This workload would generate 43.2 million events per day at its nominal unconstrained rate. It is intended for bounded local runs; stop the stack when it is not being exercised and use the cleanup command below when its retained data is no longer needed.
+
+Allow about 15 seconds for the first age-sealed segment, then inspect ingestion and publication:
 
 ```shell
 env -u DOCKER_DEFAULT_PLATFORM docker compose logs --tail=100 vector elucid
@@ -83,7 +87,7 @@ Then activate ingestion profile revision 2 so new events physically store `regio
 env -u DOCKER_DEFAULT_PLATFORM docker compose run --rm --no-deps --entrypoint elucid catalog-init catalog apply --endpoint http://elucid:58080 --file /example/catalog/demo-logs-region-promoted.yaml
 ```
 
-After another Vector batch, the Operations workspace shows both schema versions. The same query reads old remainder-backed values and new promoted values through one typed `region` column. Re-running `docker compose up` does not overwrite an existing catalog or undo this promotion.
+After the next segment publication, the Operations workspace shows both schema versions. The same query reads old remainder-backed values and new promoted values through one typed `region` column. Re-running `docker compose up` does not overwrite an existing catalog or undo this promotion.
 
 ## Restart and dependency recovery
 

@@ -110,7 +110,7 @@ services:
     volumes:
       - ./vector.yaml:/etc/vector/vector.yaml:ro
       - vector-data:/var/lib/vector
-    stop_grace_period: 20s
+    stop_grace_period: 70s
 
 volumes:
   elucid-scratch:

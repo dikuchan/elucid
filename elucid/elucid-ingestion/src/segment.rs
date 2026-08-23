@@ -14,7 +14,7 @@ use crate::{
 
 const TARGET_SEGMENT_ROWS: usize = 50_000;
 const TARGET_SEGMENT_ESTIMATED_BYTES: u64 = 64 * 1024 * 1024;
-const MAXIMUM_SEGMENT_OPEN_DURATION: Duration = Duration::from_secs(30);
+const MAXIMUM_SEGMENT_OPEN_DURATION: Duration = Duration::from_secs(10);
 const MAXIMUM_OPEN_SEGMENT_BUILDERS: usize = 32;
 const MAXIMUM_SEGMENT_BUILDER_MEMORY_BYTES: u64 = 256 * 1024 * 1024;
 // Resident accounting is intentionally conservative but is not allocator telemetry.
@@ -449,6 +449,32 @@ impl SegmentBuilders {
             maximum_estimated_resident_bytes: self.limits.maximum_estimated_resident_bytes,
             maximum_staging_bytes: self.limits.maximum_staging_bytes,
         }
+    }
+
+    /// Returns the remaining time before the oldest open builder must seal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `observed_at` precedes an earlier observation.
+    pub fn next_expiration_in(
+        &self,
+        observed_at: Instant,
+    ) -> Result<Option<Duration>, SegmentBuildError> {
+        if self
+            .last_observed_at
+            .is_some_and(|previous| observed_at < previous)
+        {
+            return Err(SegmentBuildError::ClockMovedBackwards);
+        }
+        self.open.values().try_fold(None, |earliest, builder| {
+            let age = observed_at
+                .checked_duration_since(builder.opened_at)
+                .ok_or(SegmentBuildError::ClockMovedBackwards)?;
+            let remaining = self.limits.maximum_open_duration.saturating_sub(age);
+            Ok(Some(earliest.map_or(remaining, |current: Duration| {
+                current.min(remaining)
+            })))
+        })
     }
 
     /// Adds one normalized batch or returns it unchanged when queued segment data must drain first.
@@ -1160,6 +1186,57 @@ not-json
             .expect("aged segment");
         assert_eq!(aged.event_day().as_date().to_string(), "2026-08-22");
         assert_eq!(aged.sealing_reason(), SealingReason::MaximumAge);
+    }
+
+    #[test]
+    fn expiration_wait_tracks_the_first_row_without_resetting_on_append() {
+        let fixture = Fixture::new();
+        let limits = SegmentBuildLimits::for_test(
+            100,
+            1_000_000,
+            Duration::from_secs(10),
+            8,
+            1_000_000,
+            1_000_000,
+        );
+        let mut builders = SegmentBuilders::with_limits(limits);
+        let started_at = Instant::now();
+
+        assert_eq!(
+            builders
+                .next_expiration_in(started_at)
+                .expect("monotonic clock"),
+            None
+        );
+        push(
+            &mut builders,
+            fixture.normalize(25, &event("2026-08-20", "first")),
+            started_at,
+        );
+        assert_eq!(
+            builders
+                .next_expiration_in(started_at + Duration::from_secs(4))
+                .expect("monotonic clock"),
+            Some(Duration::from_secs(6))
+        );
+
+        push(
+            &mut builders,
+            fixture.normalize(26, &event("2026-08-20", "second")),
+            started_at + Duration::from_secs(6),
+        );
+        assert_eq!(
+            builders
+                .next_expiration_in(started_at + Duration::from_secs(7))
+                .expect("monotonic clock"),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(
+            builders
+                .next_expiration_in(started_at + Duration::from_secs(10))
+                .expect("monotonic clock"),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]

@@ -141,6 +141,12 @@ struct PendingBatch {
     ingestion_time: elucid_ingestion::IngestionTime,
 }
 
+#[derive(Debug)]
+enum ProcessingWakeup {
+    Batch(RecoveredBatch),
+    SegmentExpiration,
+}
+
 impl<'a> Processor<'a> {
     async fn start(
         boundary: &'a IngestionBoundary,
@@ -369,15 +375,31 @@ impl<'a> Processor<'a> {
                 self.process_batch(batch).await?;
                 self.drain_sealed_segments().await?;
             }
-            self.builders.flush_all()?;
-            self.drain_sealed_segments().await?;
             self.advance_checkpoint().await?;
-            let batch = tokio::select! {
-                () = self.cancellation.cancelled() => return Err(IngestionProcessingError::Cancelled),
-                result = self.batches.wait_next_batch() => result?,
-            };
-            self.process_batch(batch).await?;
+            match self.wait_for_work().await? {
+                ProcessingWakeup::Batch(batch) => self.process_batch(batch).await?,
+                ProcessingWakeup::SegmentExpiration => {
+                    self.builders.seal_expired(Instant::now())?;
+                }
+            }
             self.drain_sealed_segments().await?;
+        }
+    }
+
+    async fn wait_for_work(&mut self) -> Result<ProcessingWakeup, IngestionProcessingError> {
+        let expiration = self.builders.next_expiration_in(Instant::now())?;
+        let cancellation = &self.cancellation;
+        let batches = &mut self.batches;
+        match expiration {
+            Some(expiration) => tokio::select! {
+                () = cancellation.cancelled() => Err(IngestionProcessingError::Cancelled),
+                result = batches.wait_next_batch() => Ok(ProcessingWakeup::Batch(result?)),
+                () = tokio::time::sleep(expiration) => Ok(ProcessingWakeup::SegmentExpiration),
+            },
+            None => tokio::select! {
+                () = cancellation.cancelled() => Err(IngestionProcessingError::Cancelled),
+                result = batches.wait_next_batch() => Ok(ProcessingWakeup::Batch(result?)),
+            },
         }
     }
 
