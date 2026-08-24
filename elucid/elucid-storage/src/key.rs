@@ -111,6 +111,32 @@ impl ManagedObjectKey {
         )
     }
 
+    /// Reconstructs a typed dead-letter key from exact persisted metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the key is not canonical or does not encode the expected owner and
+    /// object identities.
+    pub fn parse_dead_letter(
+        value: &str,
+        batch_id: BatchId,
+        object_id: StoredObjectId,
+    ) -> Result<Self, StorageModelError> {
+        let suffix = format!("dead-letters/{batch_id}/{object_id}.ndjson");
+        let root = if value == suffix {
+            ""
+        } else {
+            value
+                .strip_suffix(&format!("/{suffix}"))
+                .ok_or(StorageModelError::DeadLetterManagedKeyIdentityMismatch)?
+        };
+        let key = Self::dead_letter(&ManagedRoot::parse(root)?, batch_id, object_id);
+        if key.as_str() != value {
+            return Err(StorageModelError::DeadLetterManagedKeyIdentityMismatch);
+        }
+        Ok(key)
+    }
+
     fn new(
         root: &ManagedRoot,
         namespace: &'static str,
@@ -165,7 +191,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{ManagedObjectKey, ManagedRoot};
-    use crate::{SegmentId, StorageModelError, StoredObjectId};
+    use crate::{BatchId, SegmentId, StorageModelError, StoredObjectId};
 
     #[test]
     fn persisted_parquet_key_rehydrates_only_for_its_exact_identities() {
@@ -188,5 +214,32 @@ mod tests {
             error,
             StorageModelError::ParquetManagedKeyIdentityMismatch
         ));
+    }
+
+    #[test]
+    fn persisted_dead_letter_key_rehydrates_only_for_its_exact_identities() {
+        let root = ManagedRoot::parse("nested/elucid").expect("managed root");
+        let batch_id = BatchId::try_from(uuid_v7(1)).expect("batch identity");
+        let object_id = StoredObjectId::from(uuid_v7(2));
+        let key = ManagedObjectKey::dead_letter(&root, batch_id, object_id);
+
+        let rehydrated = ManagedObjectKey::parse_dead_letter(key.as_str(), batch_id, object_id)
+            .expect("rehydrate exact key");
+        assert_eq!(rehydrated, key);
+
+        let error = ManagedObjectKey::parse_dead_letter(
+            key.as_str(),
+            batch_id,
+            StoredObjectId::from(uuid_v7(3)),
+        )
+        .expect_err("different object identity must reject the stored key");
+        assert!(matches!(
+            error,
+            StorageModelError::DeadLetterManagedKeyIdentityMismatch
+        ));
+    }
+
+    fn uuid_v7(sequence: u64) -> Uuid {
+        Uuid::from_u128(0x019d_0000_0000_7000_8000_0000_0000_0000 | u128::from(sequence))
     }
 }

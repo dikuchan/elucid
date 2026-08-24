@@ -7,6 +7,7 @@ mod migration;
 mod publication;
 mod query;
 mod query_execution;
+mod reclamation;
 mod retention;
 
 pub use catalog::{CatalogApplyOutcome, CatalogSnapshot, CatalogStore};
@@ -37,6 +38,12 @@ pub use query_execution::{
     BoundedQueryExecutions, MAXIMUM_RETAINED_QUERY_EXECUTIONS, NewQueryExecution, QueryExecutionId,
     QueryExecutionListLimit, QueryExecutionModelError, QueryExecutionPersistenceError,
     QueryExecutionPersistenceErrorKind, QueryExecutionRecord, QueryExecutionStore,
+};
+pub use reclamation::{
+    MAXIMUM_OBJECT_RECLAMATION_ITEMS, ObjectDeletionAttempt, ObjectDeletionClaim,
+    ObjectDeletionCompletion, ObjectDeletionFailure, ObjectDeletionFailureRecording,
+    ObjectDeletionRetryDelay, ObjectReclamationError, ObjectReclamationErrorKind,
+    ObjectReclamationLimit, ObjectReclamationModelError, ObjectReclamationStore,
 };
 pub use retention::{
     MAXIMUM_RETENTION_SCAN_ITEMS, ReclamationGracePeriod, RetentionError, RetentionErrorCode,

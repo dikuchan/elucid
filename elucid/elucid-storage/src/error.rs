@@ -25,6 +25,9 @@ pub enum StorageModelError {
     #[error("stored Parquet object key does not match its segment and object identities")]
     ParquetManagedKeyIdentityMismatch,
 
+    #[error("stored dead-letter object key does not match its batch and object identities")]
+    DeadLetterManagedKeyIdentityMismatch,
+
     #[error("object format version must be positive")]
     ObjectFormatVersionMustBePositive,
 

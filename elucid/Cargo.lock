@@ -1949,10 +1949,12 @@ dependencies = [
 name = "elucid-metastore"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "chrono",
  "elucid-catalog",
  "elucid-language",
  "elucid-storage",
+ "object_store",
  "serde_json",
  "sqlx",
  "testcontainers-modules",
