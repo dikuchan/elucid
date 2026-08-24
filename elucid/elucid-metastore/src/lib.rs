@@ -46,6 +46,7 @@ pub use reclamation::{
     ObjectReclamationLimit, ObjectReclamationModelError, ObjectReclamationStore,
 };
 pub use retention::{
-    MAXIMUM_RETENTION_SCAN_ITEMS, ReclamationGracePeriod, RetentionError, RetentionErrorCode,
+    MAXIMUM_METADATA_CLEANUP_ROOTS, MAXIMUM_RETENTION_SCAN_ITEMS, MetadataCleanup,
+    MetadataCleanupLimit, ReclamationGracePeriod, RetentionError, RetentionErrorCode,
     RetentionErrorKind, RetentionModelError, RetentionScanLimit, RetentionStore, SegmentExpiration,
 };

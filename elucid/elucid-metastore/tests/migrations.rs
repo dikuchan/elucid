@@ -71,7 +71,7 @@ async fn assert_table_contract(pool: &PgPool) {
         .fetch_all(pool)
         .await
         .expect("load SQLx migration ledger");
-    assert_eq!(applied.len(), 3);
+    assert_eq!(applied.len(), 4);
     assert_eq!(applied[0].get::<i64, _>("version"), 1);
     assert_eq!(applied[0].get::<String, _>("description"), "control plane");
     assert!(applied[0].get::<bool, _>("success"));
@@ -87,6 +87,12 @@ async fn assert_table_contract(pool: &PgPool) {
         "retention expiration"
     );
     assert!(applied[2].get::<bool, _>("success"));
+    assert_eq!(applied[3].get::<i64, _>("version"), 4);
+    assert_eq!(
+        applied[3].get::<String, _>("description"),
+        "terminal metadata cleanup"
+    );
+    assert!(applied[3].get::<bool, _>("success"));
 }
 
 async fn assert_index_contract(pool: &PgPool) {
@@ -100,6 +106,7 @@ async fn assert_index_contract(pool: &PgPool) {
     .collect::<BTreeSet<_>>();
     let required = [
         "compaction_runs_by_state_and_update",
+        "compaction_runs_terminal_cleanup",
         "query_executions_recent",
         "segments_active_query",
         "segments_by_claimed_run",
