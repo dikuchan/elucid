@@ -218,6 +218,9 @@ pub enum CompactionModelError {
 
     #[error("compaction output retention timestamp exceeds PostgreSQL precision")]
     OutputRetentionPrecisionUnsupported,
+
+    #[error("compaction recovery limit must be between 1 and {maximum} runs")]
+    RecoveryLimitOutOfRange { maximum: u64 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -267,6 +270,7 @@ impl CompactionMetadataError {
             | CompactionMetadataErrorSource::CatalogModel(_)
             | CompactionMetadataErrorSource::StorageModel(_)
             | CompactionMetadataErrorSource::Database(_)
+            | CompactionMetadataErrorSource::AmbiguousCommit { .. }
             | CompactionMetadataErrorSource::Invariant(_) => None,
         }
     }
@@ -278,14 +282,14 @@ impl CompactionMetadataError {
         }
     }
 
-    fn unavailable(source: sqlx::Error) -> Self {
+    pub(crate) fn unavailable(source: sqlx::Error) -> Self {
         Self {
             kind: CompactionMetadataErrorKind::Unavailable,
             source: CompactionMetadataErrorSource::Database(source),
         }
     }
 
-    fn read(source: sqlx::Error) -> Self {
+    pub(crate) fn read(source: sqlx::Error) -> Self {
         let kind = if is_row_decode_error(&source) {
             CompactionMetadataErrorKind::Corrupt
         } else {
@@ -297,7 +301,7 @@ impl CompactionMetadataError {
         }
     }
 
-    fn write(source: sqlx::Error) -> Self {
+    pub(crate) fn write(source: sqlx::Error) -> Self {
         let kind = if is_database_conflict(&source) {
             CompactionMetadataErrorKind::Conflict
         } else {
@@ -309,14 +313,14 @@ impl CompactionMetadataError {
         }
     }
 
-    fn conflict(message: &'static str) -> Self {
+    pub(crate) fn conflict(message: &'static str) -> Self {
         Self {
             kind: CompactionMetadataErrorKind::Conflict,
             source: CompactionMetadataErrorSource::Invariant(message),
         }
     }
 
-    fn corrupt(message: &'static str) -> Self {
+    pub(crate) fn corrupt(message: &'static str) -> Self {
         Self {
             kind: CompactionMetadataErrorKind::Corrupt,
             source: CompactionMetadataErrorSource::Invariant(message),
@@ -341,6 +345,19 @@ impl CompactionMetadataError {
         Self {
             kind: CompactionMetadataErrorKind::Corrupt,
             source: CompactionMetadataErrorSource::StorageModel(source),
+        }
+    }
+
+    pub(crate) fn ambiguous_commit(
+        commit: sqlx::Error,
+        resolution: CompactionMetadataError,
+    ) -> Self {
+        Self {
+            kind: CompactionMetadataErrorKind::Unavailable,
+            source: CompactionMetadataErrorSource::AmbiguousCommit {
+                commit,
+                resolution: Box::new(resolution),
+            },
         }
     }
 }
@@ -369,6 +386,14 @@ enum CompactionMetadataErrorSource {
     StorageModel(#[source] StorageModelError),
     #[error("PostgreSQL operation failed")]
     Database(#[source] sqlx::Error),
+    #[error(
+        "PostgreSQL commit failed with {commit}; durable outcome resolution also failed with {resolution}"
+    )]
+    AmbiguousCommit {
+        commit: sqlx::Error,
+        #[source]
+        resolution: Box<CompactionMetadataError>,
+    },
     #[error("{0}")]
     Invariant(&'static str),
 }
@@ -605,7 +630,8 @@ pub enum MaintenanceOwnership {
 }
 
 pub struct MaintenanceOwner {
-    guard: PgAdvisoryLockGuard<'static, PoolConnection<Postgres>>,
+    pub(crate) guard: PgAdvisoryLockGuard<'static, PoolConnection<Postgres>>,
+    pub(crate) resolution_pool: PgPool,
 }
 
 impl MaintenanceOwner {
@@ -649,7 +675,10 @@ impl CompactionStore {
             .await
             .map_err(CompactionMetadataError::unavailable)?
         {
-            Either::Left(guard) => Ok(MaintenanceOwnership::Acquired(MaintenanceOwner { guard })),
+            Either::Left(guard) => Ok(MaintenanceOwnership::Acquired(MaintenanceOwner {
+                guard,
+                resolution_pool: self.pool.clone(),
+            })),
             Either::Right(connection) => {
                 drop(connection);
                 Ok(MaintenanceOwnership::HeldElsewhere)

@@ -2,6 +2,7 @@
 
 mod catalog;
 mod compaction;
+mod compaction_lifecycle;
 mod error;
 mod inspection;
 mod migration;
@@ -19,6 +20,10 @@ pub use compaction::{
     CompactionOutputRegistrationOutcome, CompactionRunClaim, CompactionRunId, CompactionStore,
     MAXIMUM_COMPACTION_CANDIDATE_SEGMENTS, MAXIMUM_COMPACTION_INPUT_SEGMENTS,
     MAXIMUM_COMPACTION_OUTPUT_SEGMENTS, MaintenanceOwner, MaintenanceOwnership,
+};
+pub use compaction_lifecycle::{
+    CompactionFailureCode, CompactionFailureOutcome, CompactionPublicationOutcome,
+    CompactionRecovery, CompactionRecoveryLimit, MAXIMUM_COMPACTION_RECOVERY_RUNS,
 };
 pub use error::{
     CatalogPersistenceError, CatalogPersistenceErrorKind, MetastoreErrorCode,

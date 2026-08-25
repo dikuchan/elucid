@@ -52,7 +52,7 @@ impl ReclamationGracePeriod {
             .ok_or(RetentionModelError::ReclamationGraceOutOfRange)
     }
 
-    const fn seconds(self) -> i64 {
+    pub(crate) const fn seconds(self) -> i64 {
         self.0
     }
 }

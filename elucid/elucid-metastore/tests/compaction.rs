@@ -1,19 +1,23 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeZone as _, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone as _, Utc};
 use elucid_catalog::{CatalogManifest, SchemaId, SourceId};
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogStore, CompactionClaimLimitConfiguration, CompactionClaimLimits,
+    CompactionFailureCode, CompactionFailureOutcome, CompactionMetadataErrorKind,
     CompactionOutputRegistration, CompactionOutputRegistrationConfiguration,
-    CompactionOutputRegistrationOutcome, CompactionStore, IngestionSegmentRegistration,
-    IngestionSegmentTimes, MaintenanceOwnership, PublicationStore, RetentionPeriod, install,
+    CompactionOutputRegistrationOutcome, CompactionPublicationOutcome, CompactionRecoveryLimit,
+    CompactionRunClaim, CompactionStore, IngestionSegmentRegistration, IngestionSegmentTimes,
+    MaintenanceOwnership, OrphanGracePeriod, PublicationStore, ReclamationGracePeriod,
+    RetentionPeriod, install,
 };
 use elucid_storage::{
     ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
     ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::{Executor, Postgres as SqlxPostgres};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::{ImageExt as _, runners::AsyncRunner as _};
 use uuid::Uuid;
@@ -47,7 +51,7 @@ source:
 
 #[tokio::test]
 #[ignore = "requires Docker"]
-async fn maintenance_owner_claims_one_bounded_run_and_registers_only_a_smaller_exact_replacement() {
+async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
     let container = Postgres::default()
         .with_startup_timeout(Duration::from_secs(30))
         .start()
@@ -236,17 +240,219 @@ async fn maintenance_owner_claims_one_bounded_run_and_registers_only_a_smaller_e
         3
     );
 
+    for fixture in [
+        SegmentFixture::eligible_on_day(11, 111, 0, 2),
+        SegmentFixture::eligible_on_day(12, 112, 2, 2),
+        SegmentFixture::eligible_on_day(13, 113, 4, 2),
+        SegmentFixture::eligible_on_day(21, 121, 0, 3),
+        SegmentFixture::eligible_on_day(22, 122, 2, 3),
+        SegmentFixture::eligible_on_day(23, 123, 4, 3),
+    ] {
+        publish_segment(&publication, &root, source_id, schema_id, fixture).await;
+    }
+    let build_only_claim = owner
+        .claim(&limits)
+        .await
+        .expect("claim build-only run")
+        .expect("eligible build-only run");
+    assert_eq!(
+        input_segment_ids(&build_only_claim),
+        [segment_id(11), segment_id(12), segment_id(13)]
+    );
+    let incomplete_upload_claim = owner
+        .claim(&limits)
+        .await
+        .expect("claim incomplete-upload run")
+        .expect("eligible incomplete-upload run");
+    assert_eq!(
+        input_segment_ids(&incomplete_upload_claim),
+        [segment_id(21), segment_id(22), segment_id(23)]
+    );
+    let incomplete_outputs = replacement_outputs(&root, &incomplete_upload_claim, 221, 321);
+    compaction
+        .register_outputs(incomplete_upload_claim.run_id(), &incomplete_outputs)
+        .await
+        .expect("register incomplete-upload outputs");
+    publication
+        .record_verified_upload(incomplete_outputs[0].object())
+        .await
+        .expect("record one incomplete-upload object");
+    let incomplete_publication = owner
+        .publish_replacement(
+            incomplete_upload_claim.run_id(),
+            ReclamationGracePeriod::new(60, 1).expect("reclamation grace"),
+        )
+        .await
+        .expect_err("planned output must prevent publication");
+    assert_eq!(
+        incomplete_publication.kind(),
+        CompactionMetadataErrorKind::Conflict
+    );
+    assert_eq!(
+        run_state(&pool, incomplete_upload_claim.run_id().as_uuid()).await,
+        "UPLOADING"
+    );
+    assert_eq!(
+        active_claimed_input_count(&pool, incomplete_upload_claim.run_id().as_uuid()).await,
+        3
+    );
+    assert_eq!(
+        prepared_output_count(&pool, incomplete_upload_claim.run_id().as_uuid()).await,
+        2
+    );
+
+    for output in &outputs {
+        publication
+            .record_verified_upload(output.object())
+            .await
+            .expect("record compaction output upload");
+    }
+    let mut old_snapshot = pool.begin().await.expect("begin old query snapshot");
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *old_snapshot)
+        .await
+        .expect("set repeatable-read isolation");
+    let active_before =
+        active_segments_for_day(&mut *old_snapshot, source_id, claim.event_day()).await;
+    assert_eq!(
+        active_before,
+        [
+            segment_id(1),
+            segment_id(2),
+            segment_id(3),
+            segment_id(5),
+            segment_id(6),
+        ]
+    );
+    assert_eq!(
+        owner
+            .publish_replacement(
+                claim.run_id(),
+                ReclamationGracePeriod::new(60, 1).expect("reclamation grace"),
+            )
+            .await
+            .expect("publish compaction replacement"),
+        CompactionPublicationOutcome::Published
+    );
+    assert_eq!(
+        active_segments_for_day(&mut *old_snapshot, source_id, claim.event_day()).await,
+        active_before
+    );
+    old_snapshot
+        .rollback()
+        .await
+        .expect("close old query snapshot");
+    assert_eq!(
+        active_segments_for_day(&pool, source_id, claim.event_day()).await,
+        [
+            segment_id(5),
+            segment_id(6),
+            segment_id(201),
+            segment_id(202)
+        ]
+    );
+    assert_eq!(
+        owner
+            .publish_replacement(
+                claim.run_id(),
+                ReclamationGracePeriod::new(60, 1).expect("reclamation grace"),
+            )
+            .await
+            .expect("resolve repeated publication"),
+        CompactionPublicationOutcome::AlreadyPublished
+    );
+    assert_eq!(
+        owner
+            .fail_run(
+                claim.run_id(),
+                CompactionFailureCode::PublicationFailed,
+                OrphanGracePeriod::new(300).expect("orphan grace"),
+            )
+            .await
+            .expect("resolve committed run during failure handling"),
+        CompactionFailureOutcome::AlreadyCommitted
+    );
+    assert_committed_replacement(&pool, claim.run_id().as_uuid(), 3, 2, 61).await;
+
+    assert_eq!(
+        owner
+            .fail_run(
+                build_only_claim.run_id(),
+                CompactionFailureCode::BuildFailed,
+                OrphanGracePeriod::new(300).expect("orphan grace"),
+            )
+            .await
+            .expect("fail build-only run"),
+        CompactionFailureOutcome::Failed
+    );
+    assert_eq!(
+        owner
+            .fail_run(
+                build_only_claim.run_id(),
+                CompactionFailureCode::InputInvalid,
+                OrphanGracePeriod::new(600).expect("different orphan grace"),
+            )
+            .await
+            .expect("repeat build-only failure"),
+        CompactionFailureOutcome::AlreadyFailed
+    );
+    assert_failed_run(
+        &pool,
+        build_only_claim.run_id().as_uuid(),
+        "COMPACTION_BUILD_FAILED",
+        &input_segment_ids(&build_only_claim),
+        0,
+    )
+    .await;
+
     owner
         .release()
         .await
         .expect("release maintenance ownership");
-    assert!(matches!(
-        compaction
-            .try_acquire_maintenance()
+    let mut recovered_owner = match compaction
+        .try_acquire_maintenance()
+        .await
+        .expect("reacquire maintenance ownership")
+    {
+        MaintenanceOwnership::Acquired(owner) => owner,
+        MaintenanceOwnership::HeldElsewhere => panic!("released maintenance lock stayed held"),
+        _ => panic!("unknown maintenance ownership outcome"),
+    };
+    let recovery = recovered_owner
+        .recover_unfinished(
+            OrphanGracePeriod::new(300).expect("recovery orphan grace"),
+            CompactionRecoveryLimit::new(10).expect("recovery limit"),
+        )
+        .await
+        .expect("recover unfinished runs");
+    assert_eq!(recovery.failed_runs(), [incomplete_upload_claim.run_id()]);
+    assert_failed_run(
+        &pool,
+        incomplete_upload_claim.run_id().as_uuid(),
+        "COMPACTION_RECOVERY_FAILED",
+        &input_segment_ids(&incomplete_upload_claim),
+        2,
+    )
+    .await;
+    assert!(
+        recovered_owner
+            .recover_unfinished(
+                OrphanGracePeriod::new(300).expect("recovery orphan grace"),
+                CompactionRecoveryLimit::new(10).expect("recovery limit"),
+            )
             .await
-            .expect("reacquire maintenance ownership"),
-        MaintenanceOwnership::Acquired(_)
-    ));
+            .expect("repeat unfinished recovery")
+            .failed_runs()
+            .is_empty()
+    );
+    assert_eq!(
+        run_state(&pool, claim.run_id().as_uuid()).await,
+        "COMMITTED"
+    );
+    recovered_owner
+        .release()
+        .await
+        .expect("release recovered maintenance ownership");
 }
 
 #[derive(Clone, Copy)]
@@ -279,6 +485,22 @@ impl SegmentFixture {
             rows: 3,
             uncompressed_bytes: 30,
             day_offset: 86_400,
+        }
+    }
+
+    const fn eligible_on_day(
+        segment_sequence: u64,
+        object_sequence: u64,
+        first_second: i64,
+        day_offset: i64,
+    ) -> Self {
+        Self {
+            segment_sequence,
+            object_sequence,
+            first_second,
+            rows: 3,
+            uncompressed_bytes: 30,
+            day_offset: day_offset * 86_400,
         }
     }
 
@@ -368,6 +590,88 @@ fn output_registration(
     .expect("valid compaction output registration")
 }
 
+fn replacement_outputs(
+    root: &ManagedRoot,
+    claim: &CompactionRunClaim,
+    first_segment_sequence: u64,
+    first_object_sequence: u64,
+) -> Vec<CompactionOutputRegistration> {
+    let minimum_event_time = claim
+        .inputs()
+        .iter()
+        .map(|input| input.times().minimum_event_time())
+        .min()
+        .expect("claimed inputs");
+    let maximum_event_time = claim
+        .inputs()
+        .iter()
+        .map(|input| input.times().maximum_event_time())
+        .max()
+        .expect("claimed inputs");
+    let minimum_ingestion_time = claim
+        .inputs()
+        .iter()
+        .map(|input| input.times().minimum_ingestion_time())
+        .min()
+        .expect("claimed inputs");
+    let maximum_ingestion_time = claim
+        .inputs()
+        .iter()
+        .map(|input| input.times().maximum_ingestion_time())
+        .max()
+        .expect("claimed inputs");
+    [
+        OutputFixture {
+            segment_sequence: first_segment_sequence,
+            object_sequence: first_object_sequence,
+            times: IngestionSegmentTimes::new(
+                claim.event_day(),
+                minimum_event_time,
+                minimum_event_time + TimeDelta::seconds(3),
+                minimum_ingestion_time,
+                minimum_ingestion_time + TimeDelta::seconds(3),
+            )
+            .expect("first replacement bounds"),
+            rows: 5,
+            uncompressed_bytes: 50,
+        },
+        OutputFixture {
+            segment_sequence: first_segment_sequence + 1,
+            object_sequence: first_object_sequence + 1,
+            times: IngestionSegmentTimes::new(
+                claim.event_day(),
+                minimum_event_time + TimeDelta::seconds(4),
+                maximum_event_time,
+                minimum_ingestion_time + TimeDelta::seconds(4),
+                maximum_ingestion_time,
+            )
+            .expect("second replacement bounds"),
+            rows: 4,
+            uncompressed_bytes: 40,
+        },
+    ]
+    .into_iter()
+    .map(|fixture| {
+        output_registration(
+            root,
+            claim.run_id(),
+            claim.source_id(),
+            claim.schema().id(),
+            fixture,
+            claim.data_expires_at(),
+        )
+    })
+    .collect()
+}
+
+fn input_segment_ids(claim: &CompactionRunClaim) -> Vec<SegmentId> {
+    claim
+        .inputs()
+        .iter()
+        .map(|input| input.segment_id())
+        .collect()
+}
+
 fn descriptor(root: &ManagedRoot, segment_id: SegmentId, object_sequence: u64) -> ObjectDescriptor {
     ObjectDescriptor::new(
         ManagedObjectKey::parquet(root, segment_id, object_id(object_sequence)),
@@ -429,6 +733,128 @@ async fn planned_output_count(pool: &PgPool, run_id: Uuid) -> i64 {
     .fetch_one(pool)
     .await
     .expect("count planned outputs")
+}
+
+async fn active_segments_for_day<'executor, ExecutorType>(
+    executor: ExecutorType,
+    source_id: SourceId,
+    event_day: NaiveDate,
+) -> Vec<SegmentId>
+where
+    ExecutorType: Executor<'executor, Database = SqlxPostgres>,
+{
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT segment_id FROM segments WHERE source_id = $1 AND event_day = $2 AND state = 'ACTIVE' ORDER BY segment_id",
+    )
+    .bind(source_id.as_uuid())
+    .bind(event_day)
+    .fetch_all(executor)
+    .await
+    .expect("list active segments for day")
+    .into_iter()
+    .map(SegmentId::from)
+    .collect()
+}
+
+async fn assert_committed_replacement(
+    pool: &PgPool,
+    run_id: Uuid,
+    input_count: i64,
+    output_count: i64,
+    grace_seconds: i64,
+) {
+    let run: (String, Option<String>, bool) = sqlx::query_as(
+        "SELECT state, failure_code, completed_at IS NOT NULL FROM compaction_runs WHERE compaction_run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("load committed run");
+    assert_eq!(run, ("COMMITTED".to_owned(), None, true));
+    let superseded_inputs: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM segments AS segment
+        JOIN compaction_runs AS run ON run.compaction_run_id = segment.claimed_by_compaction_run_id
+        WHERE run.compaction_run_id = $1
+          AND segment.state = 'SUPERSEDED'
+          AND segment.retired_at = run.completed_at
+          AND EXTRACT(EPOCH FROM (segment.reclaim_after - segment.retired_at))::BIGINT = $2
+        "#,
+    )
+    .bind(run_id)
+    .bind(grace_seconds)
+    .fetch_one(pool)
+    .await
+    .expect("count superseded compaction inputs");
+    assert_eq!(superseded_inputs, input_count);
+    let published_outputs: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM segments AS segment
+        JOIN stored_objects AS object USING (segment_id)
+        JOIN compaction_runs AS run ON run.compaction_run_id = segment.produced_by_compaction_run_id
+        WHERE run.compaction_run_id = $1
+          AND segment.state = 'ACTIVE'
+          AND object.state = 'PUBLISHED'
+          AND segment.published_at = object.published_at
+          AND segment.published_at = run.completed_at
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("count published compaction outputs");
+    assert_eq!(published_outputs, output_count);
+}
+
+async fn assert_failed_run(
+    pool: &PgPool,
+    run_id: Uuid,
+    failure_code: &str,
+    input_ids: &[SegmentId],
+    output_count: i64,
+) {
+    let run: (String, Option<String>, bool) = sqlx::query_as(
+        "SELECT state, failure_code, completed_at IS NOT NULL FROM compaction_runs WHERE compaction_run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("load failed run");
+    assert_eq!(
+        run,
+        ("FAILED".to_owned(), Some(failure_code.to_owned()), true)
+    );
+    let input_uuids = input_ids
+        .iter()
+        .map(|segment_id| segment_id.as_uuid())
+        .collect::<Vec<_>>();
+    let released_inputs: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM segments WHERE segment_id = ANY($1::uuid[]) AND state = 'ACTIVE' AND claimed_by_compaction_run_id IS NULL",
+    )
+    .bind(&input_uuids)
+    .fetch_one(pool)
+    .await
+    .expect("count released compaction inputs");
+    assert_eq!(released_inputs, input_ids.len() as i64);
+    let abandoned_outputs: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM segments AS segment
+        JOIN stored_objects AS object USING (segment_id)
+        WHERE segment.produced_by_compaction_run_id = $1
+          AND segment.state = 'ABANDONED'
+          AND segment.retired_at IS NOT NULL
+          AND EXTRACT(EPOCH FROM (segment.reclaim_after - segment.retired_at))::BIGINT = 300
+          AND object.state IN ('PLANNED', 'UPLOADED')
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .expect("count abandoned compaction outputs");
+    assert_eq!(abandoned_outputs, output_count);
 }
 
 fn timestamp(second: i64) -> DateTime<Utc> {

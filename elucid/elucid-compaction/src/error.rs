@@ -4,7 +4,8 @@ use std::io;
 
 use arrow::error::ArrowError;
 use elucid_metastore::{
-    CompactionMetadataError, CompactionModelError as MetadataCompactionModelError, PublicationError,
+    CompactionFailureCode, CompactionMetadataError,
+    CompactionModelError as MetadataCompactionModelError, PublicationError,
 };
 use elucid_storage::{StorageError, StorageErrorCode, StorageModelError};
 use parquet::errors::ParquetError;
@@ -39,6 +40,16 @@ impl CompactionErrorCode {
 impl Display for CompactionErrorCode {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
+    }
+}
+
+impl From<CompactionErrorCode> for CompactionFailureCode {
+    fn from(value: CompactionErrorCode) -> Self {
+        match value {
+            CompactionErrorCode::InputInvalid => Self::InputInvalid,
+            CompactionErrorCode::BuildFailed => Self::BuildFailed,
+            CompactionErrorCode::NotBeneficial => Self::NotBeneficial,
+        }
     }
 }
 

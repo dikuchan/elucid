@@ -338,7 +338,7 @@ impl OrphanGracePeriod {
     }
 
     #[must_use]
-    const fn seconds(self) -> i64 {
+    pub(crate) const fn seconds(self) -> i64 {
         self.0
     }
 }
