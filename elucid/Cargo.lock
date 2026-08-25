@@ -1886,6 +1886,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "elucid-compaction"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "bytes",
+ "chrono",
+ "elucid-catalog",
+ "elucid-metastore",
+ "elucid-storage",
+ "futures",
+ "object_store",
+ "parquet",
+ "sqlx",
+ "tempfile",
+ "testcontainers-modules",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "elucid-engine"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,28 @@
+[package]
+name = "elucid-compaction"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+elucid-catalog = { workspace = true }
+elucid-metastore = { workspace = true }
+elucid-storage = { workspace = true }
+futures = { workspace = true }
+object_store = { workspace = true }
+parquet = { workspace = true, features = ["arrow", "object_store"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "rt", "time"] }
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+object_store = { workspace = true, features = ["aws"] }
+sqlx = { workspace = true, features = ["postgres"] }
+tempfile = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["minio", "postgres"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

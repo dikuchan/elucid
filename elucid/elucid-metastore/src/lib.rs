@@ -1,6 +1,7 @@
 //! PostgreSQL boundary for Elucid control-plane state.
 
 mod catalog;
+mod compaction;
 mod error;
 mod inspection;
 mod migration;
@@ -11,6 +12,14 @@ mod reclamation;
 mod retention;
 
 pub use catalog::{CatalogApplyOutcome, CatalogSnapshot, CatalogStore};
+pub use compaction::{
+    CompactionClaimLimitConfiguration, CompactionClaimLimits, CompactionInputSegment,
+    CompactionMetadataError, CompactionMetadataErrorKind, CompactionModelError,
+    CompactionOutputRegistration, CompactionOutputRegistrationConfiguration,
+    CompactionOutputRegistrationOutcome, CompactionRunClaim, CompactionRunId, CompactionStore,
+    MAXIMUM_COMPACTION_CANDIDATE_SEGMENTS, MAXIMUM_COMPACTION_INPUT_SEGMENTS,
+    MAXIMUM_COMPACTION_OUTPUT_SEGMENTS, MaintenanceOwner, MaintenanceOwnership,
+};
 pub use error::{
     CatalogPersistenceError, CatalogPersistenceErrorKind, MetastoreErrorCode,
     MetastoreMigrationError, PublicationError, PublicationErrorKind, PublicationModelError,
