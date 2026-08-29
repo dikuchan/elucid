@@ -1993,6 +1993,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elucid-catalog",
+ "elucid-compaction",
  "elucid-engine",
  "elucid-ingestion",
  "elucid-language",

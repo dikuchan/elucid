@@ -1,7 +1,6 @@
 use std::future::{Future, IntoFuture as _};
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -10,8 +9,6 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
 use object_store::{ClientOptions, ObjectStore};
 use serde::Serialize;
-use sqlx::Postgres;
-use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -27,15 +24,17 @@ use elucid_storage::ImmutableObjectStore;
 
 use crate::ingestion::{IngestionAvailability, IngestionBoundary};
 use crate::local_storage::LocalStorageBoundary;
+use crate::maintenance::{MaintenanceBoundary, MaintenanceRuntime};
 use crate::metrics::ServiceMetrics;
 use crate::query::{QueryAvailability, QueryBoundary};
-use crate::{MaintenanceMode, RuntimeConfiguration, ServiceError};
+use crate::{MaintenanceError, RuntimeConfiguration, ServiceError};
+
+pub(crate) use crate::maintenance::MaintenanceOwnership;
 
 const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const OBJECT_STORE_REGION: &str = "us-east-1";
 const OBJECT_STORE_HEALTH_PREFIX: &str = ".elucid-health-probe";
-const MAINTENANCE_LOCK_NAME: &str = "elucid:maintenance";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ToSchema)]
 #[non_exhaustive]
@@ -214,58 +213,6 @@ pub(crate) struct Dependencies {
 }
 
 #[derive(Debug)]
-pub(crate) enum MaintenanceBoundary {
-    Disabled,
-    Owned {
-        _connection: tokio::sync::Mutex<PoolConnection<Postgres>>,
-        lost: AtomicBool,
-    },
-    Standby,
-}
-
-impl MaintenanceBoundary {
-    #[must_use]
-    pub(crate) fn status(&self) -> ComponentStatus {
-        match self {
-            Self::Owned { lost, .. } if !lost.load(Ordering::Relaxed) => ComponentStatus::Degraded,
-            Self::Owned { .. } => ComponentStatus::Down,
-            Self::Disabled | Self::Standby => ComponentStatus::Degraded,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn ownership(&self) -> MaintenanceOwnership {
-        match self {
-            Self::Disabled => MaintenanceOwnership::Disabled,
-            Self::Owned { lost, .. } if !lost.load(Ordering::Relaxed) => {
-                MaintenanceOwnership::Owned
-            }
-            Self::Owned { .. } => MaintenanceOwnership::Standby,
-            Self::Standby => MaintenanceOwnership::Standby,
-        }
-    }
-
-    fn health(&self, postgresql: ComponentStatus) -> ComponentStatus {
-        if postgresql != ComponentStatus::Up {
-            if let Self::Owned { lost, .. } = self {
-                lost.store(true, Ordering::Relaxed);
-            }
-            return ComponentStatus::Down;
-        }
-        self.status()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub(crate) enum MaintenanceOwnership {
-    Disabled,
-    Owned,
-    Standby,
-}
-
-#[derive(Debug)]
 pub struct RunningServer {
     local_address: SocketAddr,
     cancellation: CancellationToken,
@@ -375,7 +322,7 @@ async fn supervise(
     );
     let mut initialization = Box::pin(initialize(Arc::clone(&state)));
 
-    let dependencies = tokio::select! {
+    let initialized = tokio::select! {
         result = initialization.as_mut() => match result {
             Ok(dependencies) => dependencies,
             Err(error) => {
@@ -393,8 +340,8 @@ async fn supervise(
         result = http.as_mut() => return unexpected_http_result(result),
     };
 
-    let health = initialized_health(&dependencies);
-    let dependencies = Arc::new(dependencies);
+    let health = initialized_health(&initialized.dependencies);
+    let dependencies = Arc::new(initialized.dependencies);
     state.become_operational(Arc::clone(&dependencies), health);
     let configuration = state.configuration();
     let mut ingestion_processing = Box::pin(crate::processing::run(
@@ -419,6 +366,7 @@ async fn supervise(
         Arc::clone(&state),
         Arc::clone(&dependencies),
     ));
+    let mut maintenance = Box::pin(initialized.maintenance.run());
 
     tokio::select! {
         () = cancellation.cancelled() => {
@@ -454,13 +402,36 @@ async fn supervise(
                 }),
             }
         },
+        result = maintenance.as_mut() => {
+            state.begin_draining();
+            dependencies.ingestion.begin_shutdown();
+            dependencies.queries.begin_shutdown();
+            http_cancellation.cancel();
+            finish_http_and_ingestion(
+                &mut http,
+                &dependencies.ingestion,
+                shutdown_timeout,
+            )
+            .await?;
+            Err(ServiceError::MaintenanceRuntime {
+                source: match result {
+                    Ok(()) => MaintenanceError::StoppedUnexpectedly,
+                    Err(source) => source,
+                },
+            })
+        },
         () = health_checks.as_mut() => Err(ServiceError::HttpRuntime {
             source: std::io::Error::other("health-check loop stopped unexpectedly"),
         }),
     }
 }
 
-async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, ServiceError> {
+struct InitializedDependencies {
+    dependencies: Dependencies,
+    maintenance: MaintenanceRuntime,
+}
+
+async fn initialize(state: Arc<ApplicationState>) -> Result<InitializedDependencies, ServiceError> {
     let configuration = state.configuration();
     let maximum_connections = u32::try_from(configuration.metastore().maximum_connections().get())
         .map_err(|_| ServiceError::MetastoreConnection {
@@ -528,27 +499,37 @@ async fn initialize(state: Arc<ApplicationState>) -> Result<Dependencies, Servic
     .map_err(|source| ServiceError::QueryInitialization { source })?;
     state.update_starting(|health| health.query = ComponentStatus::Up);
 
-    let maintenance = initialize_maintenance(configuration, &pool).await?;
-    state.update_starting(|health| health.maintenance = maintenance.status());
     let publication = PublicationStore::new(pool.clone());
+    let (maintenance_boundary, maintenance) = crate::maintenance::initialize(
+        configuration,
+        pool.clone(),
+        Arc::clone(&object_store),
+        publication.clone(),
+    )
+    .await
+    .map_err(|source| ServiceError::MaintenanceInitialization { source })?;
+    state.update_starting(|health| health.maintenance = maintenance_boundary.status());
     let operations = OperationalStore::new(
         pool.clone(),
         configuration.object_store().managed_root().clone(),
     );
     let immutable_objects = ImmutableObjectStore::new(Arc::clone(&object_store));
-    Ok(Dependencies {
-        catalog,
-        ingestion,
-        operations,
-        publication,
-        queries,
-        immutable_objects,
-        local_storage,
+    Ok(InitializedDependencies {
+        dependencies: Dependencies {
+            catalog,
+            ingestion,
+            operations,
+            publication,
+            queries,
+            immutable_objects,
+            local_storage,
+            maintenance: maintenance_boundary,
+            pool,
+            object_store,
+            object_health_prefix,
+            object_request_timeout,
+        },
         maintenance,
-        pool,
-        object_store,
-        object_health_prefix,
-        object_request_timeout,
     })
 }
 
@@ -612,33 +593,6 @@ async fn establish_bucket_access(
     }
 }
 
-async fn initialize_maintenance(
-    configuration: &RuntimeConfiguration,
-    pool: &PgPool,
-) -> Result<MaintenanceBoundary, ServiceError> {
-    if configuration.maintenance().mode() == MaintenanceMode::Disabled {
-        return Ok(MaintenanceBoundary::Disabled);
-    }
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|source| ServiceError::MetastoreConnection { source })?;
-    let acquired =
-        sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtextextended($1, 0))")
-            .bind(MAINTENANCE_LOCK_NAME)
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(|source| ServiceError::MetastoreConnection { source })?;
-    if acquired {
-        Ok(MaintenanceBoundary::Owned {
-            _connection: tokio::sync::Mutex::new(connection),
-            lost: AtomicBool::new(false),
-        })
-    } else {
-        Ok(MaintenanceBoundary::Standby)
-    }
-}
-
 fn initialized_health(dependencies: &Dependencies) -> ComponentHealth {
     let (spool, ingestion_worker) = ingestion_component_health(&dependencies.ingestion);
     ComponentHealth {
@@ -668,7 +622,7 @@ async fn run_health_checks(state: Arc<ApplicationState>, dependencies: Arc<Depen
         } else {
             (ComponentStatus::Down, ComponentStatus::Down)
         };
-        let maintenance = dependencies.maintenance.health(postgresql);
+        let maintenance = dependencies.maintenance.health(postgresql, object_store);
         let query = query_component_health(&dependencies.queries, postgresql, object_store);
         state.update_operational_health(ComponentHealth {
             postgresql,

@@ -399,7 +399,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(ready["components"]["object_store"], "UP");
     assert_eq!(ready["components"]["spool"], "UP");
     assert_eq!(ready["components"]["query"], "UP");
-    assert_eq!(ready["components"]["maintenance"], "DEGRADED");
+    assert_eq!(ready["components"]["maintenance"], "UP");
 
     let applied = apply_catalog(&client, &endpoint).await;
     assert_eq!(applied["outcome"], "APPLIED");
@@ -907,6 +907,7 @@ async fn server_bootstraps_dependencies_and_keeps_diagnostics_live_during_an_out
     assert_eq!(status["phase"], "DEGRADED");
     assert_eq!(status["components"]["object_store"], "DOWN");
     assert_eq!(status["components"]["query"], "DOWN");
+    assert_eq!(status["components"]["maintenance"], "DOWN");
     let unavailable_ingestion = client
         .post(format!(
             "{endpoint}/api/v1/sources/demo_logs/inputs/vector/events"

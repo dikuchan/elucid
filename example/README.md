@@ -33,7 +33,7 @@ curl --fail --show-error http://127.0.0.1:58080/health/ready
 curl --fail --show-error http://127.0.0.1:58080/api/v1/status
 ```
 
-The current implementation reports the maintenance component as `DEGRADED` because automatic compaction is not implemented yet. This does not close readiness or stop ingestion and queries.
+With `maintenance.mode = "AUTOMATIC"`, one server owns the PostgreSQL advisory lock, recovers unfinished compactions, and reports maintenance as `UP` while its bounded loop is healthy. A competing server reports `STANDBY` ownership and `DEGRADED`; `DISABLED` also reports `DEGRADED`. Maintenance state does not by itself close ingestion or query readiness.
 
 ## Continuous ingestion
 

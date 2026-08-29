@@ -27,6 +27,7 @@ utoipa-swagger-ui = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 elucid-catalog = { workspace = true }
+elucid-compaction = { workspace = true }
 elucid-engine = { workspace = true }
 elucid-ingestion = { workspace = true }
 elucid-language = { workspace = true }
