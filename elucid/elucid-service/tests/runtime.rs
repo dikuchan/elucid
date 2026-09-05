@@ -120,6 +120,71 @@ async fn dropping_server_releases_its_bound_listener() {
 }
 
 #[tokio::test]
+async fn request_timeout_preserves_request_identity() {
+    let dependency = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stalled dependency");
+    let dependency_address = dependency.local_addr().expect("dependency address");
+    let stalled_dependency = tokio::spawn(async move {
+        let (_connection, _) = dependency.accept().await.expect("accept PostgreSQL probe");
+        std::future::pending::<()>().await;
+    });
+    let local = TempDir::new().expect("create local storage root");
+    let document = runtime_configuration_with_timeouts(
+        "http://127.0.0.1:9",
+        local.path().join("spool").to_str().expect("spool path"),
+        local.path().join("scratch").to_str().expect("scratch path"),
+        1,
+        5,
+    );
+    let environment = Environment::from_pairs([
+        (
+            "ELUCID_METASTORE__POSTGRESQL_URL",
+            format!("postgresql://postgres:postgres@{dependency_address}/postgres"),
+        ),
+        ("ELUCID_OBJECT_STORE__ACCESS_KEY_ID", "unused".into()),
+        ("ELUCID_OBJECT_STORE__SECRET_ACCESS_KEY", "unused".into()),
+    ]);
+    let configuration = RuntimeConfiguration::from_toml(&document, &environment)
+        .expect("decode runtime configuration");
+    let server = start(configuration).await.expect("bind server");
+    let request_id = "019BCE00-1234-7ABC-8DEF-0123456789AB";
+    let mut connection = TcpStream::connect(server.local_address())
+        .await
+        .expect("connect incomplete catalog request");
+    let headers = format!(
+        "POST /api/v1/catalog-applications HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/yaml\r\nContent-Length: 1024\r\nX-Request-Id: {request_id}\r\nConnection: close\r\n\r\nf"
+    );
+    connection
+        .write_all(headers.as_bytes())
+        .await
+        .expect("send incomplete catalog request");
+    let mut response = Vec::new();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        connection.read_to_end(&mut response),
+    )
+    .await
+    .expect("server must time out the incomplete request")
+    .expect("read timeout response");
+    let response = String::from_utf8(response).expect("UTF-8 response");
+    let (headers, body) = response.split_once("\r\n\r\n").expect("HTTP response");
+    assert!(headers.starts_with("HTTP/1.1 408 Request Timeout"));
+    let returned_id = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("x-request-id")
+            .then(|| value.trim())
+    });
+    assert_eq!(returned_id, Some(request_id));
+    let body: Value = serde_json::from_str(body).expect("JSON timeout response");
+    assert_eq!(body["error"]["code"], "INVALID_REQUEST");
+    assert_eq!(body["error"]["message"], "Request timed out");
+
+    drop(server);
+    stalled_dependency.abort();
+}
+
+#[tokio::test]
 async fn embedded_ui_is_available_before_dependencies_without_masking_missing_resources() {
     let dependency = TcpListener::bind("127.0.0.1:0")
         .await
