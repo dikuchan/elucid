@@ -14,6 +14,7 @@ use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use elucid_catalog::Schema;
+use elucid_core::EventId;
 use elucid_metastore::{
     CompactionInputSegment, CompactionOutputRegistration,
     CompactionOutputRegistrationConfiguration, CompactionRunClaim, CompactionRunId,
@@ -674,7 +675,7 @@ impl InputCursor {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct RowKey {
     event_time: i64,
-    event_id: [u8; 16],
+    event_id: EventId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

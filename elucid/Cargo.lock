@@ -1912,6 +1912,10 @@ dependencies = [
 [[package]]
 name = "elucid-core"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "elucid-engine"

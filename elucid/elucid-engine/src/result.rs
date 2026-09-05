@@ -11,6 +11,7 @@ use arrow::record_batch::RecordBatch;
 use chrono::{DateTime, SecondsFormat, Utc};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use elucid_catalog::{LogicalType, Nullability};
+use elucid_core::EventId;
 use elucid_language::Diagnostic;
 use elucid_language::ir;
 use elucid_metastore::QuerySnapshot;
@@ -431,9 +432,16 @@ fn encode_value(
                 instant.to_rfc3339_opts(SecondsFormat::Millis, true),
             ))
         }
-        LogicalType::Eid => Ok(Value::String(encode_eid(
-            downcast::<FixedSizeBinaryArray>(array)?.value(row_index),
-        )?)),
+        LogicalType::Eid => {
+            let event_id =
+                EventId::try_from(downcast::<FixedSizeBinaryArray>(array)?.value(row_index))
+                    .map_err(|_| {
+                        EngineError::execution_invariant(
+                            "query produced an event identity with invalid width",
+                        )
+                    })?;
+            Ok(Value::String(event_id.to_string()))
+        }
         LogicalType::Json => serde_json::from_str(downcast::<StringArray>(array)?.value(row_index))
             .map(canonicalize_json)
             .map_err(EngineError::corrupt_object),
@@ -464,21 +472,6 @@ fn encode_float(value: f64) -> Result<Value, EngineError> {
     Number::from_f64(value)
         .map(Value::Number)
         .ok_or_else(|| EngineError::evaluation_invariant("query produced a non-finite float"))
-}
-
-fn encode_eid(bytes: &[u8]) -> Result<String, EngineError> {
-    if bytes.len() != 16 {
-        return Err(EngineError::execution_invariant(
-            "query produced an event identity with invalid width",
-        ));
-    }
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(32);
-    for byte in bytes {
-        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    Ok(encoded)
 }
 
 fn downcast<T: 'static>(array: &ArrayRef) -> Result<&T, EngineError> {

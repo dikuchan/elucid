@@ -3,6 +3,7 @@
 use std::fmt;
 
 use elucid_catalog::{FieldId, LogicalType, Nullability, SchemaId, SourceId};
+use elucid_core::EventId;
 
 use crate::Span;
 
@@ -37,7 +38,7 @@ pub enum Literal {
     Float64(f64),
     Utf8(String),
     Datetime(UtcInstant),
-    Eid([u8; 16]),
+    Eid(EventId),
 }
 
 impl Literal {

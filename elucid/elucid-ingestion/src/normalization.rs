@@ -9,6 +9,7 @@ use elucid_catalog::{
     EventTimeFormat, FieldId, FieldRole, IngestionProfile, JsonPointer, LogicalType, Nullability,
     Schema, Source,
 };
+use elucid_core::EventId;
 use serde_json::{Map, Number, Value};
 
 use crate::{BatchId, BatchMetadata, IngestionTime};
@@ -63,25 +64,14 @@ impl EventTime {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-#[non_exhaustive]
-pub struct EventId([u8; 16]);
-
-impl EventId {
-    fn for_occurrence(batch_id: BatchId, input_position: u64) -> Self {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(EVENT_ID_DOMAIN);
-        hasher.update(batch_id.as_uuid().as_bytes());
-        hasher.update(&input_position.to_be_bytes());
-        let mut bytes = [0_u8; 16];
-        bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
-        Self(bytes)
-    }
-
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
+fn event_id_for_occurrence(batch_id: BatchId, input_position: u64) -> EventId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(EVENT_ID_DOMAIN);
+    hasher.update(batch_id.as_uuid().as_bytes());
+    hasher.update(&input_position.to_be_bytes());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    EventId::from(bytes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -789,7 +779,7 @@ fn normalize_record(
         location,
         event_time,
         ingestion_time: plan.metadata.ingestion_time(),
-        event_id: EventId::for_occurrence(plan.metadata.batch_id(), location.input_position()),
+        event_id: event_id_for_occurrence(plan.metadata.batch_id(), location.input_position()),
         fields,
         remainder,
     })

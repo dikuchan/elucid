@@ -477,6 +477,33 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         ]
     );
 
+    let eid_snapshot = snapshot_store
+        .select(
+            r#"source logs | project literal = eid("0123456789abcdef1032547698badcfe"), parsed = cast("0123456789abcdef1032547698badcfe" as eid), text = cast(eid("0123456789abcdef1032547698badcfe") as utf8), document = cast(eid("0123456789abcdef1032547698badcfe") as json), invalid = try_cast("0123456789ABCDEF1032547698BADCFE" as eid) | take 1"#,
+            request_range,
+            QuerySnapshotLimits::new(16 * 1024 * 1024).expect("snapshot byte limit"),
+        )
+        .await
+        .expect("select event-ID conversion snapshot");
+    let eid_result = engine
+        .execute(
+            &eid_snapshot,
+            &QueryCancellation::new(),
+            engine.limits().maximum_output_row_limit(),
+        )
+        .await
+        .expect("execute event-ID conversions");
+    assert_eq!(
+        eid_result.rows(),
+        vec![vec![
+            json!("0123456789abcdef1032547698badcfe"),
+            json!("0123456789abcdef1032547698badcfe"),
+            json!("0123456789abcdef1032547698badcfe"),
+            json!("0123456789abcdef1032547698badcfe"),
+            Value::Null,
+        ]]
+    );
+
     let requested_output_rows = engine
         .limits()
         .output_row_limit(1)

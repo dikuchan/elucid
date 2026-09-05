@@ -202,7 +202,9 @@ fn literal_expression(literal: &ir::Literal) -> Result<Expr, EngineError> {
             Some(value.unix_milliseconds()),
             Some(Arc::from("UTC")),
         ),
-        ir::Literal::Eid(value) => ScalarValue::FixedSizeBinary(16, Some(value.to_vec())),
+        ir::Literal::Eid(value) => {
+            ScalarValue::FixedSizeBinary(16, Some(value.as_bytes().to_vec()))
+        }
         _ => {
             return Err(EngineError::catalog_corrupt(
                 "typed query contains an unsupported literal",

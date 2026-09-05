@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use elucid_catalog::{InputId, SchemaId, SourceId};
+use elucid_core::UuidV7;
 use elucid_metastore::{
     DeadLetterRegistration, IngestionSegmentRegistration, IngestionSegmentTimes,
 };
@@ -15,7 +16,7 @@ use elucid_storage::{
     ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
 };
 use serde::{Deserialize, Serialize};
-use uuid::{Uuid, Variant, Version};
+use uuid::Uuid;
 
 use crate::{
     NormalizedBatch, NormalizedRecord, SpoolBatchRange, SpoolCheckpoint, SpoolReclamation,
@@ -35,12 +36,12 @@ const MAXIMUM_COVERED_POSITIONS: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
-pub struct OutputRecoveryId(Uuid);
+pub struct OutputRecoveryId(UuidV7);
 
 impl OutputRecoveryId {
     #[must_use]
     pub const fn as_uuid(self) -> Uuid {
-        self.0
+        self.0.as_uuid()
     }
 }
 
@@ -48,11 +49,9 @@ impl TryFrom<Uuid> for OutputRecoveryId {
     type Error = OutputRecoveryModelError;
 
     fn try_from(value: Uuid) -> Result<Self, Self::Error> {
-        if value.get_version() != Some(Version::SortRand) || value.get_variant() != Variant::RFC4122
-        {
-            return Err(OutputRecoveryModelError::RecoveryIdentityMustBeUuidV7);
-        }
-        Ok(Self(value))
+        UuidV7::try_from(value)
+            .map(Self)
+            .map_err(|_| OutputRecoveryModelError::RecoveryIdentityMustBeUuidV7)
     }
 }
 

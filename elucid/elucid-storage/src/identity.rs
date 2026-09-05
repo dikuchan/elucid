@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 
-use uuid::{Uuid, Variant, Version};
+use elucid_core::UuidV7;
+use uuid::Uuid;
 
 use crate::StorageModelError;
 
@@ -42,12 +43,12 @@ uuid_identity!(StoredObjectId);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
-pub struct BatchId(Uuid);
+pub struct BatchId(UuidV7);
 
 impl BatchId {
     #[must_use]
     pub const fn as_uuid(self) -> Uuid {
-        self.0
+        self.0.as_uuid()
     }
 }
 
@@ -55,17 +56,15 @@ impl TryFrom<Uuid> for BatchId {
     type Error = StorageModelError;
 
     fn try_from(value: Uuid) -> Result<Self, Self::Error> {
-        if value.get_version() != Some(Version::SortRand) || value.get_variant() != Variant::RFC4122
-        {
-            return Err(StorageModelError::BatchIdentityMustBeUuidV7 { value });
-        }
-        Ok(Self(value))
+        UuidV7::try_from(value)
+            .map(Self)
+            .map_err(|_| StorageModelError::BatchIdentityMustBeUuidV7 { value })
     }
 }
 
 impl From<BatchId> for Uuid {
     fn from(value: BatchId) -> Self {
-        value.0
+        value.as_uuid()
     }
 }
 

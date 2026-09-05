@@ -8,6 +8,7 @@ use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValu
 use datafusion::logical_expr::expr_fn::create_udf;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDF, Volatility};
 use elucid_catalog::LogicalType;
+use elucid_core::EventId;
 use elucid_language::ir::{BinaryOperator, CastKind, RemainderFunction, UnaryOperator};
 use serde_json::{Number, Value};
 
@@ -528,9 +529,10 @@ fn utf8_to_scalar(value: &ScalarValue, target: LogicalType) -> Result<ScalarValu
                 Some(Arc::from(UTC_TIMEZONE)),
             ))
         }
-        LogicalType::Eid => {
-            parse_eid(value).map(|value| ScalarValue::FixedSizeBinary(16, Some(value.to_vec())))
-        }
+        LogicalType::Eid => value
+            .parse::<EventId>()
+            .map(|value| ScalarValue::FixedSizeBinary(16, Some(value.as_bytes().to_vec())))
+            .map_err(|_| InvalidCast),
         _ => Err(InvalidCast),
     }
 }
@@ -556,8 +558,10 @@ fn scalar_to_utf8(value: &ScalarValue, source: LogicalType) -> Result<String, In
                 .map(|value| value.to_rfc3339_opts(SecondsFormat::Millis, true))
                 .ok_or(InvalidCast)
         }
-        (LogicalType::Eid, ScalarValue::FixedSizeBinary(16, Some(value))) if value.len() == 16 => {
-            Ok(encode_eid(value))
+        (LogicalType::Eid, ScalarValue::FixedSizeBinary(16, Some(value))) => {
+            EventId::try_from(value.as_slice())
+                .map(|value| value.to_string())
+                .map_err(|_| InvalidCast)
         }
         _ => Err(InvalidCast),
     }
@@ -771,41 +775,6 @@ fn valid_signed_decimal(value: &str) -> bool {
 
 fn valid_unsigned_decimal(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn parse_eid(value: &str) -> Result<[u8; 16], InvalidCast> {
-    if value.len() != 32
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(InvalidCast);
-    }
-    let mut result = [0_u8; 16];
-    for (index, output) in result.iter_mut().enumerate() {
-        let high = hex_value(value.as_bytes()[index * 2]);
-        let low = hex_value(value.as_bytes()[index * 2 + 1]);
-        *output = (high << 4) | low;
-    }
-    Ok(result)
-}
-
-fn encode_eid(value: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(32);
-    for byte in value {
-        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    encoded
-}
-
-fn hex_value(value: u8) -> u8 {
-    match value {
-        b'0'..=b'9' => value - b'0',
-        b'a'..=b'f' => value - b'a' + 10,
-        _ => unreachable!("eid validation accepts only lowercase hexadecimal bytes"),
-    }
 }
 
 fn integer_is_exact(value: u64, mantissa_digits: u32) -> bool {

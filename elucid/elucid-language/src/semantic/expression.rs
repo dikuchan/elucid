@@ -141,9 +141,12 @@ fn convert_constructor(constructor: &ast::Constructor) -> Result<ir::Expression,
         ConstructorKind::Datetime(value) => {
             ir::Literal::Datetime(parse_datetime_literal(value.value(), constructor.span())?)
         }
-        ConstructorKind::Eid(value) => {
-            ir::Literal::Eid(parse_eid(value.value(), constructor.span())?)
-        }
+        ConstructorKind::Eid(value) => ir::Literal::Eid(value.value().parse().map_err(|_| {
+            literal_invalid(
+                "eid must contain exactly 32 lowercase hexadecimal characters",
+                constructor.span(),
+            )
+        })?),
     };
     Ok(ir::Expression::literal(literal))
 }
@@ -753,34 +756,6 @@ fn parse_datetime_with_code(
     Ok(ir::UtcInstant::from_unix_milliseconds(
         parsed.timestamp_millis(),
     ))
-}
-
-fn parse_eid(value: &str, span: Span) -> Result<[u8; 16], Diagnostic> {
-    if value.len() != 32
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(literal_invalid(
-            "eid must contain exactly 32 lowercase hexadecimal characters",
-            span,
-        ));
-    }
-    let mut result = [0_u8; 16];
-    for (index, output) in result.iter_mut().enumerate() {
-        let high = hex_value(value.as_bytes()[index * 2]);
-        let low = hex_value(value.as_bytes()[index * 2 + 1]);
-        *output = (high << 4) | low;
-    }
-    Ok(result)
-}
-
-fn hex_value(value: u8) -> u8 {
-    match value {
-        b'0'..=b'9' => value - b'0',
-        b'a'..=b'f' => value - b'a' + 10,
-        _ => unreachable!("eid validation accepts only lowercase hexadecimal bytes"),
-    }
 }
 
 fn fold_unary(
