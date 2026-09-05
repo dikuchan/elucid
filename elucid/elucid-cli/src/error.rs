@@ -1,8 +1,9 @@
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::process::ExitCode;
 
 use anyhow::Error;
-use elucid_service::{ConfigurationError, ConfigurationErrorCode, ServiceError, ServiceErrorCode};
+use elucid_core::{CodedError, ErrorCode};
+use elucid_service::{ConfigurationError, ServiceError};
 use reqwest::StatusCode;
 use serde::Deserialize;
 
@@ -24,47 +25,6 @@ impl From<ProcessExit> for ExitCode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CliErrorCode {
-    ClientTimeout,
-    CommandInvalid,
-    EndpointUrlConstructionFailed,
-    HttpClientInitializationFailed,
-    InputFileUnreadable,
-    InputReadFailed,
-    RemoteResponseFailed,
-    RemoteResponseInvalid,
-    RemoteResponseTooLarge,
-    RemoteServiceUnavailable,
-    StandardOutputWriteFailed,
-    VersionEncodingFailed,
-}
-
-impl CliErrorCode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::ClientTimeout => "CLIENT_TIMEOUT",
-            Self::CommandInvalid => "COMMAND_INVALID",
-            Self::EndpointUrlConstructionFailed => "ENDPOINT_URL_CONSTRUCTION_FAILED",
-            Self::HttpClientInitializationFailed => "HTTP_CLIENT_INITIALIZATION_FAILED",
-            Self::InputFileUnreadable => "INPUT_FILE_UNREADABLE",
-            Self::InputReadFailed => "INPUT_READ_FAILED",
-            Self::RemoteResponseFailed => "REMOTE_RESPONSE_FAILED",
-            Self::RemoteResponseInvalid => "REMOTE_RESPONSE_INVALID",
-            Self::RemoteResponseTooLarge => "REMOTE_RESPONSE_TOO_LARGE",
-            Self::RemoteServiceUnavailable => "REMOTE_SERVICE_UNAVAILABLE",
-            Self::StandardOutputWriteFailed => "STANDARD_OUTPUT_WRITE_FAILED",
-            Self::VersionEncodingFailed => "VERSION_ENCODING_FAILED",
-        }
-    }
-}
-
-impl Display for CliErrorCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RemoteOperation {
     CatalogApplication,
@@ -79,75 +39,94 @@ pub(crate) struct Failure {
 
 #[derive(Debug)]
 enum FailurePresentation {
-    Message { code: FailureCode, source: Error },
+    Message(LocalFailure),
     ExactRemoteBody(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Debug)]
-enum FailureCode {
-    Cli(CliErrorCode),
-    Configuration(ConfigurationErrorCode),
-    Service(ServiceErrorCode),
+enum LocalPresentation {
+    Summary,
+    WithContext,
 }
 
-impl Display for FailureCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Cli(code) => Display::fmt(code, formatter),
-            Self::Configuration(code) => Display::fmt(code, formatter),
-            Self::Service(code) => Display::fmt(code, formatter),
+#[derive(Debug)]
+struct LocalFailure {
+    code: ErrorCode,
+    source: Error,
+    presentation: LocalPresentation,
+}
+
+impl Display for LocalFailure {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self.presentation {
+            LocalPresentation::Summary => write!(formatter, "{}", self.source),
+            LocalPresentation::WithContext => write!(formatter, "{:#}", self.source),
         }
     }
 }
 
+impl std::error::Error for LocalFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+impl CodedError for LocalFailure {
+    fn error_code(&self) -> ErrorCode {
+        self.code
+    }
+}
+
 impl Failure {
-    pub(crate) fn command(code: CliErrorCode, source: impl Into<Error>) -> Self {
+    pub(crate) fn command(code: ErrorCode, source: impl Into<Error>) -> Self {
         Self::message(
             ProcessExit::CommandOrDocumentValidationFailure,
-            FailureCode::Cli(code),
+            code,
             source,
+            LocalPresentation::WithContext,
         )
     }
 
     pub(crate) fn configuration(error: ConfigurationError) -> Self {
-        let code = error.code();
-        Self::message(
+        Self::coded(
             ProcessExit::ConfigurationFailure,
-            FailureCode::Configuration(code),
             error,
+            LocalPresentation::WithContext,
         )
     }
 
     pub(crate) fn server(error: ServiceError) -> Self {
-        let code = error.code();
-        Self::message(
+        Self::coded(
             ProcessExit::UncategorizedInternalFailure,
-            FailureCode::Service(code),
-            anyhow::anyhow!(error.to_string()),
+            error,
+            LocalPresentation::Summary,
         )
     }
 
-    pub(crate) fn internal(code: CliErrorCode, source: impl Into<Error>) -> Self {
+    pub(crate) fn internal(code: ErrorCode, source: impl Into<Error>) -> Self {
         Self::message(
             ProcessExit::UncategorizedInternalFailure,
-            FailureCode::Cli(code),
+            code,
             source,
+            LocalPresentation::WithContext,
         )
     }
 
-    pub(crate) fn remote_unavailable(code: CliErrorCode, source: impl Into<Error>) -> Self {
+    pub(crate) fn remote_unavailable(code: ErrorCode, source: impl Into<Error>) -> Self {
         Self::message(
             ProcessExit::RemoteServiceUnavailable,
-            FailureCode::Cli(code),
+            code,
             source,
+            LocalPresentation::WithContext,
         )
     }
 
     pub(crate) fn client_timeout(source: impl Into<Error>) -> Self {
         Self::message(
             ProcessExit::LocalClientTimeout,
-            FailureCode::Cli(CliErrorCode::ClientTimeout),
+            ErrorCode::ClientTimeout,
             source,
+            LocalPresentation::WithContext,
         )
     }
 
@@ -155,9 +134,9 @@ impl Failure {
         if error.is_timeout() {
             Self::client_timeout(error)
         } else if error.is_body() {
-            Self::command(CliErrorCode::InputReadFailed, error)
+            Self::command(ErrorCode::InputReadFailed, error)
         } else {
-            Self::remote_unavailable(CliErrorCode::RemoteServiceUnavailable, error)
+            Self::remote_unavailable(ErrorCode::RemoteServiceUnavailable, error)
         }
     }
 
@@ -169,18 +148,19 @@ impl Failure {
         let error_code = serde_json::from_slice::<RemoteErrorEnvelope>(&body)
             .ok()
             .map(|envelope| envelope.error.code);
-        let process_exit = classify_remote_response(operation, status, error_code);
-        let presentation = if body.is_empty() {
-            FailurePresentation::Message {
-                code: FailureCode::Cli(CliErrorCode::RemoteResponseFailed),
-                source: anyhow::anyhow!("remote service returned HTTP {status}"),
-            }
+        let process_exit = classify_remote_response(operation, status, error_code.as_ref());
+        if body.is_empty() {
+            Self::message(
+                process_exit,
+                ErrorCode::RemoteResponseFailed,
+                anyhow::anyhow!("remote service returned HTTP {status}"),
+                LocalPresentation::WithContext,
+            )
         } else {
-            FailurePresentation::ExactRemoteBody(body)
-        };
-        Self {
-            process_exit,
-            presentation,
+            Self {
+                process_exit,
+                presentation: FailurePresentation::ExactRemoteBody(body),
+            }
         }
     }
 
@@ -190,20 +170,56 @@ impl Failure {
 
     pub(crate) fn into_stderr(self) -> Vec<u8> {
         match self.presentation {
-            FailurePresentation::Message { code, source } => {
-                format!("{code}: {source:#}\n").into_bytes()
+            FailurePresentation::Message(error) => {
+                format!("{}: {error}\n", error.error_code()).into_bytes()
             }
             FailurePresentation::ExactRemoteBody(body) => body,
         }
     }
 
-    fn message(process_exit: ProcessExit, code: FailureCode, source: impl Into<Error>) -> Self {
+    fn coded<E: CodedError>(
+        process_exit: ProcessExit,
+        error: E,
+        presentation: LocalPresentation,
+    ) -> Self {
+        Self::message(process_exit, error.error_code(), error, presentation)
+    }
+
+    fn message(
+        process_exit: ProcessExit,
+        code: ErrorCode,
+        source: impl Into<Error>,
+        presentation: LocalPresentation,
+    ) -> Self {
         Self {
             process_exit,
-            presentation: FailurePresentation::Message {
+            presentation: FailurePresentation::Message(LocalFailure {
                 code,
                 source: source.into(),
-            },
+                presentation,
+            }),
+        }
+    }
+}
+
+impl Display for Failure {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match &self.presentation {
+            FailurePresentation::Message(error) => {
+                write!(formatter, "{}: {error}", error.error_code())
+            }
+            FailurePresentation::ExactRemoteBody(body) => {
+                formatter.write_str(&String::from_utf8_lossy(body))
+            }
+        }
+    }
+}
+
+impl std::error::Error for Failure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match &self.presentation {
+            FailurePresentation::Message(error) => error.source(),
+            FailurePresentation::ExactRemoteBody(_) => None,
         }
     }
 }
@@ -215,30 +231,38 @@ struct RemoteErrorEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct RemoteError {
-    code: RemoteErrorCode,
+    code: ReceivedErrorCode,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum RemoteErrorCode {
-    CatalogCorrupt,
-    CatalogDefinitionConflict,
-    CatalogManifestInvalid,
-    CatalogProfileInvalid,
-    CatalogSchemaIncompatible,
-    CapacityExhausted,
-    MetastoreUnavailable,
-    ObjectStoreUnavailable,
-    ServerDraining,
-    ServerNotReady,
-    #[serde(other)]
-    Other,
+#[derive(Debug, Deserialize)]
+#[serde(from = "String")]
+enum ReceivedErrorCode {
+    Known(ErrorCode),
+    Unknown(String),
+}
+
+impl From<String> for ReceivedErrorCode {
+    fn from(value: String) -> Self {
+        match value.parse() {
+            Ok(code) => Self::Known(code),
+            Err(_) => Self::Unknown(value),
+        }
+    }
+}
+
+impl Display for ReceivedErrorCode {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Known(code) => Display::fmt(code, formatter),
+            Self::Unknown(value) => formatter.write_str(value),
+        }
+    }
 }
 
 fn classify_remote_response(
     operation: RemoteOperation,
     status: StatusCode,
-    error_code: Option<RemoteErrorCode>,
+    error_code: Option<&ReceivedErrorCode>,
 ) -> ProcessExit {
     if status == StatusCode::REQUEST_TIMEOUT
         || status == StatusCode::TOO_MANY_REQUESTS
@@ -246,30 +270,27 @@ fn classify_remote_response(
     {
         return ProcessExit::RemoteServiceUnavailable;
     }
-    match error_code {
-        Some(
-            RemoteErrorCode::MetastoreUnavailable
-            | RemoteErrorCode::ObjectStoreUnavailable
-            | RemoteErrorCode::CapacityExhausted
-            | RemoteErrorCode::ServerDraining
-            | RemoteErrorCode::ServerNotReady,
-        ) => return ProcessExit::RemoteServiceUnavailable,
-        Some(
-            RemoteErrorCode::CatalogDefinitionConflict
-            | RemoteErrorCode::CatalogProfileInvalid
-            | RemoteErrorCode::CatalogSchemaIncompatible,
-        ) if matches!(operation, RemoteOperation::CatalogApplication) => {
+    if let Some(ReceivedErrorCode::Known(code)) = error_code {
+        if matches!(
+            code,
+            ErrorCode::MetastoreUnavailable
+                | ErrorCode::ObjectStoreUnavailable
+                | ErrorCode::CapacityExhausted
+                | ErrorCode::ServerDraining
+                | ErrorCode::ServerNotReady
+        ) {
+            return ProcessExit::RemoteServiceUnavailable;
+        }
+        if matches!(operation, RemoteOperation::CatalogApplication)
+            && matches!(
+                code,
+                ErrorCode::CatalogDefinitionConflict
+                    | ErrorCode::CatalogProfileInvalid
+                    | ErrorCode::CatalogSchemaIncompatible
+            )
+        {
             return ProcessExit::CatalogConflict;
         }
-        Some(
-            RemoteErrorCode::CatalogCorrupt
-            | RemoteErrorCode::CatalogDefinitionConflict
-            | RemoteErrorCode::CatalogManifestInvalid
-            | RemoteErrorCode::CatalogProfileInvalid
-            | RemoteErrorCode::CatalogSchemaIncompatible
-            | RemoteErrorCode::Other,
-        )
-        | None => {}
     }
     match (operation, status) {
         (
@@ -278,5 +299,37 @@ fn classify_remote_response(
         ) => ProcessExit::CatalogConflict,
         (_, status) if status.is_client_error() => ProcessExit::CommandOrDocumentValidationFailure,
         _ => ProcessExit::UncategorizedInternalFailure,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::io;
+
+    use super::{Failure, ProcessExit};
+    use elucid_service::ServiceError;
+
+    #[test]
+    fn server_failure_retains_its_cause_without_exposing_it_on_stderr() {
+        let failure = Failure::server(ServiceError::HttpRuntime {
+            source: io::Error::other("private runtime detail"),
+        });
+        let source = failure
+            .source()
+            .expect("the original service error is retained");
+        assert!(source.downcast_ref::<ServiceError>().is_some());
+        assert_eq!(
+            source.source().expect("runtime cause").to_string(),
+            "private runtime detail"
+        );
+        assert_eq!(
+            failure.process_exit(),
+            ProcessExit::UncategorizedInternalFailure
+        );
+        assert_eq!(
+            failure.into_stderr(),
+            b"SERVER_RUNTIME_FAILED: HTTP runtime failed\n"
+        );
     }
 }

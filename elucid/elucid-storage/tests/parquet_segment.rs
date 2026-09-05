@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::sync::Arc;
 
+use elucid_core::{CodedError, ErrorCode};
+
 use arrow::array::{
     Array as _, ArrayRef, BooleanArray, FixedSizeBinaryArray, StringArray,
     TimestampMillisecondArray,
@@ -13,7 +15,7 @@ use elucid_catalog::{
 use elucid_storage::{
     ManagedObjectKey, ManagedRoot, ObjectDigest, PARQUET_FORMAT_VERSION,
     PARQUET_MAX_ROW_GROUP_ROWS, ParquetSegmentExpectation, ParquetSegmentInput, ParquetWriteLimit,
-    SegmentId, StorageErrorCode, StoredObjectId, validate_parquet_segment, write_parquet_segment,
+    SegmentId, StoredObjectId, validate_parquet_segment, write_parquet_segment,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Compression;
@@ -139,7 +141,7 @@ async fn parquet_segment_round_trip_preserves_identity_schema_rows_and_exact_byt
     let error = validate_parquet_segment(staged.path(), wrong_identity)
         .await
         .expect_err("footer identity mismatch must reject the complete segment");
-    assert_eq!(error.code(), StorageErrorCode::ParquetInvalid);
+    assert_eq!(error.error_code(), ErrorCode::ParquetInvalid);
 }
 
 #[tokio::test]
@@ -157,7 +159,7 @@ async fn parquet_segment_write_stops_at_the_exact_local_limit_without_leaving_a_
     .await
     .expect_err("one byte cannot contain a Parquet segment");
 
-    assert_eq!(error.code(), StorageErrorCode::LocalCapacityExhausted);
+    assert_eq!(error.error_code(), ErrorCode::LocalCapacityExhausted);
     assert_eq!(regular_file_count(staging.path()), 0);
 }
 

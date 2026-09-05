@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use elucid_core::{CodedError, ErrorCode};
+
 use bytes::Bytes;
 use elucid_storage::{
     ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDeleteOutcome, ObjectDescriptor,
     ObjectFormatVersion, ObjectMediaType, ObjectReadRange, ObjectUploadOutcome,
-    ObjectVerificationOutcome, SegmentId, StorageErrorCode, StoredObjectId, TransferLimit,
+    ObjectVerificationOutcome, SegmentId, StoredObjectId, TransferLimit,
 };
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectPath;
@@ -88,7 +90,7 @@ async fn exact_minio_operations_preserve_immutable_object_identity() {
         .upload(&descriptor, bytes.clone(), insufficient_limit)
         .await
         .expect_err("upload must be rejected before exceeding its byte limit");
-    assert_eq!(error.code(), StorageErrorCode::LocalCapacityExhausted);
+    assert_eq!(error.error_code(), ErrorCode::LocalCapacityExhausted);
     assert_eq!(
         objects
             .verify(&descriptor)
@@ -142,7 +144,7 @@ async fn exact_minio_operations_preserve_immutable_object_identity() {
         )
         .await
         .expect_err("different bytes must not replace the object");
-    assert_eq!(error.code(), StorageErrorCode::ObjectIntegrityError);
+    assert_eq!(error.error_code(), ErrorCode::ObjectIntegrityError);
     assert_eq!(
         objects
             .read_exact(&descriptor, limit)
@@ -167,7 +169,7 @@ async fn exact_minio_operations_preserve_immutable_object_identity() {
         .verify(&descriptor)
         .await
         .expect_err("metadata mismatch must be an integrity error");
-    assert_eq!(error.code(), StorageErrorCode::ObjectIntegrityError);
+    assert_eq!(error.error_code(), ErrorCode::ObjectIntegrityError);
 
     backend
         .delete(&raw_path)
@@ -203,7 +205,7 @@ async fn exact_minio_operations_preserve_immutable_object_identity() {
         .read_exact(&descriptor, limit)
         .await
         .expect_err("registered object is missing");
-    assert_eq!(error.code(), StorageErrorCode::ObjectIntegrityError);
+    assert_eq!(error.error_code(), ErrorCode::ObjectIntegrityError);
 }
 
 const fn uuid(value: u128) -> Uuid {

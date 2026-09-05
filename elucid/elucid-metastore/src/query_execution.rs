@@ -2,12 +2,13 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use chrono::{DateTime, Utc};
+use elucid_core::{CodedError, ErrorCode};
 use sqlx::postgres::PgPool;
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::QueryRequestTimeRange;
 use crate::error::{is_database_conflict, is_row_decode_error};
-use crate::{MetastoreErrorCode, QueryRequestTimeRange};
 
 const MAXIMUM_QUERY_TEXT_BYTES: usize = 1_048_576;
 const QUERY_EXECUTION_RETENTION: i64 = 100;
@@ -199,15 +200,6 @@ impl QueryExecutionPersistenceError {
         self.kind
     }
 
-    #[must_use]
-    pub const fn code(&self) -> MetastoreErrorCode {
-        match self.kind {
-            QueryExecutionPersistenceErrorKind::Conflict => MetastoreErrorCode::Conflict,
-            QueryExecutionPersistenceErrorKind::Unavailable => MetastoreErrorCode::Unavailable,
-            QueryExecutionPersistenceErrorKind::Corrupt => MetastoreErrorCode::Corrupt,
-        }
-    }
-
     fn read(source: sqlx::Error) -> Self {
         let kind = if is_row_decode_error(&source) {
             QueryExecutionPersistenceErrorKind::Corrupt
@@ -251,6 +243,16 @@ impl Display for QueryExecutionPersistenceError {
 impl Error for QueryExecutionPersistenceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for QueryExecutionPersistenceError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            QueryExecutionPersistenceErrorKind::Conflict => ErrorCode::MetastoreConflict,
+            QueryExecutionPersistenceErrorKind::Unavailable => ErrorCode::MetastoreUnavailable,
+            QueryExecutionPersistenceErrorKind::Corrupt => ErrorCode::MetastoreCorrupt,
+        }
     }
 }
 

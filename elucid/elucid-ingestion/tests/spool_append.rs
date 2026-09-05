@@ -1,10 +1,12 @@
 use std::fs;
 
+use elucid_core::{CodedError, ErrorCode};
+
 use bytes::Bytes;
 use elucid_catalog::{IngestionProfileRevisionId, InputId, SchemaId, SourceId};
 use elucid_ingestion::{
     AppendBodyLimit, BatchId, BatchMetadata, BodyDigest, IngestionTime, PinnedCatalogIdentities,
-    Spool, SpoolCapacity, SpoolErrorCode,
+    Spool, SpoolCapacity,
 };
 use uuid::Uuid;
 
@@ -96,7 +98,7 @@ async fn reservation_prevents_overcommit_and_releases_unused_capacity() {
 
     let reservation = spool.reserve(limit).expect("first reservation");
     let error = spool.reserve(limit).expect_err("capacity must be reserved");
-    assert_eq!(error.code(), SpoolErrorCode::CapacityExhausted);
+    assert_eq!(error.error_code(), ErrorCode::CapacityExhausted);
     assert!(spool.usage().expect("usage").reserved_bytes() >= limit.get());
 
     drop(reservation);
@@ -123,7 +125,7 @@ async fn body_larger_than_the_reservation_is_not_appended() {
         .await
         .expect_err("oversized body must fail");
 
-    assert_eq!(error.code(), SpoolErrorCode::BatchLimitExceeded);
+    assert_eq!(error.error_code(), ErrorCode::IngestionBatchLimitExceeded);
     let usage = spool.usage().expect("usage");
     assert_eq!(usage.committed_bytes(), 0);
     assert_eq!(usage.reserved_bytes(), 0);

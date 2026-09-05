@@ -3,6 +3,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use elucid_core::{CodedError, ErrorCode};
+
 use arrow::array::{
     Array as _, ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, TimestampMillisecondArray,
 };
@@ -13,10 +15,9 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
 use elucid_catalog::{CatalogManifest, LogicalType, Schema};
 use elucid_engine::{
-    EngineErrorCode, HistoricalConversionMetrics, MAXIMUM_ENCODED_QUERY_ROW_BYTES,
-    QueryCancellation, QueryCompletion, QueryEngine, QueryExecutionLimitConfiguration,
-    QueryExecutionLimits, QueryObjectStore, QueryResourceLimitExceeded, QueryTruncationReason,
-    SnapshotTableProvider,
+    HistoricalConversionMetrics, MAXIMUM_ENCODED_QUERY_ROW_BYTES, QueryCancellation,
+    QueryCompletion, QueryEngine, QueryExecutionLimitConfiguration, QueryExecutionLimits,
+    QueryObjectStore, QueryResourceLimitExceeded, QueryTruncationReason, SnapshotTableProvider,
 };
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogStore, IngestionSegmentRegistration, IngestionSegmentTimes,
@@ -358,7 +359,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("a JSON number cannot be strictly cast to UTF-8");
-    assert_eq!(error.code(), EngineErrorCode::QueryCastFailed);
+    assert_eq!(error.error_code(), ErrorCode::QueryCastFailed);
 
     let overflow_range = QueryRequestTimeRange::new(timestamp(9, 30), timestamp(10, 30))
         .expect("ordered overflow range");
@@ -378,7 +379,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("integer overflow must terminate execution");
-    assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
+    assert_eq!(error.error_code(), ErrorCode::QueryEvaluationFailed);
 
     let sum_overflow_range = QueryRequestTimeRange::new(timestamp(9, 30), timestamp(11, 15))
         .expect("ordered sum-overflow range");
@@ -398,7 +399,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("integer sum overflow must terminate execution");
-    assert_eq!(error.code(), EngineErrorCode::QueryEvaluationFailed);
+    assert_eq!(error.error_code(), ErrorCode::QueryEvaluationFailed);
 
     let empty_range =
         QueryRequestTimeRange::new(timestamp(8, 0), timestamp(9, 0)).expect("ordered empty range");
@@ -537,7 +538,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("selected bytes must be checked again before execution");
-    assert_eq!(error.code(), EngineErrorCode::QueryResourceLimitExceeded);
+    assert_eq!(error.error_code(), ErrorCode::QueryResourceLimitExceeded);
     assert_eq!(
         error.resource_limit_exceeded(),
         Some(QueryResourceLimitExceeded::ScanBytes { maximum: 1 })
@@ -553,7 +554,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("pre-cancelled query must not begin execution");
-    assert_eq!(error.code(), EngineErrorCode::QueryCancelled);
+    assert_eq!(error.error_code(), ErrorCode::QueryCancelled);
 
     let mut timeout_configuration = query_limit_configuration(query_scratch.path());
     timeout_configuration.timeout = Duration::from_nanos(1);
@@ -571,7 +572,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("query execution must honor its deadline");
-    assert_eq!(error.code(), EngineErrorCode::QueryTimeout);
+    assert_eq!(error.error_code(), ErrorCode::QueryTimeout);
 
     let oversized_range = QueryRequestTimeRange::new(timestamp(12, 15), timestamp(12, 45))
         .expect("ordered oversized-row range");
@@ -591,7 +592,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
         )
         .await
         .expect_err("one encoded row must not exceed the reported implementation limit");
-    assert_eq!(error.code(), EngineErrorCode::QueryResourceLimitExceeded);
+    assert_eq!(error.error_code(), ErrorCode::QueryResourceLimitExceeded);
     assert_eq!(
         error.resource_limit_exceeded(),
         Some(QueryResourceLimitExceeded::EncodedRowBytes {
@@ -606,7 +607,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     let error = SnapshotTableProvider::open(&snapshot, query_objects.clone(), Arc::clone(&metrics))
         .await
         .expect_err("missing selected object must fail the complete snapshot");
-    assert_eq!(error.code(), EngineErrorCode::PublishedObjectMissing);
+    assert_eq!(error.error_code(), ErrorCode::PublishedObjectMissing);
 
     immutable_store
         .upload(
@@ -626,7 +627,7 @@ async fn exact_snapshot_executes_typed_pipelines_and_rejects_runtime_or_object_f
     let error = SnapshotTableProvider::open(&snapshot, query_objects, metrics)
         .await
         .expect_err("changed selected object must fail the complete snapshot");
-    assert_eq!(error.code(), EngineErrorCode::PublishedObjectCorrupt);
+    assert_eq!(error.error_code(), ErrorCode::PublishedObjectCorrupt);
 }
 
 #[derive(Debug)]

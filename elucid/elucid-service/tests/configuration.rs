@@ -1,8 +1,9 @@
 use std::net::SocketAddr;
 
+use elucid_core::{CodedError, ErrorCode};
 use elucid_service::{
-    ConfigurationErrorCode, ConfigurationViolation, Environment, LogFormat,
-    MAXIMUM_CONFIGURATION_DOCUMENT_BYTES, MaintenanceMode, RuntimeConfiguration, SecretKind,
+    ConfigurationViolation, Environment, LogFormat, MAXIMUM_CONFIGURATION_DOCUMENT_BYTES,
+    MaintenanceMode, RuntimeConfiguration, SecretKind,
 };
 
 const ACCEPTANCE_PROFILE: &str = include_str!("fixtures/runtime.toml");
@@ -155,14 +156,14 @@ fn retired_runtime_modes_and_attempt_controls_are_rejected() {
     for document in documents {
         let error = RuntimeConfiguration::from_toml(&document, &environment())
             .expect_err("retired configuration must not be accepted");
-        assert_eq!(error.code(), ConfigurationErrorCode::DocumentInvalid);
+        assert_eq!(error.error_code(), ErrorCode::ConfigurationDocumentInvalid);
     }
 
     let mut environment = environment();
     environment.set("ELUCID_SERVER__ENABLED_SERVICES", "[\"QUERY\"]");
     let error = RuntimeConfiguration::from_toml(ACCEPTANCE_PROFILE, &environment)
         .expect_err("retired environment overrides must not be accepted");
-    assert_eq!(error.code(), ConfigurationErrorCode::DocumentInvalid);
+    assert_eq!(error.error_code(), ErrorCode::ConfigurationDocumentInvalid);
 }
 
 #[test]
@@ -172,18 +173,27 @@ fn failures_distinguish_sources_and_never_echo_secret_values() {
     let unreadable =
         RuntimeConfiguration::load_with_environment(Some(missing_file.as_path()), &environment())
             .expect_err("a supplied missing file is unreadable");
-    assert_eq!(unreadable.code(), ConfigurationErrorCode::FileUnreadable);
+    assert_eq!(
+        unreadable.error_code(),
+        ErrorCode::ConfigurationFileUnreadable
+    );
 
     let malformed = RuntimeConfiguration::from_toml("[server", &environment())
         .expect_err("invalid TOML syntax is malformed");
-    assert_eq!(malformed.code(), ConfigurationErrorCode::DocumentMalformed);
+    assert_eq!(
+        malformed.error_code(),
+        ErrorCode::ConfigurationDocumentMalformed
+    );
 
     let mut missing_secret_environment = environment();
     missing_secret_environment.remove("ELUCID_METASTORE__POSTGRESQL_URL");
     let missing_secret =
         RuntimeConfiguration::from_toml(ACCEPTANCE_PROFILE, &missing_secret_environment)
             .expect_err("the PostgreSQL URL is required");
-    assert_eq!(missing_secret.code(), ConfigurationErrorCode::SecretMissing);
+    assert_eq!(
+        missing_secret.error_code(),
+        ErrorCode::ConfigurationSecretMissing
+    );
     assert_eq!(
         missing_secret.secret_kind(),
         Some(SecretKind::PostgreSqlUrl)
@@ -195,7 +205,10 @@ fn failures_distinguish_sources_and_never_echo_secret_values() {
     let invalid_secret =
         RuntimeConfiguration::from_toml(ACCEPTANCE_PROFILE, &invalid_secret_environment)
             .expect_err("object-store credentials reject whitespace");
-    assert_eq!(invalid_secret.code(), ConfigurationErrorCode::SecretInvalid);
+    assert_eq!(
+        invalid_secret.error_code(),
+        ErrorCode::ConfigurationSecretInvalid
+    );
     assert_eq!(
         invalid_secret.secret_kind(),
         Some(SecretKind::ObjectStoreAccessKeyId)
@@ -273,7 +286,10 @@ fn required_positive_values_and_absolute_paths_are_enforced() {
         changed_profile(&[("maximum_connections = 10", "maximum_connections = 0")]);
     let zero_error = RuntimeConfiguration::from_toml(&zero_connections, &environment())
         .expect_err("required counts reject zero");
-    assert_eq!(zero_error.code(), ConfigurationErrorCode::ValueInvalid);
+    assert_eq!(
+        zero_error.error_code(),
+        ErrorCode::ConfigurationValueInvalid
+    );
 
     let relative_spool = changed_profile(&[(
         "spool_path = \"/var/lib/elucid/spool\"",
@@ -281,13 +297,19 @@ fn required_positive_values_and_absolute_paths_are_enforced() {
     )]);
     let path_error = RuntimeConfiguration::from_toml(&relative_spool, &environment())
         .expect_err("local state paths must be absolute");
-    assert_eq!(path_error.code(), ConfigurationErrorCode::ValueInvalid);
+    assert_eq!(
+        path_error.error_code(),
+        ErrorCode::ConfigurationValueInvalid
+    );
 
     let noncanonical_root =
         changed_profile(&[("root_prefix = \"showcase\"", "root_prefix = \"/showcase\"")]);
     let root_error = RuntimeConfiguration::from_toml(&noncanonical_root, &environment())
         .expect_err("managed object prefixes must be canonical before dependency access");
-    assert_eq!(root_error.code(), ConfigurationErrorCode::ValueInvalid);
+    assert_eq!(
+        root_error.error_code(),
+        ErrorCode::ConfigurationValueInvalid
+    );
 }
 
 #[test]
@@ -296,7 +318,10 @@ fn automatic_maintenance_requires_a_pool_connection_beyond_its_lock_owner() {
         changed_profile(&[("maximum_connections = 10", "maximum_connections = 1")]);
     let error = RuntimeConfiguration::from_toml(&single_connection, &environment())
         .expect_err("automatic maintenance must not exhaust the PostgreSQL pool");
-    assert_eq!(error.code(), ConfigurationErrorCode::ConstraintViolation);
+    assert_eq!(
+        error.error_code(),
+        ErrorCode::ConfigurationConstraintViolation
+    );
 }
 
 #[test]
@@ -306,7 +331,7 @@ fn oversized_configuration_documents_are_rejected_before_parsing() {
     let error = RuntimeConfiguration::from_toml(&document, &environment())
         .expect_err("an oversized configuration document is rejected");
 
-    assert_eq!(error.code(), ConfigurationErrorCode::DocumentTooLarge);
+    assert_eq!(error.error_code(), ErrorCode::ConfigurationDocumentTooLarge);
 }
 
 fn environment() -> Environment {

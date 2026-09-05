@@ -1,0 +1,7 @@
+[package]
+name = "elucid-core"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true

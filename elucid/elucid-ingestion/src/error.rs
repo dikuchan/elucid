@@ -1,28 +1,36 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use elucid_core::{CodedError, ErrorCode};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum SpoolErrorCode {
+pub enum SpoolErrorKind {
     CapacityExhausted,
     BatchLimitExceeded,
     Corrupt,
     Unavailable,
 }
 
-impl SpoolErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::CapacityExhausted => "CAPACITY_EXHAUSTED",
-            Self::BatchLimitExceeded => "INGESTION_BATCH_LIMIT_EXCEEDED",
-            Self::Corrupt => "SPOOL_CORRUPT",
-            Self::Unavailable => "SPOOL_UNAVAILABLE",
+impl From<SpoolErrorKind> for ErrorCode {
+    fn from(value: SpoolErrorKind) -> Self {
+        match value {
+            SpoolErrorKind::CapacityExhausted => Self::CapacityExhausted,
+            SpoolErrorKind::BatchLimitExceeded => Self::IngestionBatchLimitExceeded,
+            SpoolErrorKind::Corrupt => Self::SpoolCorrupt,
+            SpoolErrorKind::Unavailable => Self::SpoolUnavailable,
         }
     }
 }
 
-impl Display for SpoolErrorCode {
+impl SpoolErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        ErrorCode::from(self).as_str()
+    }
+}
+
+impl Display for SpoolErrorKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -31,19 +39,19 @@ impl Display for SpoolErrorCode {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct SpoolError {
-    code: SpoolErrorCode,
+    kind: SpoolErrorKind,
     source: SpoolErrorSource,
 }
 
 impl SpoolError {
     #[must_use]
-    pub const fn code(&self) -> SpoolErrorCode {
-        self.code
+    pub const fn kind(&self) -> SpoolErrorKind {
+        self.kind
     }
 
     pub(crate) fn capacity(required_bytes: u64, available_bytes: u64) -> Self {
         Self {
-            code: SpoolErrorCode::CapacityExhausted,
+            kind: SpoolErrorKind::CapacityExhausted,
             source: SpoolErrorSource::Capacity {
                 required_bytes,
                 available_bytes,
@@ -53,7 +61,7 @@ impl SpoolError {
 
     pub(crate) fn batch_limit(actual_bytes: u64, maximum_bytes: u64) -> Self {
         Self {
-            code: SpoolErrorCode::BatchLimitExceeded,
+            kind: SpoolErrorKind::BatchLimitExceeded,
             source: SpoolErrorSource::BatchLimit {
                 actual_bytes,
                 maximum_bytes,
@@ -63,28 +71,28 @@ impl SpoolError {
 
     pub(crate) fn io(operation: &'static str, source: std::io::Error) -> Self {
         Self {
-            code: SpoolErrorCode::Unavailable,
+            kind: SpoolErrorKind::Unavailable,
             source: SpoolErrorSource::Io { operation, source },
         }
     }
 
     pub(crate) fn corrupt(message: &'static str) -> Self {
         Self {
-            code: SpoolErrorCode::Corrupt,
+            kind: SpoolErrorKind::Corrupt,
             source: SpoolErrorSource::Corrupt(message),
         }
     }
 
     pub(crate) fn invariant(message: &'static str) -> Self {
         Self {
-            code: SpoolErrorCode::Unavailable,
+            kind: SpoolErrorKind::Unavailable,
             source: SpoolErrorSource::Invariant(message),
         }
     }
 
     pub(crate) fn task(source: tokio::task::JoinError) -> Self {
         Self {
-            code: SpoolErrorCode::Unavailable,
+            kind: SpoolErrorKind::Unavailable,
             source: SpoolErrorSource::Task(source),
         }
     }
@@ -92,13 +100,19 @@ impl SpoolError {
 
 impl Display for SpoolError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.code, formatter)
+        Display::fmt(&self.kind, formatter)
     }
 }
 
 impl Error for SpoolError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for SpoolError {
+    fn error_code(&self) -> ErrorCode {
+        self.kind().into()
     }
 }
 

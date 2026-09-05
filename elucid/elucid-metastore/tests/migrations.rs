@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
-use elucid_metastore::{MetastoreErrorCode, install};
+use elucid_core::{CodedError, ErrorCode};
+use elucid_metastore::install;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Executor as _, Row as _};
 use testcontainers_modules::postgres::Postgres;
@@ -472,8 +473,8 @@ async fn assert_checksum_mismatch_has_stable_error(pool: &PgPool) {
     let error = install(pool)
         .await
         .expect_err("checksum mismatch must fail installation");
-    assert_eq!(error.code(), MetastoreErrorCode::MigrationFailed);
-    assert_eq!(error.code().as_str(), "METASTORE_MIGRATION_FAILED");
+    assert_eq!(error.error_code(), ErrorCode::MetastoreMigrationFailed);
+    assert_eq!(error.error_code().as_str(), "METASTORE_MIGRATION_FAILED");
     assert_eq!(error.to_string(), "metastore migration failed");
 }
 

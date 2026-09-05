@@ -7,6 +7,7 @@ edition.workspace = true
 workspace = true
 
 [dependencies]
+elucid-core = { workspace = true }
 ariadne = { workspace = true }
 chrono = { workspace = true }
 chumsky = { workspace = true, features = ["pratt"] }

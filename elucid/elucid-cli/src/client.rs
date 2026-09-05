@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use elucid_catalog::{InputName, SourceName};
+use elucid_core::ErrorCode;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::{Client, RequestBuilder, Response, StatusCode};
 
 use crate::arguments::{ClientTimeoutSeconds, ProductEndpoint};
-use crate::error::{CliErrorCode, Failure};
+use crate::error::Failure;
 use crate::input::RequestInput;
 
 const MAXIMUM_CLIENT_RESPONSE_BYTES: usize = 1_048_576;
@@ -23,7 +24,7 @@ impl ProductClient {
             .build()
             .map_err(|error| {
                 Failure::internal(
-                    CliErrorCode::HttpClientInitializationFailed,
+                    ErrorCode::HttpClientInitializationFailed,
                     anyhow::Error::new(error).context("failed to initialize HTTP client"),
                 )
             })?;
@@ -55,7 +56,7 @@ impl ProductClient {
             .ingestion_url(source, input_name)
             .map_err(|error| {
                 Failure::internal(
-                    CliErrorCode::EndpointUrlConstructionFailed,
+                    ErrorCode::EndpointUrlConstructionFailed,
                     anyhow::anyhow!(error),
                 )
             })?;
@@ -97,7 +98,7 @@ async fn read_bounded_response(mut response: Response) -> Result<HttpResponse, F
         .is_some_and(|length| length > MAXIMUM_CLIENT_RESPONSE_BYTES as u64)
     {
         return Err(Failure::remote_unavailable(
-            CliErrorCode::RemoteResponseTooLarge,
+            ErrorCode::RemoteResponseTooLarge,
             anyhow::anyhow!("remote response exceeds {MAXIMUM_CLIENT_RESPONSE_BYTES} bytes"),
         ));
     }
@@ -110,13 +111,13 @@ async fn read_bounded_response(mut response: Response) -> Result<HttpResponse, F
     {
         let next_length = body.len().checked_add(chunk.len()).ok_or_else(|| {
             Failure::remote_unavailable(
-                CliErrorCode::RemoteResponseTooLarge,
+                ErrorCode::RemoteResponseTooLarge,
                 anyhow::anyhow!("remote response size overflowed"),
             )
         })?;
         if next_length > MAXIMUM_CLIENT_RESPONSE_BYTES {
             return Err(Failure::remote_unavailable(
-                CliErrorCode::RemoteResponseTooLarge,
+                ErrorCode::RemoteResponseTooLarge,
                 anyhow::anyhow!("remote response exceeds {MAXIMUM_CLIENT_RESPONSE_BYTES} bytes"),
             ));
         }
@@ -135,7 +136,7 @@ fn validate_response_content_type(response: &Response) -> Result<(), Failure> {
         .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("application/json"));
     if !is_json {
         return Err(Failure::remote_unavailable(
-            CliErrorCode::RemoteResponseInvalid,
+            ErrorCode::RemoteResponseInvalid,
             anyhow::anyhow!("remote response Content-Type is not application/json"),
         ));
     }
@@ -146,11 +147,11 @@ fn validate_response_body(body: &[u8]) -> Result<(), Failure> {
     match serde_json::from_slice::<serde_json::Value>(body) {
         Ok(serde_json::Value::Object(_)) => Ok(()),
         Ok(_) => Err(Failure::remote_unavailable(
-            CliErrorCode::RemoteResponseInvalid,
+            ErrorCode::RemoteResponseInvalid,
             anyhow::anyhow!("remote response body is not a JSON object"),
         )),
         Err(error) => Err(Failure::remote_unavailable(
-            CliErrorCode::RemoteResponseInvalid,
+            ErrorCode::RemoteResponseInvalid,
             anyhow::Error::new(error).context("remote response body is not valid JSON"),
         )),
     }

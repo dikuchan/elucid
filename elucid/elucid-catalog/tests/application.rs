@@ -1,7 +1,8 @@
+use elucid_core::{CodedError, ErrorCode};
+
 use elucid_catalog::{
-    CatalogApplicationOutcome, CatalogEntityDisposition, CatalogErrorCode,
-    CatalogIdentityGenerator, CatalogManifest, FieldId, IngestionProfileRevisionId, InputId,
-    SchemaId, SourceId, plan_catalog_application,
+    CatalogApplicationOutcome, CatalogEntityDisposition, CatalogIdentityGenerator, CatalogManifest,
+    FieldId, IngestionProfileRevisionId, InputId, SchemaId, SourceId, plan_catalog_application,
 };
 use uuid::Uuid;
 
@@ -77,44 +78,44 @@ fn strict_manifest_loader_rejects_ambiguous_yaml_and_invalid_references() {
         (
             "duplicate key",
             BASE_MANIFEST.replacen("  name: logs", "  name: logs\n  name: duplicate", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "alias",
             BASE_MANIFEST
                 .replacen("name: logs", "name: &source_name logs", 1)
                 .replacen("display_name: Access logs", "display_name: *source_name", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "explicit tag",
             BASE_MANIFEST.replacen("name: logs", "name: !!str logs", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "merge key",
             BASE_MANIFEST.replacen("  name: logs", "  <<: {name: logs}\n  name: logs", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "non-string mapping key",
             BASE_MANIFEST.replacen("  name: logs", "  [name]: logs", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "unknown property",
             BASE_MANIFEST.replacen("  name: logs", "  name: logs\n  source_id: forbidden", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "multiple documents",
             format!("{BASE_MANIFEST}\n---\n{BASE_MANIFEST}"),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "YAML 1.1 directive",
             format!("%YAML 1.1\n---\n{BASE_MANIFEST}"),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "retired input switch",
@@ -123,17 +124,17 @@ fn strict_manifest_loader_rejects_ambiguous_yaml_and_invalid_references() {
                 "    - name: http\n      kind: HTTP_NDJSON",
                 1,
             ),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "unresolved active schema",
             BASE_MANIFEST.replacen("active_schema_version: 1", "active_schema_version: 2", 1),
-            CatalogErrorCode::ManifestInvalid,
+            ErrorCode::CatalogManifestInvalid,
         ),
         (
             "unresolved mapping target",
             BASE_MANIFEST.replacen("target_field: message", "target_field: absent", 1),
-            CatalogErrorCode::ProfileInvalid,
+            ErrorCode::CatalogProfileInvalid,
         ),
     ];
 
@@ -142,7 +143,7 @@ fn strict_manifest_loader_rejects_ambiguous_yaml_and_invalid_references() {
             Ok(_) => panic!("{case} unexpectedly decoded"),
             Err(error) => error,
         };
-        assert_eq!(error.code(), expected_code, "{case}: {error}");
+        assert_eq!(error.error_code(), expected_code, "{case}: {error}");
         assert!(!error.path().as_str().is_empty(), "{case}: missing path");
     }
 }
@@ -326,7 +327,7 @@ fn positive_version_histories_allow_gaps_and_reject_duplicates() {
     let duplicate_schemas = EXTENDED_MANIFEST.replacen("    - version: 2", "    - version: 1", 1);
     let error = CatalogManifest::decode(duplicate_schemas.as_bytes())
         .expect_err("schema versions must be unique");
-    assert_eq!(error.code(), CatalogErrorCode::ManifestInvalid);
+    assert_eq!(error.error_code(), ErrorCode::CatalogManifestInvalid);
 
     let mut gapped_profiles = BASE_MANIFEST.replacen(
         "active_ingestion_profile_revision: 1",
@@ -354,7 +355,7 @@ fn positive_version_histories_allow_gaps_and_reject_duplicates() {
         gapped_profiles.replacen("        - revision: 3", "        - revision: 1", 1);
     let error = CatalogManifest::decode(duplicate_profiles.as_bytes())
         .expect_err("profile revisions must be unique");
-    assert_eq!(error.code(), CatalogErrorCode::ManifestInvalid);
+    assert_eq!(error.error_code(), ErrorCode::CatalogManifestInvalid);
 }
 
 #[test]
@@ -440,7 +441,11 @@ fn schema_history_is_additive_only() {
             .unwrap_or_else(|error| panic!("{case} must decode structurally: {error}"));
         let error = plan_catalog_application(&manifest, None, &mut SequentialIdentities::new())
             .expect_err("non-additive schema history must be rejected");
-        assert_eq!(error.code(), CatalogErrorCode::SchemaIncompatible, "{case}");
+        assert_eq!(
+            error.error_code(),
+            ErrorCode::CatalogSchemaIncompatible,
+            "{case}"
+        );
     }
 }
 
@@ -460,7 +465,7 @@ fn reconciliation_rejects_history_rewrites_and_incompatible_activation() {
     let conflict =
         plan_catalog_application(&rewritten_manifest, Some(created.source()), &mut identities)
             .expect_err("an immutable schema cannot be rewritten");
-    assert_eq!(conflict.code(), CatalogErrorCode::DefinitionConflict);
+    assert_eq!(conflict.error_code(), ErrorCode::CatalogDefinitionConflict);
     assert_eq!(conflict.path().as_str(), "source.schemas[0]");
 
     let required_extension = CatalogManifest::decode(
@@ -476,7 +481,10 @@ fn reconciliation_rejects_history_rewrites_and_incompatible_activation() {
     let incompatible =
         plan_catalog_application(&required_extension, Some(created.source()), &mut identities)
             .expect_err("historical rows cannot supply a new required field");
-    assert_eq!(incompatible.code(), CatalogErrorCode::SchemaIncompatible);
+    assert_eq!(
+        incompatible.error_code(),
+        ErrorCode::CatalogSchemaIncompatible
+    );
     assert_eq!(incompatible.path().as_str(), "source.schemas");
 
     let compatible = CatalogManifest::decode(EXTENDED_MANIFEST.as_bytes()).expect("manifest valid");
@@ -484,7 +492,7 @@ fn reconciliation_rejects_history_rewrites_and_incompatible_activation() {
         .expect("compatible extension is valid");
     let diverged = plan_catalog_application(&manifest, Some(extended.source()), &mut identities)
         .expect_err("persisted history cannot be omitted");
-    assert_eq!(diverged.code(), CatalogErrorCode::DefinitionConflict);
+    assert_eq!(diverged.error_code(), ErrorCode::CatalogDefinitionConflict);
     assert_eq!(diverged.path().as_str(), "source.schemas");
 }
 

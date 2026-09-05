@@ -12,7 +12,7 @@ mod segment;
 mod spool;
 
 pub use elucid_storage::BatchId;
-pub use error::{SpoolError, SpoolErrorCode, SpoolModelError};
+pub use error::{SpoolError, SpoolErrorKind, SpoolModelError};
 pub use model::{
     AppendBodyLimit, BatchByteSize, BatchMetadata, BodyDigest, DurableAppend, IngestionTime,
     MaximumBatchAdmission, PinnedCatalogIdentities, RecoveredBatch, RecoveryReport,

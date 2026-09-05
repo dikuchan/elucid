@@ -15,7 +15,7 @@ mod typing_tests;
 pub(crate) mod error;
 
 pub use error::{
-    Analysis, AnalyzeError, AnalyzeErrorCode, Diagnostic, DiagnosticCode, DiagnosticSeverity,
+    Analysis, AnalyzeError, AnalyzeErrorKind, Diagnostic, DiagnosticCode, DiagnosticSeverity,
     SourcePosition, SourceRange,
 };
 

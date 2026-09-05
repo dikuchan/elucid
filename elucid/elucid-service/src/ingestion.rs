@@ -9,7 +9,7 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 
 use elucid_ingestion::{
     AppendBodyLimit, BatchMetadata, DurableAppend, IngestionTime, MaximumBatchAdmission,
-    RecoveredBatches, Spool, SpoolCapacity, SpoolError, SpoolErrorCode, SpoolReservation,
+    RecoveredBatches, Spool, SpoolCapacity, SpoolError, SpoolErrorKind, SpoolReservation,
 };
 
 use crate::metrics::ServiceMetrics;
@@ -300,11 +300,11 @@ impl AdmittedAppend {
 }
 
 fn admission_failure(error: SpoolError) -> AdmissionFailure {
-    match error.code() {
-        SpoolErrorCode::CapacityExhausted => AdmissionFailure::CapacityExhausted,
-        SpoolErrorCode::BatchLimitExceeded
-        | SpoolErrorCode::Corrupt
-        | SpoolErrorCode::Unavailable => AdmissionFailure::Unavailable,
+    match error.kind() {
+        SpoolErrorKind::CapacityExhausted => AdmissionFailure::CapacityExhausted,
+        SpoolErrorKind::BatchLimitExceeded
+        | SpoolErrorKind::Corrupt
+        | SpoolErrorKind::Unavailable => AdmissionFailure::Unavailable,
         _ => AdmissionFailure::Unavailable,
     }
 }

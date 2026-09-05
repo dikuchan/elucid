@@ -9,7 +9,7 @@ pub mod parser;
 
 pub use catalog::CatalogSnapshot;
 pub use semantic::{
-    Analysis, AnalyzeError, AnalyzeErrorCode, Diagnostic, DiagnosticCode, DiagnosticSeverity,
+    Analysis, AnalyzeError, AnalyzeErrorKind, Diagnostic, DiagnosticCode, DiagnosticSeverity,
     SourcePosition, SourceRange,
 };
 pub use span::Span;
@@ -55,7 +55,7 @@ impl QueryTimeContext {
 ///
 /// # Errors
 ///
-/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Syntax`] when parsing fails.
+/// Returns an [`AnalyzeError`] with [`AnalyzeErrorKind::Syntax`] when parsing fails.
 pub fn parse(query: &str) -> Result<ast::Query, AnalyzeError> {
     parser::parse(query).map_err(|error| {
         let mut error = AnalyzeError::syntax(error.to_string(), error.span());
@@ -68,7 +68,7 @@ pub fn parse(query: &str) -> Result<ast::Query, AnalyzeError> {
 ///
 /// # Errors
 ///
-/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Semantic`] when typed analysis fails.
+/// Returns an [`AnalyzeError`] with [`AnalyzeErrorKind::Semantic`] when typed analysis fails.
 pub fn analyze_parsed(
     query: &str,
     ast: &ast::Query,
@@ -89,8 +89,7 @@ pub fn analyze_parsed(
 ///
 /// # Errors
 ///
-/// Returns an [`AnalyzeError`] with [`AnalyzeErrorCode::Syntax`] when parsing fails or
-/// [`AnalyzeErrorCode::Semantic`] when typed analysis fails.
+/// Returns an [`AnalyzeError`] with [`AnalyzeErrorKind::Syntax`] when parsing fails or [`AnalyzeErrorKind::Semantic`] when typed analysis fails.
 pub fn analyze(
     query: &str,
     catalog: &CatalogSnapshot<'_>,

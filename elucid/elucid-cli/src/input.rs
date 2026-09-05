@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
+use elucid_core::ErrorCode;
 use reqwest::Body;
 use tokio::io::BufReader;
 use tokio_util::io::ReaderStream;
 
-use crate::error::{CliErrorCode, Failure};
+use crate::error::Failure;
 
 #[derive(Debug)]
 pub(crate) enum RequestInput {
@@ -26,7 +27,7 @@ impl RequestInput {
             Self::File(path) => {
                 let file = tokio::fs::File::open(&path).await.map_err(|error| {
                     Failure::command(
-                        CliErrorCode::InputFileUnreadable,
+                        ErrorCode::InputFileUnreadable,
                         anyhow::Error::new(error)
                             .context(format!("failed to open input file {path:?}")),
                     )

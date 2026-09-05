@@ -9,14 +9,14 @@ use elucid_compaction::{
     CompactionBuildLimitConfiguration, CompactionBuildLimits, CompactionWorker,
 };
 use elucid_metastore::{
-    CompactionClaimLimitConfiguration, CompactionClaimLimits, CompactionFailureCode,
+    CompactionClaimLimitConfiguration, CompactionClaimLimits, CompactionFailureReason,
     CompactionRecoveryLimit, CompactionStore, MaintenanceOwner,
     MaintenanceOwnership as MetastoreMaintenanceOwnership, MetadataCleanupLimit,
     ObjectDeletionFailure, ObjectDeletionRetryDelay, ObjectReclamationLimit,
     ObjectReclamationStore, OrphanGracePeriod, PublicationStore, ReclamationGracePeriod,
     RetentionScanLimit, RetentionStore,
 };
-use elucid_storage::{ImmutableObjectStore, StorageErrorCode};
+use elucid_storage::{ImmutableObjectStore, StorageErrorKind};
 
 use crate::runtime::ComponentStatus;
 use crate::{MaintenanceError, MaintenanceMode, RuntimeConfiguration};
@@ -402,7 +402,7 @@ async fn compact_once(
                 owner
                     .fail_run(
                         run_id,
-                        CompactionFailureCode::PublicationFailed,
+                        CompactionFailureReason::PublicationFailed,
                         limits.orphan_grace,
                     )
                     .await?;
@@ -411,7 +411,7 @@ async fn compact_once(
         },
         Err(error) => {
             owner
-                .fail_run(run_id, error.code().into(), limits.orphan_grace)
+                .fail_run(run_id, error.kind().into(), limits.orphan_grace)
                 .await?;
             Ok(IterationHealth::Degraded)
         }
@@ -432,7 +432,7 @@ async fn reclaim_objects(
             Ok(_) => reclamation.record_deleted(&claim).await.map(|_| ()),
             Err(error) => {
                 health = IterationHealth::Degraded;
-                let failure = if error.code() == StorageErrorCode::ObjectIntegrityError {
+                let failure = if error.kind() == StorageErrorKind::ObjectIntegrityError {
                     ObjectDeletionFailure::Integrity
                 } else {
                     ObjectDeletionFailure::Retryable

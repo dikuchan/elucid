@@ -26,7 +26,7 @@ use elucid_metastore::{
 use elucid_storage::{
     ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ObjectUploadOutcome,
     ObjectVerificationOutcome, ParquetSegmentExpectation, ParquetSegmentInput, ParquetWriteLimit,
-    SegmentId, StorageError, StorageErrorCode, StoredObjectId, TransferLimit,
+    SegmentId, StorageError, StorageErrorKind, StoredObjectId, TransferLimit,
     validate_parquet_segment, write_parquet_segment,
 };
 
@@ -1082,10 +1082,10 @@ async fn read_bounded_file(
 
 fn transient_storage(error: &StorageError) -> bool {
     matches!(
-        error.code(),
-        StorageErrorCode::ObjectStoreUnavailable
-            | StorageErrorCode::ObjectUploadFailed
-            | StorageErrorCode::ObjectVerificationFailed
+        error.kind(),
+        StorageErrorKind::ObjectStoreUnavailable
+            | StorageErrorKind::ObjectUploadFailed
+            | StorageErrorKind::ObjectVerificationFailed
     )
 }
 

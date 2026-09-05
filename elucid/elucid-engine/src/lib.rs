@@ -10,7 +10,7 @@ mod runtime;
 mod schema_adapter;
 mod snapshot;
 
-pub use error::{EngineError, EngineErrorCode, QueryResourceLimitExceeded};
+pub use error::{EngineError, EngineErrorKind, QueryResourceLimitExceeded};
 pub use execution::{QueryCancellation, QueryEngine};
 pub use limits::{
     QueryExecutionLimit, QueryExecutionLimitConfiguration, QueryExecutionLimits,

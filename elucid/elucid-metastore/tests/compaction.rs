@@ -5,7 +5,7 @@ use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone as _, Utc};
 use elucid_catalog::{CatalogManifest, SchemaId, SourceId};
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogStore, CompactionClaimLimitConfiguration, CompactionClaimLimits,
-    CompactionFailureCode, CompactionFailureOutcome, CompactionMetadataErrorKind,
+    CompactionFailureOutcome, CompactionFailureReason, CompactionMetadataErrorKind,
     CompactionOutputRegistration, CompactionOutputRegistrationConfiguration,
     CompactionOutputRegistrationOutcome, CompactionPublicationOutcome, CompactionRecoveryLimit,
     CompactionRunClaim, CompactionStore, IngestionSegmentRegistration, IngestionSegmentTimes,
@@ -365,7 +365,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
         owner
             .fail_run(
                 claim.run_id(),
-                CompactionFailureCode::PublicationFailed,
+                CompactionFailureReason::PublicationFailed,
                 OrphanGracePeriod::new(300).expect("orphan grace"),
             )
             .await
@@ -378,7 +378,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
         owner
             .fail_run(
                 build_only_claim.run_id(),
-                CompactionFailureCode::BuildFailed,
+                CompactionFailureReason::BuildFailed,
                 OrphanGracePeriod::new(300).expect("orphan grace"),
             )
             .await
@@ -389,7 +389,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
         owner
             .fail_run(
                 build_only_claim.run_id(),
-                CompactionFailureCode::InputInvalid,
+                CompactionFailureReason::InputInvalid,
                 OrphanGracePeriod::new(600).expect("different orphan grace"),
             )
             .await

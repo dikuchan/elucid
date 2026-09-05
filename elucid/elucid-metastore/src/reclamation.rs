@@ -1,15 +1,15 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use elucid_core::{CodedError, ErrorCode};
 use elucid_storage::{
     BatchId, ManagedObjectKey, ObjectByteSize, ObjectDescriptor, ObjectDigest, ObjectFormatVersion,
-    ObjectMediaType, SegmentId, StorageErrorCode, StorageModelError, StoredObjectId,
+    ObjectMediaType, SegmentId, StorageModelError, StoredObjectId,
 };
 use sqlx::postgres::PgPool;
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::MetastoreErrorCode;
 use crate::error::{is_database_conflict, is_row_decode_error};
 
 pub const MAXIMUM_OBJECT_RECLAMATION_ITEMS: u64 = 1_000;
@@ -121,10 +121,10 @@ pub enum ObjectDeletionFailure {
 }
 
 impl ObjectDeletionFailure {
-    const fn code(self) -> StorageErrorCode {
+    const fn error_code(self) -> ErrorCode {
         match self {
-            Self::Retryable => StorageErrorCode::ObjectDeleteFailed,
-            Self::Integrity => StorageErrorCode::ObjectIntegrityError,
+            Self::Retryable => ErrorCode::ObjectDeleteFailed,
+            Self::Integrity => ErrorCode::ObjectIntegrityError,
         }
     }
 }
@@ -171,15 +171,6 @@ impl ObjectReclamationError {
     #[must_use]
     pub const fn kind(&self) -> ObjectReclamationErrorKind {
         self.kind
-    }
-
-    #[must_use]
-    pub const fn code(&self) -> MetastoreErrorCode {
-        match self.kind {
-            ObjectReclamationErrorKind::Conflict => MetastoreErrorCode::Conflict,
-            ObjectReclamationErrorKind::Unavailable => MetastoreErrorCode::Unavailable,
-            ObjectReclamationErrorKind::Corrupt => MetastoreErrorCode::Corrupt,
-        }
     }
 
     fn unavailable(source: sqlx::Error) -> Self {
@@ -244,6 +235,16 @@ impl Display for ObjectReclamationError {
 impl Error for ObjectReclamationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for ObjectReclamationError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            ObjectReclamationErrorKind::Conflict => ErrorCode::MetastoreConflict,
+            ObjectReclamationErrorKind::Unavailable => ErrorCode::MetastoreUnavailable,
+            ObjectReclamationErrorKind::Corrupt => ErrorCode::MetastoreCorrupt,
+        }
     }
 }
 
@@ -373,7 +374,7 @@ impl ObjectReclamationStore {
                     "#,
                 )
                 .bind(claim.descriptor.key().object_id().as_uuid())
-                .bind(failure.code().as_str())
+                .bind(failure.error_code().as_str())
                 .execute(&mut *transaction)
                 .await
                 .map_err(ObjectReclamationError::write)?;

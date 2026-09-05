@@ -12,5 +12,5 @@ mod runtime;
 mod ui;
 
 pub use configuration::*;
-pub use error::{MaintenanceError, QueryInitializationError, ServiceError, ServiceErrorCode};
+pub use error::{MaintenanceError, QueryInitializationError, ServiceError};
 pub use runtime::{RunningServer, start};

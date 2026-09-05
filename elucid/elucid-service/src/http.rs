@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, SecondsFormat, Utc};
+use elucid_core::{CodedError, ErrorCode};
 use futures::StreamExt as _;
 use serde::ser::SerializeStruct as _;
 use serde::{Deserialize, Serialize};
@@ -24,16 +25,16 @@ use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use elucid_catalog::{
-    CatalogApplicationError, CatalogErrorCode, CatalogManifest, Field, IngestionProfileRevision,
+    CatalogApplicationError, CatalogErrorKind, CatalogManifest, Field, IngestionProfileRevision,
     Input, InputName, Schema, Source, SourceId, SourceName,
 };
 use elucid_engine::{
-    EngineError, EngineErrorCode, QueryColumn, QueryExecutionStatistics, QueryOutputRowLimitError,
+    EngineError, EngineErrorKind, QueryColumn, QueryExecutionStatistics, QueryOutputRowLimitError,
     QueryResult,
 };
 use elucid_ingestion::{
     BatchId, BatchMetadata, IngestionTime, MAXIMUM_BATCH_EVENT_DAYS, PinnedCatalogIdentities,
-    SpoolErrorCode,
+    SpoolErrorKind,
 };
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogPersistenceError, CatalogPersistenceErrorKind, DeadLetterSummary,
@@ -43,7 +44,7 @@ use elucid_metastore::{
     QueryRequestTimeRange, QuerySnapshotError, QuerySnapshotErrorKind, SegmentInspection,
 };
 use elucid_storage::{
-    ObjectReadRange, StorageError, StorageErrorCode, StoredObjectId, TransferLimit,
+    ObjectReadRange, StorageError, StorageErrorKind, StoredObjectId, TransferLimit,
 };
 
 use crate::dead_letter::{DeadLetterDocumentEntry, decode_dead_letters};
@@ -683,7 +684,7 @@ impl AdmittedIngestionOutcome {
                 ingestion_time: captured_time.to_rfc3339_opts(SecondsFormat::Millis, true),
                 body_bytes: durable.body_bytes().get(),
             }),
-            Err(error) if error.code() == SpoolErrorCode::BatchLimitExceeded => Self::LimitExceeded,
+            Err(error) if error.kind() == SpoolErrorKind::BatchLimitExceeded => Self::LimitExceeded,
             Err(_) => Self::Internal,
         }
     }
@@ -2036,9 +2037,13 @@ impl IngestionProfileSummary {
     }
 }
 
+#[derive(thiserror::Error)]
+#[error("{message}")]
 struct ApiError {
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
     status: StatusCode,
-    code: &'static str,
+    code: ErrorCode,
     message: &'static str,
     details: ErrorDetails,
     retry_after_seconds: Option<u64>,
@@ -2048,7 +2053,7 @@ impl ApiError {
     fn invalid_request() -> Self {
         Self::plain(
             StatusCode::BAD_REQUEST,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Request is invalid",
         )
     }
@@ -2056,7 +2061,7 @@ impl ApiError {
     fn unsupported_catalog_media_type() -> Self {
         Self::plain(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Content-Type must be application/yaml",
         )
     }
@@ -2064,7 +2069,7 @@ impl ApiError {
     fn catalog_request_too_large() -> Self {
         Self::plain(
             StatusCode::PAYLOAD_TOO_LARGE,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Request body exceeds the catalog document limit",
         )
     }
@@ -2072,7 +2077,7 @@ impl ApiError {
     fn unsupported_ingestion_media_type() -> Self {
         Self::plain(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Content-Type must be application/x-ndjson",
         )
     }
@@ -2080,7 +2085,7 @@ impl ApiError {
     fn unsupported_ingestion_encoding() -> Self {
         Self::plain(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Content-Encoding must be identity",
         )
     }
@@ -2088,7 +2093,7 @@ impl ApiError {
     fn unsupported_query_media_type() -> Self {
         Self::plain(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Content-Type must be application/json",
         )
     }
@@ -2096,7 +2101,7 @@ impl ApiError {
     fn query_request_too_large() -> Self {
         Self::plain(
             StatusCode::PAYLOAD_TOO_LARGE,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Request body exceeds the query request limit",
         )
     }
@@ -2104,15 +2109,16 @@ impl ApiError {
     fn ingestion_batch_limit_exceeded() -> Self {
         Self::plain(
             StatusCode::PAYLOAD_TOO_LARGE,
-            "INGESTION_BATCH_LIMIT_EXCEEDED",
+            ErrorCode::IngestionBatchLimitExceeded,
             "Ingestion batch exceeds an admission limit",
         )
     }
 
     fn capacity_exhausted() -> Self {
         Self {
+            source: None,
             status: StatusCode::TOO_MANY_REQUESTS,
-            code: "CAPACITY_EXHAUSTED",
+            code: ErrorCode::CapacityExhausted,
             message: "Admission capacity is exhausted",
             details: ErrorDetails::Empty(EmptyDetails {}),
             retry_after_seconds: Some(RETRY_AFTER_SECONDS),
@@ -2122,7 +2128,7 @@ impl ApiError {
     fn request_timed_out() -> Self {
         Self::plain(
             StatusCode::REQUEST_TIMEOUT,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Request timed out",
         )
     }
@@ -2130,27 +2136,32 @@ impl ApiError {
     fn method_not_allowed() -> Self {
         Self::plain(
             StatusCode::METHOD_NOT_ALLOWED,
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "Method is not allowed",
         )
     }
 
     fn not_found() -> Self {
-        Self::plain(StatusCode::NOT_FOUND, "NOT_FOUND", "Resource was not found")
+        Self::plain(
+            StatusCode::NOT_FOUND,
+            ErrorCode::NotFound,
+            "Resource was not found",
+        )
     }
 
     fn internal() -> Self {
         Self::plain(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "INTERNAL_ERROR",
+            ErrorCode::InternalError,
             "Internal server error",
         )
     }
 
     fn server_not_ready(details: ReadinessDetails) -> Self {
         Self {
+            source: None,
             status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "SERVER_NOT_READY",
+            code: ErrorCode::ServerNotReady,
             message: "Server is not ready",
             details: ErrorDetails::Readiness(details),
             retry_after_seconds: Some(RETRY_AFTER_SECONDS),
@@ -2159,8 +2170,9 @@ impl ApiError {
 
     fn server_draining() -> Self {
         Self {
+            source: None,
             status: StatusCode::SERVICE_UNAVAILABLE,
-            code: "SERVER_DRAINING",
+            code: ErrorCode::ServerDraining,
             message: "Server is draining",
             details: ErrorDetails::Empty(EmptyDetails {}),
             retry_after_seconds: Some(RETRY_AFTER_SECONDS),
@@ -2170,110 +2182,116 @@ impl ApiError {
     fn metastore_unavailable() -> Self {
         Self::plain(
             StatusCode::SERVICE_UNAVAILABLE,
-            "METASTORE_UNAVAILABLE",
+            ErrorCode::MetastoreUnavailable,
             "Metastore is unavailable",
         )
     }
 
     fn publication(error: PublicationError) -> Self {
-        match error.kind() {
+        let response = match error.kind() {
             PublicationErrorKind::Unavailable => Self::metastore_unavailable(),
             PublicationErrorKind::Conflict => Self::plain(
                 StatusCode::CONFLICT,
-                "METASTORE_CONFLICT",
+                ErrorCode::MetastoreConflict,
                 "Metastore state changed concurrently",
             ),
             PublicationErrorKind::Corrupt => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "METASTORE_CORRUPT",
+                ErrorCode::MetastoreCorrupt,
                 "Metastore state is corrupt",
             ),
             _ => Self::internal(),
-        }
+        };
+        response.with_source(error)
     }
 
     fn storage(error: StorageError) -> Self {
-        match error.code() {
-            StorageErrorCode::ObjectStoreUnavailable
-            | StorageErrorCode::ObjectUploadFailed
-            | StorageErrorCode::ObjectVerificationFailed
-            | StorageErrorCode::ObjectDeleteFailed => Self::plain(
+        let response = match error.kind() {
+            StorageErrorKind::ObjectStoreUnavailable
+            | StorageErrorKind::ObjectUploadFailed
+            | StorageErrorKind::ObjectVerificationFailed
+            | StorageErrorKind::ObjectDeleteFailed => Self::plain(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "OBJECT_STORE_UNAVAILABLE",
+                ErrorCode::ObjectStoreUnavailable,
                 "Object store is unavailable",
             ),
-            StorageErrorCode::ObjectIntegrityError | StorageErrorCode::ParquetInvalid => {
+            StorageErrorKind::ObjectIntegrityError | StorageErrorKind::ParquetInvalid => {
                 Self::object_integrity()
             }
-            StorageErrorCode::ParquetBuildFailed | StorageErrorCode::LocalCapacityExhausted => {
+            StorageErrorKind::ParquetBuildFailed | StorageErrorKind::LocalCapacityExhausted => {
                 Self::internal()
             }
             _ => Self::internal(),
-        }
+        };
+        response.with_source(error)
     }
 
     fn object_integrity() -> Self {
         Self::plain(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "OBJECT_INTEGRITY_ERROR",
+            ErrorCode::ObjectIntegrityError,
             "Stored object failed integrity validation",
         )
     }
 
     fn query(error: QueryFailure) -> Self {
         match error {
-            QueryFailure::ExecutionModel(error) => match error {
+            QueryFailure::ExecutionModel(error) => (match &error {
                 QueryExecutionModelError::QueryTextTooLarge { .. } => {
                     Self::query_request_too_large()
                 }
                 QueryExecutionModelError::OutputRowsMustBePositive => Self::invalid_request(),
                 QueryExecutionModelError::ListLimitOutOfRange { .. } => Self::internal(),
                 _ => Self::internal(),
-            },
+            })
+            .with_source(error),
             QueryFailure::Persistence(error) => Self::query_execution_persistence(error),
             QueryFailure::Snapshot(error) => Self::query_snapshot(error),
             QueryFailure::Engine(error) => Self::query_engine(error),
-            QueryFailure::OutputRowLimit(error) => match error {
+            QueryFailure::OutputRowLimit(error) => (match &error {
                 QueryOutputRowLimitError::MustBePositive
                 | QueryOutputRowLimitError::ExceedsConfiguredMaximum { .. } => {
                     Self::invalid_request()
                 }
                 _ => Self::invalid_request(),
-            },
+            })
+            .with_source(error),
             QueryFailure::Cancelled => Self::plain(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "QUERY_CANCELLED",
+                ErrorCode::QueryCancelled,
                 "Query execution was cancelled",
             ),
         }
     }
 
     fn query_execution_persistence(error: QueryExecutionPersistenceError) -> Self {
-        match error.kind() {
+        let response = match error.kind() {
             QueryExecutionPersistenceErrorKind::Conflict => Self::plain(
                 StatusCode::CONFLICT,
-                "METASTORE_CONFLICT",
+                ErrorCode::MetastoreConflict,
                 "Metastore state changed concurrently",
             ),
             QueryExecutionPersistenceErrorKind::Unavailable => Self::metastore_unavailable(),
             QueryExecutionPersistenceErrorKind::Corrupt => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "METASTORE_CORRUPT",
+                ErrorCode::MetastoreCorrupt,
                 "Metastore state is corrupt",
             ),
             _ => Self::internal(),
-        }
+        };
+        response.with_source(error)
     }
 
     fn query_snapshot(error: QuerySnapshotError) -> Self {
-        match error.kind() {
+        let response = match error.kind() {
             QuerySnapshotErrorKind::Analysis => {
                 let Some(analysis) = error.analysis_error() else {
-                    return Self::internal();
+                    return Self::internal().with_source(error);
                 };
                 Self {
+                    source: None,
                     status: StatusCode::BAD_REQUEST,
-                    code: analysis.code().as_str(),
+                    code: analysis.error_code(),
                     message: "Query is invalid",
                     details: ErrorDetails::Query(QueryErrorDetails {
                         diagnostics: analysis
@@ -2287,138 +2305,167 @@ impl ApiError {
             }
             QuerySnapshotErrorKind::ResourceLimit => Self::plain(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                "QUERY_RESOURCE_LIMIT_EXCEEDED",
+                ErrorCode::QueryResourceLimitExceeded,
                 "Query exceeds an execution limit",
             ),
             QuerySnapshotErrorKind::Unavailable => Self::metastore_unavailable(),
             QuerySnapshotErrorKind::Corrupt => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "CATALOG_CORRUPT",
+                ErrorCode::CatalogCorrupt,
                 "Query metadata is corrupt",
             ),
             _ => Self::internal(),
-        }
+        };
+        response.with_source(error)
     }
 
     fn query_engine(error: EngineError) -> Self {
-        match error.code() {
-            EngineErrorCode::PublishedObjectMissing => Self::plain(
+        let response = match error.kind() {
+            EngineErrorKind::PublishedObjectMissing => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                error.code().as_str(),
+                error.error_code(),
                 "A published query object is missing",
             ),
-            EngineErrorCode::PublishedObjectCorrupt => Self::plain(
+            EngineErrorKind::PublishedObjectCorrupt => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                error.code().as_str(),
+                error.error_code(),
                 "A published query object is corrupt",
             ),
-            EngineErrorCode::CatalogCorrupt => Self::plain(
+            EngineErrorKind::CatalogCorrupt => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                error.code().as_str(),
+                error.error_code(),
                 "Query catalog state is corrupt",
             ),
-            EngineErrorCode::QueryCastFailed => Self::plain(
+            EngineErrorKind::QueryCastFailed => Self::plain(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                error.code().as_str(),
+                error.error_code(),
                 "Query cast failed",
             ),
-            EngineErrorCode::QueryEvaluationFailed => Self::plain(
+            EngineErrorKind::QueryEvaluationFailed => Self::plain(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                error.code().as_str(),
+                error.error_code(),
                 "Query evaluation failed",
             ),
-            EngineErrorCode::QueryResourceLimitExceeded => Self::plain(
+            EngineErrorKind::QueryResourceLimitExceeded => Self::plain(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                error.code().as_str(),
+                error.error_code(),
                 "Query exceeds an execution limit",
             ),
-            EngineErrorCode::QueryTimeout => Self::plain(
+            EngineErrorKind::QueryTimeout => Self::plain(
                 StatusCode::REQUEST_TIMEOUT,
-                error.code().as_str(),
+                error.error_code(),
                 "Query exceeded its execution timeout",
             ),
-            EngineErrorCode::QueryCancelled => Self::plain(
+            EngineErrorKind::QueryCancelled => Self::plain(
                 StatusCode::SERVICE_UNAVAILABLE,
-                error.code().as_str(),
+                error.error_code(),
                 "Query execution was cancelled",
             ),
-            EngineErrorCode::QueryExecutionFailed => Self::plain(
+            EngineErrorKind::QueryExecutionFailed => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                error.code().as_str(),
+                error.error_code(),
                 "Query execution failed",
             ),
             _ => Self::internal(),
-        }
+        };
+        response.with_source(error)
     }
 
     fn catalog(error: CatalogApplicationError) -> Self {
-        let status = match error.code() {
-            CatalogErrorCode::ManifestInvalid | CatalogErrorCode::ProfileInvalid => {
+        let status = match error.kind() {
+            CatalogErrorKind::ManifestInvalid | CatalogErrorKind::ProfileInvalid => {
                 StatusCode::UNPROCESSABLE_ENTITY
             }
-            CatalogErrorCode::DefinitionConflict | CatalogErrorCode::SchemaIncompatible => {
+            CatalogErrorKind::DefinitionConflict | CatalogErrorKind::SchemaIncompatible => {
                 StatusCode::CONFLICT
             }
-            CatalogErrorCode::Corrupt => StatusCode::INTERNAL_SERVER_ERROR,
+            CatalogErrorKind::Corrupt => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        Self {
+        let response = Self {
+            source: None,
             status,
-            code: error.code().as_str(),
+            code: error.error_code(),
             message: "Catalog application was rejected",
             details: ErrorDetails::Catalog(CatalogErrorDetails {
                 path: error.path().as_str().to_owned(),
             }),
             retry_after_seconds: None,
-        }
+        };
+        response.with_source(error)
     }
 
     fn catalog_persistence(error: CatalogPersistenceError) -> Self {
         if let Some(catalog_error) = error.catalog_error() {
-            let status = match catalog_error.code() {
-                CatalogErrorCode::ManifestInvalid | CatalogErrorCode::ProfileInvalid => {
+            let status = match catalog_error.kind() {
+                CatalogErrorKind::ManifestInvalid | CatalogErrorKind::ProfileInvalid => {
                     StatusCode::UNPROCESSABLE_ENTITY
                 }
-                CatalogErrorCode::DefinitionConflict | CatalogErrorCode::SchemaIncompatible => {
+                CatalogErrorKind::DefinitionConflict | CatalogErrorKind::SchemaIncompatible => {
                     StatusCode::CONFLICT
                 }
-                CatalogErrorCode::Corrupt => StatusCode::INTERNAL_SERVER_ERROR,
+                CatalogErrorKind::Corrupt => StatusCode::INTERNAL_SERVER_ERROR,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             };
             return Self {
+                source: None,
                 status,
-                code: catalog_error.code().as_str(),
+                code: catalog_error.error_code(),
                 message: "Catalog application was rejected",
                 details: ErrorDetails::Catalog(CatalogErrorDetails {
                     path: catalog_error.path().as_str().to_owned(),
                 }),
                 retry_after_seconds: None,
-            };
+            }
+            .with_source(error);
         }
-        match error.kind() {
+        let response = match error.kind() {
             CatalogPersistenceErrorKind::Unavailable => Self::metastore_unavailable(),
             CatalogPersistenceErrorKind::Conflict => Self::plain(
                 StatusCode::CONFLICT,
-                "METASTORE_CONFLICT",
+                ErrorCode::MetastoreConflict,
                 "Metastore state changed concurrently",
             ),
             CatalogPersistenceErrorKind::Corrupt => Self::plain(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "METASTORE_CORRUPT",
+                ErrorCode::MetastoreCorrupt,
                 "Metastore state is corrupt",
             ),
             _ => Self::internal(),
-        }
+        };
+        response.with_source(error)
     }
 
-    fn plain(status: StatusCode, code: &'static str, message: &'static str) -> Self {
+    fn plain(status: StatusCode, code: ErrorCode, message: &'static str) -> Self {
         Self {
+            source: None,
             status,
             code,
             message,
             details: ErrorDetails::Empty(EmptyDetails {}),
             retry_after_seconds: None,
         }
+    }
+    fn with_source(mut self, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        self.source = Some(Box::new(source));
+        self
+    }
+}
+
+impl std::fmt::Debug for ApiError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiError")
+            .field("status", &self.status)
+            .field("code", &self.code)
+            .field("message", &self.message)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CodedError for ApiError {
+    fn error_code(&self) -> ErrorCode {
+        self.code
     }
 }
 
@@ -2428,7 +2475,7 @@ impl IntoResponse for ApiError {
             self.status,
             Json(ErrorEnvelope {
                 error: ErrorBody {
-                    code: self.code,
+                    code: self.error_code().as_str(),
                     message: self.message,
                     details: self.details,
                 },

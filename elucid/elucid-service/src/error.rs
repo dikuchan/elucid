@@ -1,9 +1,9 @@
-use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+use elucid_core::{CodedError, ErrorCode};
 use elucid_engine::{EngineError, QueryExecutionLimitsError};
-use elucid_ingestion::{SpoolError, SpoolErrorCode};
+use elucid_ingestion::{SpoolError, SpoolErrorKind};
 use elucid_metastore::{
     CatalogPersistenceError, CompactionMetadataError, CompactionModelError,
     MetastoreMigrationError, ObjectReclamationError, ObjectReclamationModelError,
@@ -102,57 +102,6 @@ pub enum QueryInitializationError {
     Engine(#[from] EngineError),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ServiceErrorCode {
-    BindFailed,
-    MetastoreUnavailable,
-    MetastoreMigrationFailed,
-    MetastoreCorrupt,
-    ObjectStoreUnavailable,
-    LocalStorageUnavailable,
-    SpoolUnavailable,
-    SpoolCorrupt,
-    IngestionInitializationFailed,
-    IngestionRuntimeFailed,
-    QueryInitializationFailed,
-    MaintenanceInitializationFailed,
-    MaintenanceRuntimeFailed,
-    RuntimeFailed,
-    ShutdownTimedOut,
-    SignalFailed,
-}
-
-impl ServiceErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::BindFailed => "SERVER_BIND_FAILED",
-            Self::MetastoreUnavailable => "METASTORE_UNAVAILABLE",
-            Self::MetastoreMigrationFailed => "METASTORE_MIGRATION_FAILED",
-            Self::MetastoreCorrupt => "METASTORE_CORRUPT",
-            Self::ObjectStoreUnavailable => "OBJECT_STORE_UNAVAILABLE",
-            Self::LocalStorageUnavailable => "LOCAL_STORAGE_UNAVAILABLE",
-            Self::SpoolUnavailable => "SPOOL_UNAVAILABLE",
-            Self::SpoolCorrupt => "SPOOL_CORRUPT",
-            Self::IngestionInitializationFailed => "INGESTION_INITIALIZATION_FAILED",
-            Self::IngestionRuntimeFailed => "INGESTION_RUNTIME_FAILED",
-            Self::QueryInitializationFailed => "QUERY_INITIALIZATION_FAILED",
-            Self::MaintenanceInitializationFailed => "MAINTENANCE_INITIALIZATION_FAILED",
-            Self::MaintenanceRuntimeFailed => "MAINTENANCE_RUNTIME_FAILED",
-            Self::RuntimeFailed => "SERVER_RUNTIME_FAILED",
-            Self::ShutdownTimedOut => "SERVER_SHUTDOWN_TIMED_OUT",
-            Self::SignalFailed => "SERVER_SIGNAL_FAILED",
-        }
-    }
-}
-
-impl Display for ServiceErrorCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ServiceError {
@@ -246,42 +195,39 @@ pub enum ServiceError {
     },
 }
 
-impl ServiceError {
-    #[must_use]
-    pub const fn code(&self) -> ServiceErrorCode {
+impl CodedError for ServiceError {
+    fn error_code(&self) -> ErrorCode {
         match self {
-            Self::Bind { .. } => ServiceErrorCode::BindFailed,
-            Self::MetastoreConnection { .. } => ServiceErrorCode::MetastoreUnavailable,
-            Self::MetastoreMigration { .. } => ServiceErrorCode::MetastoreMigrationFailed,
+            Self::Bind { .. } => ErrorCode::ServerBindFailed,
+            Self::MetastoreConnection { .. } => ErrorCode::MetastoreUnavailable,
+            Self::MetastoreMigration { .. } => ErrorCode::MetastoreMigrationFailed,
             Self::CatalogInitialization { source } => match source.kind() {
                 elucid_metastore::CatalogPersistenceErrorKind::Unavailable => {
-                    ServiceErrorCode::MetastoreUnavailable
+                    ErrorCode::MetastoreUnavailable
                 }
                 elucid_metastore::CatalogPersistenceErrorKind::Conflict
                 | elucid_metastore::CatalogPersistenceErrorKind::Corrupt => {
-                    ServiceErrorCode::MetastoreCorrupt
+                    ErrorCode::MetastoreCorrupt
                 }
-                _ => ServiceErrorCode::MetastoreCorrupt,
+                _ => ErrorCode::MetastoreCorrupt,
             },
-            Self::ObjectStoreInitialization { .. } => ServiceErrorCode::ObjectStoreUnavailable,
-            Self::LocalStorage { .. } => ServiceErrorCode::LocalStorageUnavailable,
-            Self::SpoolInitialization { source } => match source.code() {
-                SpoolErrorCode::Corrupt => ServiceErrorCode::SpoolCorrupt,
-                SpoolErrorCode::CapacityExhausted
-                | SpoolErrorCode::BatchLimitExceeded
-                | SpoolErrorCode::Unavailable => ServiceErrorCode::SpoolUnavailable,
-                _ => ServiceErrorCode::SpoolUnavailable,
+            Self::ObjectStoreInitialization { .. } => ErrorCode::ObjectStoreUnavailable,
+            Self::LocalStorage { .. } => ErrorCode::LocalStorageUnavailable,
+            Self::SpoolInitialization { source } => match source.kind() {
+                SpoolErrorKind::Corrupt => ErrorCode::SpoolCorrupt,
+                SpoolErrorKind::CapacityExhausted
+                | SpoolErrorKind::BatchLimitExceeded
+                | SpoolErrorKind::Unavailable => ErrorCode::SpoolUnavailable,
+                _ => ErrorCode::SpoolUnavailable,
             },
-            Self::IngestionInitialization { .. } => ServiceErrorCode::IngestionInitializationFailed,
-            Self::IngestionRuntime { .. } => ServiceErrorCode::IngestionRuntimeFailed,
-            Self::QueryInitialization { .. } => ServiceErrorCode::QueryInitializationFailed,
-            Self::MaintenanceInitialization { .. } => {
-                ServiceErrorCode::MaintenanceInitializationFailed
-            }
-            Self::MaintenanceRuntime { .. } => ServiceErrorCode::MaintenanceRuntimeFailed,
-            Self::HttpRuntime { .. } | Self::Supervisor { .. } => ServiceErrorCode::RuntimeFailed,
-            Self::ShutdownTimedOut => ServiceErrorCode::ShutdownTimedOut,
-            Self::Signal { .. } => ServiceErrorCode::SignalFailed,
+            Self::IngestionInitialization { .. } => ErrorCode::IngestionInitializationFailed,
+            Self::IngestionRuntime { .. } => ErrorCode::IngestionRuntimeFailed,
+            Self::QueryInitialization { .. } => ErrorCode::QueryInitializationFailed,
+            Self::MaintenanceInitialization { .. } => ErrorCode::MaintenanceInitializationFailed,
+            Self::MaintenanceRuntime { .. } => ErrorCode::MaintenanceRuntimeFailed,
+            Self::HttpRuntime { .. } | Self::Supervisor { .. } => ErrorCode::ServerRuntimeFailed,
+            Self::ShutdownTimedOut => ErrorCode::ServerShutdownTimedOut,
+            Self::Signal { .. } => ErrorCode::ServerSignalFailed,
         }
     }
 }

@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use anyhow::Context as _;
+use elucid_core::ErrorCode;
 use elucid_service::{RuntimeConfiguration, start};
 use tokio::io::AsyncWriteExt as _;
 
 use crate::arguments::{Action, Arguments, CatalogSubcommand, IngestionSubcommand, RootCommand};
 use crate::client::{HttpResponse, ProductClient};
-use crate::error::{CliErrorCode, Failure, ProcessExit, RemoteOperation};
+use crate::error::{Failure, ProcessExit, RemoteOperation};
 use crate::input::RequestInput;
 
 pub(crate) async fn run(arguments: Arguments) -> ProcessExit {
@@ -20,9 +21,9 @@ pub(crate) async fn run(arguments: Arguments) -> ProcessExit {
 }
 
 async fn execute(arguments: Arguments) -> Result<Vec<u8>, Failure> {
-    let action = arguments.into_action().map_err(|message| {
-        Failure::command(CliErrorCode::CommandInvalid, anyhow::anyhow!(message))
-    })?;
+    let action = arguments
+        .into_action()
+        .map_err(|message| Failure::command(ErrorCode::CommandInvalid, anyhow::anyhow!(message)))?;
     match action {
         Action::Version(output) => crate::version::render(output),
         Action::Command(command) => execute_command(*command).await,
@@ -97,10 +98,10 @@ async fn write_standard_output(output: &[u8]) -> Result<(), Failure> {
         .write_all(output)
         .await
         .context("failed to write command output")
-        .map_err(|error| Failure::internal(CliErrorCode::StandardOutputWriteFailed, error))?;
+        .map_err(|error| Failure::internal(ErrorCode::StandardOutputWriteFailed, error))?;
     stdout
         .flush()
         .await
         .context("failed to flush command output")
-        .map_err(|error| Failure::internal(CliErrorCode::StandardOutputWriteFailed, error))
+        .map_err(|error| Failure::internal(ErrorCode::StandardOutputWriteFailed, error))
 }

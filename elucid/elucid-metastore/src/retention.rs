@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use elucid_core::{CodedError, ErrorCode};
 use sqlx::postgres::PgPool;
 use sqlx::{FromRow, Postgres, Transaction};
 use uuid::Uuid;
@@ -112,31 +113,6 @@ pub enum RetentionErrorKind {
     Corrupt,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum RetentionErrorCode {
-    TimestampOverflow,
-    StateConflict,
-    CleanupFailed,
-}
-
-impl RetentionErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::TimestampOverflow => "RETENTION_TIMESTAMP_OVERFLOW",
-            Self::StateConflict => "RETENTION_STATE_CONFLICT",
-            Self::CleanupFailed => "RETENTION_CLEANUP_FAILED",
-        }
-    }
-}
-
-impl Display for RetentionErrorCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
 impl Display for RetentionErrorKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -158,17 +134,6 @@ impl RetentionError {
     #[must_use]
     pub const fn kind(&self) -> RetentionErrorKind {
         self.kind
-    }
-
-    #[must_use]
-    pub const fn code(&self) -> RetentionErrorCode {
-        match self.kind {
-            RetentionErrorKind::TimestampOverflow => RetentionErrorCode::TimestampOverflow,
-            RetentionErrorKind::StateConflict => RetentionErrorCode::StateConflict,
-            RetentionErrorKind::Unavailable | RetentionErrorKind::Corrupt => {
-                RetentionErrorCode::CleanupFailed
-            }
-        }
     }
 
     fn unavailable(source: sqlx::Error) -> Self {
@@ -230,6 +195,18 @@ impl Display for RetentionError {
 impl Error for RetentionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for RetentionError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            RetentionErrorKind::TimestampOverflow => ErrorCode::RetentionTimestampOverflow,
+            RetentionErrorKind::StateConflict => ErrorCode::RetentionStateConflict,
+            RetentionErrorKind::Unavailable | RetentionErrorKind::Corrupt => {
+                ErrorCode::RetentionCleanupFailed
+            }
+        }
     }
 }
 

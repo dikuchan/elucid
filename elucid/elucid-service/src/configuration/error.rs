@@ -1,46 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 
+use elucid_core::{CodedError, ErrorCode};
 use thiserror::Error;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ConfigurationErrorCode {
-    FileUnreadable,
-    FileNotUtf8,
-    DocumentTooLarge,
-    DocumentMalformed,
-    EnvironmentOverrideInvalid,
-    DocumentInvalid,
-    ValueInvalid,
-    ConstraintViolation,
-    SecretMissing,
-    SecretInvalid,
-}
-
-impl ConfigurationErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FileUnreadable => "CONFIGURATION_FILE_UNREADABLE",
-            Self::FileNotUtf8 => "CONFIGURATION_FILE_NOT_UTF8",
-            Self::DocumentTooLarge => "CONFIGURATION_DOCUMENT_TOO_LARGE",
-            Self::DocumentMalformed => "CONFIGURATION_DOCUMENT_MALFORMED",
-            Self::EnvironmentOverrideInvalid => "CONFIGURATION_ENVIRONMENT_OVERRIDE_INVALID",
-            Self::DocumentInvalid => "CONFIGURATION_DOCUMENT_INVALID",
-            Self::ValueInvalid => "CONFIGURATION_VALUE_INVALID",
-            Self::ConstraintViolation => "CONFIGURATION_CONSTRAINT_VIOLATION",
-            Self::SecretMissing => "CONFIGURATION_SECRET_MISSING",
-            Self::SecretInvalid => "CONFIGURATION_SECRET_INVALID",
-        }
-    }
-}
-
-impl Display for ConfigurationErrorCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConfigurationField(&'static str);
@@ -239,24 +201,6 @@ pub enum ConfigurationError {
 
 impl ConfigurationError {
     #[must_use]
-    pub const fn code(&self) -> ConfigurationErrorCode {
-        match self {
-            Self::FileUnreadable { .. } => ConfigurationErrorCode::FileUnreadable,
-            Self::FileNotUtf8 { .. } => ConfigurationErrorCode::FileNotUtf8,
-            Self::DocumentTooLarge { .. } => ConfigurationErrorCode::DocumentTooLarge,
-            Self::DocumentMalformed { .. } => ConfigurationErrorCode::DocumentMalformed,
-            Self::EnvironmentOverrideInvalid { .. } => {
-                ConfigurationErrorCode::EnvironmentOverrideInvalid
-            }
-            Self::DocumentInvalid => ConfigurationErrorCode::DocumentInvalid,
-            Self::ValueInvalid { .. } => ConfigurationErrorCode::ValueInvalid,
-            Self::ConstraintViolation { .. } => ConfigurationErrorCode::ConstraintViolation,
-            Self::SecretMissing { .. } => ConfigurationErrorCode::SecretMissing,
-            Self::SecretInvalid { .. } => ConfigurationErrorCode::SecretInvalid,
-        }
-    }
-
-    #[must_use]
     pub const fn violation(&self) -> Option<&ConfigurationViolation> {
         match self {
             Self::ConstraintViolation { violation } => Some(violation),
@@ -269,6 +213,25 @@ impl ConfigurationError {
         match self {
             Self::SecretMissing { kind } | Self::SecretInvalid { kind, .. } => Some(*kind),
             _ => None,
+        }
+    }
+}
+
+impl CodedError for ConfigurationError {
+    fn error_code(&self) -> ErrorCode {
+        match self {
+            Self::FileUnreadable { .. } => ErrorCode::ConfigurationFileUnreadable,
+            Self::FileNotUtf8 { .. } => ErrorCode::ConfigurationFileNotUtf8,
+            Self::DocumentTooLarge { .. } => ErrorCode::ConfigurationDocumentTooLarge,
+            Self::DocumentMalformed { .. } => ErrorCode::ConfigurationDocumentMalformed,
+            Self::EnvironmentOverrideInvalid { .. } => {
+                ErrorCode::ConfigurationEnvironmentOverrideInvalid
+            }
+            Self::DocumentInvalid => ErrorCode::ConfigurationDocumentInvalid,
+            Self::ValueInvalid { .. } => ErrorCode::ConfigurationValueInvalid,
+            Self::ConstraintViolation { .. } => ErrorCode::ConfigurationConstraintViolation,
+            Self::SecretMissing { .. } => ErrorCode::ConfigurationSecretMissing,
+            Self::SecretInvalid { .. } => ErrorCode::ConfigurationSecretInvalid,
         }
     }
 }

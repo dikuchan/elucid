@@ -1,3 +1,5 @@
+use elucid_core::{CodedError, ErrorCode};
+
 use elucid_catalog::{
     DeclarationDigest, DefinitionDigests, FieldId, MaterializedDigest, Nullability, Schema,
     SchemaId, SchemaVersion, Source, SourceId, SourceName, UserField, UserFieldName,
@@ -5,10 +7,7 @@ use elucid_catalog::{
 };
 use uuid::Uuid;
 
-use crate::{
-    AnalyzeErrorCode, CatalogSnapshot, DiagnosticCode, DiagnosticSeverity, QueryTimeContext,
-    analyze, ir,
-};
+use crate::{CatalogSnapshot, DiagnosticCode, DiagnosticSeverity, QueryTimeContext, analyze, ir};
 
 #[test]
 fn typed_expression_analysis_is_canonical() {
@@ -217,7 +216,7 @@ fn diagnostic_registry_classifies_semantic_failures() {
         let source = typed_catalog_source();
         let error = analyze(query, &CatalogSnapshot::new(&source), &time_context)
             .expect_err("query must fail semantic analysis");
-        assert_eq!(error.code(), AnalyzeErrorCode::Semantic, "{query}");
+        assert_eq!(error.error_code(), ErrorCode::QuerySemanticError, "{query}");
         assert_eq!(error.diagnostics().len(), 1, "{query}");
         let diagnostic = &error.diagnostics()[0];
         assert_eq!(diagnostic.code(), expected_code, "{query}");
@@ -239,7 +238,7 @@ fn diagnostic_severities_and_syntax_errors_are_classified() {
         &bounded_time_context(),
     )
     .expect_err("query must fail parsing");
-    assert_eq!(syntax.code(), AnalyzeErrorCode::Syntax);
+    assert_eq!(syntax.error_code(), ErrorCode::QuerySyntaxError);
     assert_eq!(syntax.diagnostics()[0].code(), DiagnosticCode::SyntaxError);
 }
 

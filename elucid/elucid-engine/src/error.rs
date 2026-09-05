@@ -2,11 +2,12 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 use datafusion::error::DataFusionError;
+use elucid_core::{CodedError, ErrorCode};
 use elucid_storage::StorageError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum EngineErrorCode {
+pub enum EngineErrorKind {
     PublishedObjectMissing,
     PublishedObjectCorrupt,
     CatalogCorrupt,
@@ -18,20 +19,26 @@ pub enum EngineErrorCode {
     QueryExecutionFailed,
 }
 
-impl EngineErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::PublishedObjectMissing => "PUBLISHED_OBJECT_MISSING",
-            Self::PublishedObjectCorrupt => "PUBLISHED_OBJECT_CORRUPT",
-            Self::CatalogCorrupt => "CATALOG_CORRUPT",
-            Self::QueryCastFailed => "QUERY_CAST_FAILED",
-            Self::QueryEvaluationFailed => "QUERY_EVALUATION_FAILED",
-            Self::QueryResourceLimitExceeded => "QUERY_RESOURCE_LIMIT_EXCEEDED",
-            Self::QueryTimeout => "QUERY_TIMEOUT",
-            Self::QueryCancelled => "QUERY_CANCELLED",
-            Self::QueryExecutionFailed => "QUERY_EXECUTION_FAILED",
+impl From<EngineErrorKind> for ErrorCode {
+    fn from(value: EngineErrorKind) -> Self {
+        match value {
+            EngineErrorKind::PublishedObjectMissing => Self::PublishedObjectMissing,
+            EngineErrorKind::PublishedObjectCorrupt => Self::PublishedObjectCorrupt,
+            EngineErrorKind::CatalogCorrupt => Self::CatalogCorrupt,
+            EngineErrorKind::QueryCastFailed => Self::QueryCastFailed,
+            EngineErrorKind::QueryEvaluationFailed => Self::QueryEvaluationFailed,
+            EngineErrorKind::QueryResourceLimitExceeded => Self::QueryResourceLimitExceeded,
+            EngineErrorKind::QueryTimeout => Self::QueryTimeout,
+            EngineErrorKind::QueryCancelled => Self::QueryCancelled,
+            EngineErrorKind::QueryExecutionFailed => Self::QueryExecutionFailed,
         }
+    }
+}
+
+impl EngineErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        ErrorCode::from(self).as_str()
     }
 }
 
@@ -51,7 +58,7 @@ pub enum QueryResourceLimitExceeded {
     EncodedRowBytes { maximum: u64 },
 }
 
-impl Display for EngineErrorCode {
+impl Display for EngineErrorKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -59,21 +66,21 @@ impl Display for EngineErrorCode {
 
 #[derive(Debug)]
 pub struct EngineError {
-    code: EngineErrorCode,
+    kind: EngineErrorKind,
     source: EngineErrorSource,
 }
 
 impl EngineError {
     #[must_use]
-    pub const fn code(&self) -> EngineErrorCode {
-        self.code
+    pub const fn kind(&self) -> EngineErrorKind {
+        self.kind
     }
 
     #[must_use]
     pub const fn resource_limit_exceeded(&self) -> Option<QueryResourceLimitExceeded> {
-        match (&self.source, self.code) {
+        match (&self.source, self.kind) {
             (EngineErrorSource::ResourceLimit(source), _) => Some(*source),
-            (EngineErrorSource::DataFusion(_), EngineErrorCode::QueryResourceLimitExceeded) => {
+            (EngineErrorSource::DataFusion(_), EngineErrorKind::QueryResourceLimitExceeded) => {
                 Some(QueryResourceLimitExceeded::ExecutionResources)
             }
             _ => None,
@@ -82,86 +89,86 @@ impl EngineError {
 
     pub(crate) fn missing_object() -> Self {
         Self::invariant(
-            EngineErrorCode::PublishedObjectMissing,
+            EngineErrorKind::PublishedObjectMissing,
             "a selected published object is absent",
         )
     }
 
     pub(crate) fn corrupt_object(source: impl Into<EngineErrorSource>) -> Self {
         Self {
-            code: EngineErrorCode::PublishedObjectCorrupt,
+            kind: EngineErrorKind::PublishedObjectCorrupt,
             source: source.into(),
         }
     }
 
     pub(crate) fn corrupt_object_invariant(message: &'static str) -> Self {
-        Self::invariant(EngineErrorCode::PublishedObjectCorrupt, message)
+        Self::invariant(EngineErrorKind::PublishedObjectCorrupt, message)
     }
 
     pub(crate) fn catalog_corrupt(message: &'static str) -> Self {
-        Self::invariant(EngineErrorCode::CatalogCorrupt, message)
+        Self::invariant(EngineErrorKind::CatalogCorrupt, message)
     }
 
     pub(crate) fn execution(source: impl Into<EngineErrorSource>) -> Self {
         Self {
-            code: EngineErrorCode::QueryExecutionFailed,
+            kind: EngineErrorKind::QueryExecutionFailed,
             source: source.into(),
         }
     }
 
     pub(crate) fn cast_failed(source: DataFusionError) -> Self {
         Self {
-            code: EngineErrorCode::QueryCastFailed,
+            kind: EngineErrorKind::QueryCastFailed,
             source: EngineErrorSource::DataFusion(source),
         }
     }
 
     pub(crate) fn evaluation_failed(source: DataFusionError) -> Self {
         Self {
-            code: EngineErrorCode::QueryEvaluationFailed,
+            kind: EngineErrorKind::QueryEvaluationFailed,
             source: EngineErrorSource::DataFusion(source),
         }
     }
 
     pub(crate) fn evaluation_invariant(message: &'static str) -> Self {
-        Self::invariant(EngineErrorCode::QueryEvaluationFailed, message)
+        Self::invariant(EngineErrorKind::QueryEvaluationFailed, message)
     }
 
     pub(crate) fn resource_limit(source: QueryResourceLimitExceeded) -> Self {
         Self {
-            code: EngineErrorCode::QueryResourceLimitExceeded,
+            kind: EngineErrorKind::QueryResourceLimitExceeded,
             source: EngineErrorSource::ResourceLimit(source),
         }
     }
 
     pub(crate) fn resources_exhausted(source: DataFusionError) -> Self {
         Self {
-            code: EngineErrorCode::QueryResourceLimitExceeded,
+            kind: EngineErrorKind::QueryResourceLimitExceeded,
             source: EngineErrorSource::DataFusion(source),
         }
     }
 
     pub(crate) fn timeout() -> Self {
         Self::invariant(
-            EngineErrorCode::QueryTimeout,
+            EngineErrorKind::QueryTimeout,
             "query exceeded its execution timeout",
         )
     }
 
     pub(crate) fn cancelled() -> Self {
         Self::invariant(
-            EngineErrorCode::QueryCancelled,
+            EngineErrorKind::QueryCancelled,
             "query execution was cancelled",
         )
     }
 
     pub(crate) fn execution_invariant(message: &'static str) -> Self {
-        Self::invariant(EngineErrorCode::QueryExecutionFailed, message)
+        Self::invariant(EngineErrorKind::QueryExecutionFailed, message)
     }
 
-    fn invariant(code: EngineErrorCode, message: &'static str) -> Self {
+    fn invariant(kind: EngineErrorKind, message: &'static str) -> Self {
         Self {
-            code,
+            kind,
             source: EngineErrorSource::Invariant(message),
         }
     }
@@ -169,13 +176,19 @@ impl EngineError {
 
 impl Display for EngineError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.code, formatter)
+        Display::fmt(&self.kind, formatter)
     }
 }
 
 impl Error for EngineError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for EngineError {
+    fn error_code(&self) -> ErrorCode {
+        self.kind().into()
     }
 }
 

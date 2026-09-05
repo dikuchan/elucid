@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
 
+use elucid_core::{CodedError, ErrorCode};
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -77,7 +78,7 @@ pub enum StorageModelError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum StorageErrorCode {
+pub enum StorageErrorKind {
     ParquetBuildFailed,
     ParquetInvalid,
     ObjectStoreUnavailable,
@@ -88,23 +89,29 @@ pub enum StorageErrorCode {
     LocalCapacityExhausted,
 }
 
-impl StorageErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ParquetBuildFailed => "PARQUET_BUILD_FAILED",
-            Self::ParquetInvalid => "PARQUET_INVALID",
-            Self::ObjectStoreUnavailable => "OBJECT_STORE_UNAVAILABLE",
-            Self::ObjectUploadFailed => "OBJECT_UPLOAD_FAILED",
-            Self::ObjectVerificationFailed => "OBJECT_VERIFICATION_FAILED",
-            Self::ObjectIntegrityError => "OBJECT_INTEGRITY_ERROR",
-            Self::ObjectDeleteFailed => "OBJECT_DELETE_FAILED",
-            Self::LocalCapacityExhausted => "LOCAL_CAPACITY_EXHAUSTED",
+impl From<StorageErrorKind> for ErrorCode {
+    fn from(value: StorageErrorKind) -> Self {
+        match value {
+            StorageErrorKind::ParquetBuildFailed => Self::ParquetBuildFailed,
+            StorageErrorKind::ParquetInvalid => Self::ParquetInvalid,
+            StorageErrorKind::ObjectStoreUnavailable => Self::ObjectStoreUnavailable,
+            StorageErrorKind::ObjectUploadFailed => Self::ObjectUploadFailed,
+            StorageErrorKind::ObjectVerificationFailed => Self::ObjectVerificationFailed,
+            StorageErrorKind::ObjectIntegrityError => Self::ObjectIntegrityError,
+            StorageErrorKind::ObjectDeleteFailed => Self::ObjectDeleteFailed,
+            StorageErrorKind::LocalCapacityExhausted => Self::LocalCapacityExhausted,
         }
     }
 }
 
-impl Display for StorageErrorCode {
+impl StorageErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        ErrorCode::from(self).as_str()
+    }
+}
+
+impl Display for StorageErrorKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -112,101 +119,101 @@ impl Display for StorageErrorCode {
 
 #[derive(Debug)]
 pub struct StorageError {
-    code: StorageErrorCode,
+    kind: StorageErrorKind,
     source: StorageErrorSource,
 }
 
 impl StorageError {
     #[must_use]
-    pub const fn code(&self) -> StorageErrorCode {
-        self.code
+    pub const fn kind(&self) -> StorageErrorKind {
+        self.kind
     }
 
     pub(crate) fn unavailable(source: object_store::Error) -> Self {
-        Self::object_store(StorageErrorCode::ObjectStoreUnavailable, source)
+        Self::object_store(StorageErrorKind::ObjectStoreUnavailable, source)
     }
 
     pub(crate) fn upload(source: object_store::Error) -> Self {
-        Self::object_store(StorageErrorCode::ObjectUploadFailed, source)
+        Self::object_store(StorageErrorKind::ObjectUploadFailed, source)
     }
 
     pub(crate) fn verification(source: object_store::Error) -> Self {
-        Self::object_store(StorageErrorCode::ObjectVerificationFailed, source)
+        Self::object_store(StorageErrorKind::ObjectVerificationFailed, source)
     }
 
     pub(crate) fn delete(source: object_store::Error) -> Self {
-        Self::object_store(StorageErrorCode::ObjectDeleteFailed, source)
+        Self::object_store(StorageErrorKind::ObjectDeleteFailed, source)
     }
 
     pub(crate) fn integrity(message: &'static str) -> Self {
-        Self::invariant(StorageErrorCode::ObjectIntegrityError, message)
+        Self::invariant(StorageErrorKind::ObjectIntegrityError, message)
     }
 
     pub(crate) fn verification_invariant(message: &'static str) -> Self {
-        Self::invariant(StorageErrorCode::ObjectVerificationFailed, message)
+        Self::invariant(StorageErrorKind::ObjectVerificationFailed, message)
     }
 
     pub(crate) fn delete_invariant(message: &'static str) -> Self {
-        Self::invariant(StorageErrorCode::ObjectDeleteFailed, message)
+        Self::invariant(StorageErrorKind::ObjectDeleteFailed, message)
     }
 
     pub(crate) fn capacity(message: &'static str) -> Self {
-        Self::invariant(StorageErrorCode::LocalCapacityExhausted, message)
+        Self::invariant(StorageErrorKind::LocalCapacityExhausted, message)
     }
 
     pub(crate) fn parquet_build(source: parquet::errors::ParquetError) -> Self {
         Self {
-            code: StorageErrorCode::ParquetBuildFailed,
+            kind: StorageErrorKind::ParquetBuildFailed,
             source: StorageErrorSource::Parquet(source),
         }
     }
 
     pub(crate) fn parquet_build_io(source: io::Error) -> Self {
         Self {
-            code: StorageErrorCode::ParquetBuildFailed,
+            kind: StorageErrorKind::ParquetBuildFailed,
             source: StorageErrorSource::Io(source),
         }
     }
 
     pub(crate) fn parquet_build_task(source: tokio::task::JoinError) -> Self {
         Self {
-            code: StorageErrorCode::ParquetBuildFailed,
+            kind: StorageErrorKind::ParquetBuildFailed,
             source: StorageErrorSource::Task(source),
         }
     }
 
     pub(crate) fn parquet_build_invariant(message: &'static str) -> Self {
-        Self::invariant(StorageErrorCode::ParquetBuildFailed, message)
+        Self::invariant(StorageErrorKind::ParquetBuildFailed, message)
     }
 
     pub(crate) fn parquet_invalid(source: parquet::errors::ParquetError) -> Self {
         Self {
-            code: StorageErrorCode::ParquetInvalid,
+            kind: StorageErrorKind::ParquetInvalid,
             source: StorageErrorSource::Parquet(source),
         }
     }
 
     pub(crate) fn parquet_invalid_io(source: io::Error) -> Self {
         Self {
-            code: StorageErrorCode::ParquetInvalid,
+            kind: StorageErrorKind::ParquetInvalid,
             source: StorageErrorSource::Io(source),
         }
     }
 
     pub(crate) fn parquet_invalid_task(source: tokio::task::JoinError) -> Self {
         Self {
-            code: StorageErrorCode::ParquetInvalid,
+            kind: StorageErrorKind::ParquetInvalid,
             source: StorageErrorSource::Task(source),
         }
     }
 
     pub(crate) fn parquet_invalid_invariant(message: &'static str) -> Self {
-        Self::invariant(StorageErrorCode::ParquetInvalid, message)
+        Self::invariant(StorageErrorKind::ParquetInvalid, message)
     }
 
     pub(crate) fn with_cleanup_failure(self, cleanup: io::Error) -> Self {
         Self {
-            code: self.code,
+            kind: self.kind,
             source: StorageErrorSource::Cleanup {
                 original: Box::new(self.source),
                 cleanup,
@@ -214,16 +221,16 @@ impl StorageError {
         }
     }
 
-    fn object_store(code: StorageErrorCode, source: object_store::Error) -> Self {
+    fn object_store(kind: StorageErrorKind, source: object_store::Error) -> Self {
         Self {
-            code,
+            kind,
             source: StorageErrorSource::ObjectStore(source),
         }
     }
 
-    fn invariant(code: StorageErrorCode, message: &'static str) -> Self {
+    fn invariant(kind: StorageErrorKind, message: &'static str) -> Self {
         Self {
-            code,
+            kind,
             source: StorageErrorSource::Invariant(message),
         }
     }
@@ -231,13 +238,19 @@ impl StorageError {
 
 impl Display for StorageError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.code, formatter)
+        Display::fmt(&self.kind, formatter)
     }
 }
 
 impl Error for StorageError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for StorageError {
+    fn error_code(&self) -> ErrorCode {
+        self.kind().into()
     }
 }
 

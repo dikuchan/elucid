@@ -1,27 +1,35 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use elucid_core::{CodedError, ErrorCode};
+
 use crate::Span;
 use crate::ir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum AnalyzeErrorCode {
+pub enum AnalyzeErrorKind {
     Syntax,
     Semantic,
 }
 
-impl AnalyzeErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Syntax => "QUERY_SYNTAX_ERROR",
-            Self::Semantic => "QUERY_SEMANTIC_ERROR",
+impl From<AnalyzeErrorKind> for ErrorCode {
+    fn from(value: AnalyzeErrorKind) -> Self {
+        match value {
+            AnalyzeErrorKind::Syntax => Self::QuerySyntaxError,
+            AnalyzeErrorKind::Semantic => Self::QuerySemanticError,
         }
     }
 }
 
-impl fmt::Display for AnalyzeErrorCode {
+impl AnalyzeErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        ErrorCode::from(self).as_str()
+    }
+}
+
+impl fmt::Display for AnalyzeErrorKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -251,14 +259,14 @@ impl Analysis {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyzeError {
-    code: AnalyzeErrorCode,
+    kind: AnalyzeErrorKind,
     diagnostics: Vec<Diagnostic>,
 }
 
 impl AnalyzeError {
     pub(crate) fn syntax(message: impl Into<String>, span: Span) -> Self {
         Self {
-            code: AnalyzeErrorCode::Syntax,
+            kind: AnalyzeErrorKind::Syntax,
             diagnostics: vec![Diagnostic::error(
                 DiagnosticCode::SyntaxError,
                 message,
@@ -274,14 +282,14 @@ impl AnalyzeError {
                 .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
         );
         Self {
-            code: AnalyzeErrorCode::Semantic,
+            kind: AnalyzeErrorKind::Semantic,
             diagnostics,
         }
     }
 
     #[must_use]
-    pub const fn code(&self) -> AnalyzeErrorCode {
-        self.code
+    pub const fn kind(&self) -> AnalyzeErrorKind {
+        self.kind
     }
 
     #[must_use]
@@ -296,7 +304,7 @@ impl AnalyzeError {
 
 impl fmt::Display for AnalyzeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.code)?;
+        write!(formatter, "{}", self.kind)?;
         for diagnostic in &self.diagnostics {
             write!(
                 formatter,
@@ -312,6 +320,12 @@ impl fmt::Display for AnalyzeError {
 }
 
 impl std::error::Error for AnalyzeError {}
+
+impl CodedError for AnalyzeError {
+    fn error_code(&self) -> ErrorCode {
+        self.kind().into()
+    }
+}
 
 pub(crate) fn finish_diagnostics(diagnostics: &mut [Diagnostic], source: &str) {
     for diagnostic in diagnostics.iter_mut() {

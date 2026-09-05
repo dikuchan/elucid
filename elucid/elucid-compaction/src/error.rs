@@ -3,11 +3,12 @@ use std::fmt::{Display, Formatter};
 use std::io;
 
 use arrow::error::ArrowError;
+use elucid_core::{CodedError, ErrorCode};
 use elucid_metastore::{
-    CompactionFailureCode, CompactionMetadataError,
+    CompactionFailureReason, CompactionMetadataError,
     CompactionModelError as MetadataCompactionModelError, PublicationError,
 };
-use elucid_storage::{StorageError, StorageErrorCode, StorageModelError};
+use elucid_storage::{StorageError, StorageErrorKind, StorageModelError};
 use parquet::errors::ParquetError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,37 +19,12 @@ pub enum CompactionErrorKind {
     NotBeneficial,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum CompactionErrorCode {
-    InputInvalid,
-    BuildFailed,
-    NotBeneficial,
-}
-
-impl CompactionErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InputInvalid => "COMPACTION_INPUT_INVALID",
-            Self::BuildFailed => "COMPACTION_BUILD_FAILED",
-            Self::NotBeneficial => "COMPACTION_NOT_BENEFICIAL",
-        }
-    }
-}
-
-impl Display for CompactionErrorCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl From<CompactionErrorCode> for CompactionFailureCode {
-    fn from(value: CompactionErrorCode) -> Self {
+impl From<CompactionErrorKind> for CompactionFailureReason {
+    fn from(value: CompactionErrorKind) -> Self {
         match value {
-            CompactionErrorCode::InputInvalid => Self::InputInvalid,
-            CompactionErrorCode::BuildFailed => Self::BuildFailed,
-            CompactionErrorCode::NotBeneficial => Self::NotBeneficial,
+            CompactionErrorKind::InputInvalid => Self::InputInvalid,
+            CompactionErrorKind::BuildFailed => Self::BuildFailed,
+            CompactionErrorKind::NotBeneficial => Self::NotBeneficial,
         }
     }
 }
@@ -75,15 +51,6 @@ impl CompactionError {
         self.kind
     }
 
-    #[must_use]
-    pub const fn code(&self) -> CompactionErrorCode {
-        match self.kind {
-            CompactionErrorKind::InputInvalid => CompactionErrorCode::InputInvalid,
-            CompactionErrorKind::BuildFailed => CompactionErrorCode::BuildFailed,
-            CompactionErrorKind::NotBeneficial => CompactionErrorCode::NotBeneficial,
-        }
-    }
-
     pub(crate) fn input(message: &'static str) -> Self {
         Self {
             kind: CompactionErrorKind::InputInvalid,
@@ -106,16 +73,16 @@ impl CompactionError {
     }
 
     pub(crate) fn storage(source: StorageError) -> Self {
-        let kind = match source.code() {
-            StorageErrorCode::ObjectIntegrityError | StorageErrorCode::ParquetInvalid => {
+        let kind = match source.kind() {
+            StorageErrorKind::ObjectIntegrityError | StorageErrorKind::ParquetInvalid => {
                 CompactionErrorKind::InputInvalid
             }
-            StorageErrorCode::ParquetBuildFailed
-            | StorageErrorCode::ObjectStoreUnavailable
-            | StorageErrorCode::ObjectUploadFailed
-            | StorageErrorCode::ObjectVerificationFailed
-            | StorageErrorCode::ObjectDeleteFailed
-            | StorageErrorCode::LocalCapacityExhausted => CompactionErrorKind::BuildFailed,
+            StorageErrorKind::ParquetBuildFailed
+            | StorageErrorKind::ObjectStoreUnavailable
+            | StorageErrorKind::ObjectUploadFailed
+            | StorageErrorKind::ObjectVerificationFailed
+            | StorageErrorKind::ObjectDeleteFailed
+            | StorageErrorKind::LocalCapacityExhausted => CompactionErrorKind::BuildFailed,
             _ => CompactionErrorKind::BuildFailed,
         };
         Self {
@@ -215,6 +182,16 @@ impl Display for CompactionError {
 impl Error for CompactionError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for CompactionError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            CompactionErrorKind::InputInvalid => ErrorCode::CompactionInputInvalid,
+            CompactionErrorKind::BuildFailed => ErrorCode::CompactionBuildFailed,
+            CompactionErrorKind::NotBeneficial => ErrorCode::CompactionNotBeneficial,
+        }
     }
 }
 

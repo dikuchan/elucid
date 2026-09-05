@@ -4,7 +4,7 @@ mod error;
 mod limits;
 mod worker;
 
-pub use error::{CompactionError, CompactionErrorCode, CompactionErrorKind};
+pub use error::{CompactionError, CompactionErrorKind};
 pub use limits::{
     CompactionBuildLimitConfiguration, CompactionBuildLimits, CompactionBuildModelError,
 };

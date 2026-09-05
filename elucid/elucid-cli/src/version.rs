@@ -1,9 +1,10 @@
+use elucid_core::ErrorCode;
 use serde::Serialize;
 
 use elucid_metastore::{MAXIMUM_SUPPORTED_MIGRATION_VERSION, MINIMUM_SUPPORTED_MIGRATION_VERSION};
 
 use crate::arguments::VersionOutput;
-use crate::error::{CliErrorCode, Failure};
+use crate::error::Failure;
 
 const STORAGE_FORMAT_VERSION: u32 = 1;
 
@@ -29,7 +30,7 @@ pub(crate) fn render(output: VersionOutput) -> Result<Vec<u8>, Failure> {
         VersionOutput::Human => Ok(information.render_human().into_bytes()),
         VersionOutput::Json => serde_json::to_vec(&information).map_err(|error| {
             Failure::internal(
-                CliErrorCode::VersionEncodingFailed,
+                ErrorCode::VersionEncodingFailed,
                 anyhow::Error::new(error).context("failed to encode version information"),
             )
         }),

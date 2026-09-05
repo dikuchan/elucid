@@ -2,9 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use elucid_catalog::{CatalogManifest, Source, SourceName};
-use elucid_metastore::{
-    CatalogApplyOutcome, CatalogPersistenceErrorKind, CatalogStore, MetastoreErrorCode, install,
-};
+use elucid_core::{CodedError, ErrorCode};
+use elucid_metastore::{CatalogApplyOutcome, CatalogPersistenceErrorKind, CatalogStore, install};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::{ImageExt as _, runners::AsyncRunner as _};
@@ -158,7 +157,7 @@ async fn catalog_apply_load_and_snapshot_failures_follow_the_durable_contract() 
         .await
         .expect_err("immutable history rewrite must conflict");
     assert_eq!(error.kind(), CatalogPersistenceErrorKind::Conflict);
-    assert_eq!(error.code(), MetastoreErrorCode::Conflict);
+    assert_eq!(error.error_code(), ErrorCode::MetastoreConflict);
     assert_eq!(catalog_row_counts(&pool).await, [1, 2, 1, 2]);
     assert_eq!(source(&store.snapshot()).active_schema().version().get(), 2);
 
@@ -173,7 +172,7 @@ async fn catalog_apply_load_and_snapshot_failures_follow_the_durable_contract() 
         .await
         .expect_err("corrupt durable catalog must not replace the snapshot");
     assert_eq!(error.kind(), CatalogPersistenceErrorKind::Corrupt);
-    assert_eq!(error.code(), MetastoreErrorCode::Corrupt);
+    assert_eq!(error.error_code(), ErrorCode::MetastoreCorrupt);
     assert_eq!(source(&store.snapshot()).active_schema().version().get(), 2);
 
     container
@@ -185,7 +184,7 @@ async fn catalog_apply_load_and_snapshot_failures_follow_the_durable_contract() 
         .await
         .expect_err("dependency outage must be reported");
     assert_eq!(error.kind(), CatalogPersistenceErrorKind::Unavailable);
-    assert_eq!(error.code(), MetastoreErrorCode::Unavailable);
+    assert_eq!(error.error_code(), ErrorCode::MetastoreUnavailable);
 }
 
 fn decode(document: &str) -> CatalogManifest {

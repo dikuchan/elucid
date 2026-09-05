@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 
+use elucid_core::{CodedError, ErrorCode};
 use thiserror::Error;
 use yaml_rust2::scanner::ScanError;
 
@@ -7,7 +8,7 @@ use crate::{CatalogModelError, SchemaIncompatibility, SchemaVersion};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum CatalogErrorCode {
+pub enum CatalogErrorKind {
     ManifestInvalid,
     DefinitionConflict,
     SchemaIncompatible,
@@ -15,20 +16,26 @@ pub enum CatalogErrorCode {
     Corrupt,
 }
 
-impl CatalogErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ManifestInvalid => "CATALOG_MANIFEST_INVALID",
-            Self::DefinitionConflict => "CATALOG_DEFINITION_CONFLICT",
-            Self::SchemaIncompatible => "CATALOG_SCHEMA_INCOMPATIBLE",
-            Self::ProfileInvalid => "CATALOG_PROFILE_INVALID",
-            Self::Corrupt => "CATALOG_CORRUPT",
+impl From<CatalogErrorKind> for ErrorCode {
+    fn from(value: CatalogErrorKind) -> Self {
+        match value {
+            CatalogErrorKind::ManifestInvalid => Self::CatalogManifestInvalid,
+            CatalogErrorKind::DefinitionConflict => Self::CatalogDefinitionConflict,
+            CatalogErrorKind::SchemaIncompatible => Self::CatalogSchemaIncompatible,
+            CatalogErrorKind::ProfileInvalid => Self::CatalogProfileInvalid,
+            CatalogErrorKind::Corrupt => Self::CatalogCorrupt,
         }
     }
 }
 
-impl Display for CatalogErrorCode {
+impl CatalogErrorKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        ErrorCode::from(self).as_str()
+    }
+}
+
+impl Display for CatalogErrorKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -122,19 +129,19 @@ pub enum CatalogApplicationError {
 
 impl CatalogApplicationError {
     #[must_use]
-    pub const fn code(&self) -> CatalogErrorCode {
+    pub const fn kind(&self) -> CatalogErrorKind {
         match self {
             Self::ManifestNotUtf8 { .. }
             | Self::ManifestYamlSyntax { .. }
             | Self::ManifestYamlDecode { .. }
             | Self::ManifestInvalid { .. }
-            | Self::ManifestModelInvalid { .. } => CatalogErrorCode::ManifestInvalid,
-            Self::DefinitionConflict { .. } => CatalogErrorCode::DefinitionConflict,
-            Self::HistoryDiverged { .. } => CatalogErrorCode::DefinitionConflict,
-            Self::ProfileInvalid { .. } => CatalogErrorCode::ProfileInvalid,
-            Self::SchemaIncompatible { .. } => CatalogErrorCode::SchemaIncompatible,
+            | Self::ManifestModelInvalid { .. } => CatalogErrorKind::ManifestInvalid,
+            Self::DefinitionConflict { .. } => CatalogErrorKind::DefinitionConflict,
+            Self::HistoryDiverged { .. } => CatalogErrorKind::DefinitionConflict,
+            Self::ProfileInvalid { .. } => CatalogErrorKind::ProfileInvalid,
+            Self::SchemaIncompatible { .. } => CatalogErrorKind::SchemaIncompatible,
             Self::Corruption { .. } | Self::CanonicalJsonEncoding { .. } => {
-                CatalogErrorCode::Corrupt
+                CatalogErrorKind::Corrupt
             }
         }
     }
@@ -182,5 +189,11 @@ impl CatalogApplicationError {
             path: CatalogPath::new(path),
             message: message.into(),
         }
+    }
+}
+
+impl CodedError for CatalogApplicationError {
+    fn error_code(&self) -> ErrorCode {
+        self.kind().into()
     }
 }

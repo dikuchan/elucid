@@ -9,7 +9,7 @@ mod store;
 mod value;
 
 pub use descriptor::ObjectDescriptor;
-pub use error::{StorageError, StorageErrorCode, StorageModelError};
+pub use error::{StorageError, StorageErrorKind, StorageModelError};
 pub use identity::{BatchId, SegmentId, StoredObjectId};
 pub use key::{ManagedObjectKey, ManagedObjectKind, ManagedRoot, ObjectOwner};
 pub use parquet_segment::{

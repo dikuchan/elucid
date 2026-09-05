@@ -2,11 +2,13 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use elucid_core::{CodedError, ErrorCode};
+
 use bytes::Bytes;
 use elucid_catalog::{IngestionProfileRevisionId, InputId, SchemaId, SourceId};
 use elucid_ingestion::{
     AppendBodyLimit, BatchId, BatchMetadata, BodyDigest, IngestionTime, MaximumBatchAdmission,
-    PinnedCatalogIdentities, Spool, SpoolCapacity, SpoolErrorCode,
+    PinnedCatalogIdentities, Spool, SpoolCapacity,
 };
 use uuid::Uuid;
 
@@ -158,7 +160,7 @@ async fn recovery_rejects_corruption_without_truncating_committed_data() {
         .await
         .expect_err("committed corruption must fail recovery");
 
-    assert_eq!(error.code(), SpoolErrorCode::Corrupt);
+    assert_eq!(error.error_code(), ErrorCode::SpoolCorrupt);
     assert_eq!(
         fs::metadata(&data_path).expect("corrupt metadata").len(),
         corrupted.len() as u64
@@ -192,7 +194,7 @@ async fn recovery_rejects_an_arbitrary_tail_without_truncating_it() {
         .await
         .expect_err("an arbitrary tail is corruption, not a torn append");
 
-    assert_eq!(error.code(), SpoolErrorCode::Corrupt);
+    assert_eq!(error.error_code(), ErrorCode::SpoolCorrupt);
     assert_eq!(
         fs::metadata(&data_path)
             .expect("unchanged invalid tail metadata")
@@ -225,7 +227,7 @@ async fn recovery_reports_when_another_maximum_batch_will_not_fit() {
     let error = spool
         .reserve(maximum_batch)
         .expect_err("maximum batch must remain rejected");
-    assert_eq!(error.code(), SpoolErrorCode::CapacityExhausted);
+    assert_eq!(error.error_code(), ErrorCode::CapacityExhausted);
 }
 
 async fn append(spool: &Spool, sequence: u128, body: Bytes) {

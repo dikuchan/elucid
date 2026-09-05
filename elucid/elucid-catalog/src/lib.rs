@@ -19,7 +19,7 @@ pub use application::{
     CatalogIdentityGenerator, PlannedIngestionProfileDefinition, PlannedInputDefinition,
     PlannedSchemaDefinition, PlannedSourceDefinition, plan_catalog_application,
 };
-pub use application_error::{CatalogApplicationError, CatalogErrorCode, CatalogPath};
+pub use application_error::{CatalogApplicationError, CatalogErrorKind, CatalogPath};
 pub use error::{CatalogModelError, IdentityKind, NameKind, SchemaIncompatibility, VersionKind};
 pub use identity::{FieldId, IngestionProfileRevisionId, InputId, SchemaId, SourceId};
 pub use input::{

@@ -1,35 +1,9 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use elucid_catalog::{CatalogApplicationError, CatalogErrorCode, CatalogModelError};
+use elucid_catalog::{CatalogApplicationError, CatalogErrorKind, CatalogModelError};
+use elucid_core::{CodedError, ErrorCode};
 use sqlx::migrate::MigrateError;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum MetastoreErrorCode {
-    Unavailable,
-    MigrationFailed,
-    Conflict,
-    Corrupt,
-}
-
-impl MetastoreErrorCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unavailable => "METASTORE_UNAVAILABLE",
-            Self::MigrationFailed => "METASTORE_MIGRATION_FAILED",
-            Self::Conflict => "METASTORE_CONFLICT",
-            Self::Corrupt => "METASTORE_CORRUPT",
-        }
-    }
-}
-
-impl Display for MetastoreErrorCode {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 #[error("metastore migration failed")]
@@ -38,10 +12,9 @@ pub struct MetastoreMigrationError {
     pub(crate) source: MigrateError,
 }
 
-impl MetastoreMigrationError {
-    #[must_use]
-    pub const fn code(&self) -> MetastoreErrorCode {
-        MetastoreErrorCode::MigrationFailed
+impl CodedError for MetastoreMigrationError {
+    fn error_code(&self) -> ErrorCode {
+        ErrorCode::MetastoreMigrationFailed
     }
 }
 
@@ -125,15 +98,6 @@ impl PublicationError {
     }
 
     #[must_use]
-    pub const fn code(&self) -> MetastoreErrorCode {
-        match self.kind {
-            PublicationErrorKind::Conflict => MetastoreErrorCode::Conflict,
-            PublicationErrorKind::Unavailable => MetastoreErrorCode::Unavailable,
-            PublicationErrorKind::Corrupt => MetastoreErrorCode::Corrupt,
-        }
-    }
-
-    #[must_use]
     pub const fn model_error(&self) -> Option<PublicationModelError> {
         match &self.source {
             PublicationErrorSource::Model(source) => Some(*source),
@@ -206,6 +170,16 @@ impl Error for PublicationError {
     }
 }
 
+impl CodedError for PublicationError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            PublicationErrorKind::Conflict => ErrorCode::MetastoreConflict,
+            PublicationErrorKind::Unavailable => ErrorCode::MetastoreUnavailable,
+            PublicationErrorKind::Corrupt => ErrorCode::MetastoreCorrupt,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum PublicationErrorSource {
     #[error("publication metadata is invalid")]
@@ -248,15 +222,6 @@ impl CatalogPersistenceError {
     }
 
     #[must_use]
-    pub const fn code(&self) -> MetastoreErrorCode {
-        match self.kind {
-            CatalogPersistenceErrorKind::Conflict => MetastoreErrorCode::Conflict,
-            CatalogPersistenceErrorKind::Unavailable => MetastoreErrorCode::Unavailable,
-            CatalogPersistenceErrorKind::Corrupt => MetastoreErrorCode::Corrupt,
-        }
-    }
-
-    #[must_use]
     pub const fn catalog_error(&self) -> Option<&CatalogApplicationError> {
         match &self.source {
             CatalogPersistenceErrorSource::Catalog(source) => Some(source),
@@ -267,7 +232,7 @@ impl CatalogPersistenceError {
     }
 
     pub(crate) fn from_catalog(source: CatalogApplicationError) -> Self {
-        let kind = if source.code() == CatalogErrorCode::Corrupt {
+        let kind = if source.kind() == CatalogErrorKind::Corrupt {
             CatalogPersistenceErrorKind::Corrupt
         } else {
             CatalogPersistenceErrorKind::Conflict
@@ -340,6 +305,16 @@ impl Display for CatalogPersistenceError {
 impl Error for CatalogPersistenceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for CatalogPersistenceError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            CatalogPersistenceErrorKind::Conflict => ErrorCode::MetastoreConflict,
+            CatalogPersistenceErrorKind::Unavailable => ErrorCode::MetastoreUnavailable,
+            CatalogPersistenceErrorKind::Corrupt => ErrorCode::MetastoreCorrupt,
+        }
     }
 }
 

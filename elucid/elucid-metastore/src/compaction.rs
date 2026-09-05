@@ -10,6 +10,7 @@ use elucid_catalog::{
     CatalogApplicationError, CatalogModelError, Schema, SchemaId, SchemaVersion, SourceId,
     decode_stored_schema_definition,
 };
+use elucid_core::{CodedError, ErrorCode};
 use elucid_storage::{
     ManagedObjectKey, ManagedObjectKind, ObjectByteSize, ObjectDescriptor, ObjectDigest,
     ObjectFormatVersion, ObjectMediaType, ObjectOwner, PARQUET_FORMAT_VERSION, SegmentId,
@@ -22,8 +23,8 @@ use sqlx::types::Json;
 use sqlx::{Connection as _, Either, FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::IngestionSegmentTimes;
 use crate::error::{is_database_conflict, is_row_decode_error};
-use crate::{IngestionSegmentTimes, MetastoreErrorCode};
 
 pub const MAXIMUM_COMPACTION_CANDIDATE_SEGMENTS: u64 = 10_000;
 pub const MAXIMUM_COMPACTION_INPUT_SEGMENTS: u64 = 1_000;
@@ -254,15 +255,6 @@ impl CompactionMetadataError {
     }
 
     #[must_use]
-    pub const fn code(&self) -> MetastoreErrorCode {
-        match self.kind {
-            CompactionMetadataErrorKind::Conflict => MetastoreErrorCode::Conflict,
-            CompactionMetadataErrorKind::Unavailable => MetastoreErrorCode::Unavailable,
-            CompactionMetadataErrorKind::Corrupt => MetastoreErrorCode::Corrupt,
-        }
-    }
-
-    #[must_use]
     pub const fn model_error(&self) -> Option<CompactionModelError> {
         match &self.source {
             CompactionMetadataErrorSource::Model(source) => Some(*source),
@@ -371,6 +363,16 @@ impl Display for CompactionMetadataError {
 impl Error for CompactionMetadataError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(&self.source)
+    }
+}
+
+impl CodedError for CompactionMetadataError {
+    fn error_code(&self) -> ErrorCode {
+        match self.kind {
+            CompactionMetadataErrorKind::Conflict => ErrorCode::MetastoreConflict,
+            CompactionMetadataErrorKind::Unavailable => ErrorCode::MetastoreUnavailable,
+            CompactionMetadataErrorKind::Corrupt => ErrorCode::MetastoreCorrupt,
+        }
     }
 }
 

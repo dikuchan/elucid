@@ -22,7 +22,7 @@ use elucid_language::ir::TimeRange;
 use elucid_metastore::QuerySnapshot;
 use elucid_storage::{
     ImmutableObjectStore, ObjectDescriptor, ObjectVerificationOutcome, PARQUET_FORMAT_VERSION,
-    ParquetSegmentExpectation, SegmentId, StorageError, StorageErrorCode,
+    ParquetSegmentExpectation, SegmentId, StorageError, StorageErrorKind,
     validate_parquet_segment_metadata,
 };
 use futures::{StreamExt as _, TryStreamExt as _, stream};
@@ -312,16 +312,16 @@ async fn validate_object(
 }
 
 fn map_storage_error(source: StorageError) -> EngineError {
-    match source.code() {
-        StorageErrorCode::ObjectIntegrityError | StorageErrorCode::ParquetInvalid => {
+    match source.kind() {
+        StorageErrorKind::ObjectIntegrityError | StorageErrorKind::ParquetInvalid => {
             EngineError::corrupt_object(source)
         }
-        StorageErrorCode::ParquetBuildFailed
-        | StorageErrorCode::ObjectStoreUnavailable
-        | StorageErrorCode::ObjectUploadFailed
-        | StorageErrorCode::ObjectVerificationFailed
-        | StorageErrorCode::ObjectDeleteFailed
-        | StorageErrorCode::LocalCapacityExhausted => EngineError::execution(source),
+        StorageErrorKind::ParquetBuildFailed
+        | StorageErrorKind::ObjectStoreUnavailable
+        | StorageErrorKind::ObjectUploadFailed
+        | StorageErrorKind::ObjectVerificationFailed
+        | StorageErrorKind::ObjectDeleteFailed
+        | StorageErrorKind::LocalCapacityExhausted => EngineError::execution(source),
         _ => EngineError::execution(source),
     }
 }

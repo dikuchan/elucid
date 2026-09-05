@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 use chrono::{DateTime, NaiveDate, Utc};
+use elucid_core::ErrorCode;
 use sqlx::postgres::PgConnection;
 use sqlx::{Connection as _, FromRow, Postgres, Transaction};
 use uuid::Uuid;
@@ -39,7 +40,7 @@ impl CompactionRecoveryLimit {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum CompactionFailureCode {
+pub enum CompactionFailureReason {
     InputInvalid,
     BuildFailed,
     NotBeneficial,
@@ -47,25 +48,31 @@ pub enum CompactionFailureCode {
     RecoveryFailed,
 }
 
-impl CompactionFailureCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InputInvalid => "COMPACTION_INPUT_INVALID",
-            Self::BuildFailed => "COMPACTION_BUILD_FAILED",
-            Self::NotBeneficial => "COMPACTION_NOT_BENEFICIAL",
-            Self::PublicationFailed => "COMPACTION_PUBLICATION_FAILED",
-            Self::RecoveryFailed => "COMPACTION_RECOVERY_FAILED",
+impl From<CompactionFailureReason> for ErrorCode {
+    fn from(value: CompactionFailureReason) -> Self {
+        match value {
+            CompactionFailureReason::InputInvalid => Self::CompactionInputInvalid,
+            CompactionFailureReason::BuildFailed => Self::CompactionBuildFailed,
+            CompactionFailureReason::NotBeneficial => Self::CompactionNotBeneficial,
+            CompactionFailureReason::PublicationFailed => Self::CompactionPublicationFailed,
+            CompactionFailureReason::RecoveryFailed => Self::CompactionRecoveryFailed,
         }
+    }
+}
+
+impl CompactionFailureReason {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        ErrorCode::from(self).as_str()
     }
 
     fn parse(value: &str) -> Result<Self, CompactionMetadataError> {
-        match value {
-            "COMPACTION_INPUT_INVALID" => Ok(Self::InputInvalid),
-            "COMPACTION_BUILD_FAILED" => Ok(Self::BuildFailed),
-            "COMPACTION_NOT_BENEFICIAL" => Ok(Self::NotBeneficial),
-            "COMPACTION_PUBLICATION_FAILED" => Ok(Self::PublicationFailed),
-            "COMPACTION_RECOVERY_FAILED" => Ok(Self::RecoveryFailed),
+        match value.parse::<ErrorCode>() {
+            Ok(ErrorCode::CompactionInputInvalid) => Ok(Self::InputInvalid),
+            Ok(ErrorCode::CompactionBuildFailed) => Ok(Self::BuildFailed),
+            Ok(ErrorCode::CompactionNotBeneficial) => Ok(Self::NotBeneficial),
+            Ok(ErrorCode::CompactionPublicationFailed) => Ok(Self::PublicationFailed),
+            Ok(ErrorCode::CompactionRecoveryFailed) => Ok(Self::RecoveryFailed),
             _ => Err(CompactionMetadataError::corrupt(
                 "compaction run has an unknown failure code",
             )),
@@ -73,7 +80,7 @@ impl CompactionFailureCode {
     }
 }
 
-impl Display for CompactionFailureCode {
+impl Display for CompactionFailureReason {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
@@ -154,7 +161,7 @@ impl MaintenanceOwner {
     pub async fn fail_run(
         &mut self,
         run_id: CompactionRunId,
-        failure_code: CompactionFailureCode,
+        failure_code: CompactionFailureReason,
         grace: OrphanGracePeriod,
     ) -> Result<CompactionFailureOutcome, CompactionMetadataError> {
         match fail_run_transaction(&mut self.guard, run_id, failure_code, grace).await? {
@@ -260,7 +267,7 @@ async fn publish_replacement_transaction(
 async fn fail_run_transaction(
     connection: &mut PgConnection,
     run_id: CompactionRunId,
-    failure_code: CompactionFailureCode,
+    failure_code: CompactionFailureReason,
     grace: OrphanGracePeriod,
 ) -> Result<TransactionOutcome<CompactionFailureOutcome>, CompactionMetadataError> {
     let mut transaction = connection
@@ -335,7 +342,7 @@ async fn recover_unfinished_transaction(
         fail_locked_run(
             &mut transaction,
             &replacement,
-            CompactionFailureCode::RecoveryFailed,
+            CompactionFailureReason::RecoveryFailed,
             grace,
         )
         .await?;
@@ -562,7 +569,7 @@ async fn publish_locked_replacement(
 async fn fail_locked_run(
     transaction: &mut Transaction<'_, Postgres>,
     replacement: &ReplacementRows,
-    failure_code: CompactionFailureCode,
+    failure_code: CompactionFailureReason,
     grace: OrphanGracePeriod,
 ) -> Result<(), CompactionMetadataError> {
     let input_segment_ids = replacement
@@ -975,13 +982,13 @@ impl LifecycleRunRow {
         }
     }
 
-    fn failure_code(&self) -> Result<CompactionFailureCode, CompactionMetadataError> {
+    fn failure_code(&self) -> Result<CompactionFailureReason, CompactionMetadataError> {
         self.failure_code
             .as_deref()
             .ok_or_else(|| {
                 CompactionMetadataError::corrupt("failed compaction run has no failure code")
             })
-            .and_then(CompactionFailureCode::parse)
+            .and_then(CompactionFailureReason::parse)
     }
 }
 

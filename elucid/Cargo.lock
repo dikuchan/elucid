@@ -1859,6 +1859,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "blake3",
+ "elucid-core",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1874,6 +1875,7 @@ dependencies = [
  "anyhow",
  "clap",
  "elucid-catalog",
+ "elucid-core",
  "elucid-metastore",
  "elucid-service",
  "reqwest",
@@ -1893,6 +1895,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elucid-catalog",
+ "elucid-core",
  "elucid-metastore",
  "elucid-storage",
  "futures",
@@ -1907,6 +1910,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "elucid-core"
+version = "0.1.0"
+
+[[package]]
 name = "elucid-engine"
 version = "0.1.0"
 dependencies = [
@@ -1916,6 +1923,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "elucid-catalog",
+ "elucid-core",
  "elucid-language",
  "elucid-metastore",
  "elucid-storage",
@@ -1942,6 +1950,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elucid-catalog",
+ "elucid-core",
  "elucid-metastore",
  "elucid-storage",
  "serde",
@@ -1960,6 +1969,7 @@ dependencies = [
  "chrono",
  "chumsky",
  "elucid-catalog",
+ "elucid-core",
  "insta",
  "logos",
  "serde_json",
@@ -1973,6 +1983,7 @@ dependencies = [
  "bytes",
  "chrono",
  "elucid-catalog",
+ "elucid-core",
  "elucid-language",
  "elucid-storage",
  "object_store",
@@ -1994,6 +2005,7 @@ dependencies = [
  "chrono",
  "elucid-catalog",
  "elucid-compaction",
+ "elucid-core",
  "elucid-engine",
  "elucid-ingestion",
  "elucid-language",
@@ -2026,6 +2038,7 @@ dependencies = [
  "blake3",
  "bytes",
  "elucid-catalog",
+ "elucid-core",
  "object_store",
  "parquet",
  "tempfile",

@@ -11,7 +11,7 @@ use toml_edit::DocumentMut;
 
 pub use environment::Environment;
 pub use error::{
-    ConfigurationError, ConfigurationErrorCode, ConfigurationField, ConfigurationViolation,
+    ConfigurationError, ConfigurationField, ConfigurationViolation,
     EnvironmentOverrideInvalidReason, InvalidValueReason, SecretInvalidReason, SecretKind,
 };
 pub use model::{

@@ -273,6 +273,18 @@ fn retained_http_helpers_reject_retired_authentication_and_idempotency_flags() {
 fn remote_responses_have_stable_exit_categories() {
     assert_remote_exit(
         RemoteOperation::Catalog,
+        "400 Bad Request",
+        br#"{ "error": { "code": "FUTURE_CATALOG_FAILURE", "message": "future failure" } }"#,
+        2,
+    );
+    assert_remote_exit(
+        RemoteOperation::Catalog,
+        "400 Bad Request",
+        br#"{"error":{"code":"CATALOG_DEFINITION_CONFLICT"}}"#,
+        5,
+    );
+    assert_remote_exit(
+        RemoteOperation::Catalog,
         "409 Conflict",
         br#"{"error":{"code":"CATALOG_DEFINITION_CONFLICT"}}"#,
         5,

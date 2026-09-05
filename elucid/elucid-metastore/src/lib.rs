@@ -22,12 +22,12 @@ pub use compaction::{
     MAXIMUM_COMPACTION_OUTPUT_SEGMENTS, MaintenanceOwner, MaintenanceOwnership,
 };
 pub use compaction_lifecycle::{
-    CompactionFailureCode, CompactionFailureOutcome, CompactionPublicationOutcome,
+    CompactionFailureOutcome, CompactionFailureReason, CompactionPublicationOutcome,
     CompactionRecovery, CompactionRecoveryLimit, MAXIMUM_COMPACTION_RECOVERY_RUNS,
 };
 pub use error::{
-    CatalogPersistenceError, CatalogPersistenceErrorKind, MetastoreErrorCode,
-    MetastoreMigrationError, PublicationError, PublicationErrorKind, PublicationModelError,
+    CatalogPersistenceError, CatalogPersistenceErrorKind, MetastoreMigrationError,
+    PublicationError, PublicationErrorKind, PublicationModelError,
 };
 pub use inspection::{
     BoundedOperationalList, DeadLetterObject, DeadLetterSummary, OperationalBacklog,
@@ -61,6 +61,6 @@ pub use reclamation::{
 };
 pub use retention::{
     MAXIMUM_METADATA_CLEANUP_ROOTS, MAXIMUM_RETENTION_SCAN_ITEMS, MetadataCleanup,
-    MetadataCleanupLimit, ReclamationGracePeriod, RetentionError, RetentionErrorCode,
-    RetentionErrorKind, RetentionModelError, RetentionScanLimit, RetentionStore, SegmentExpiration,
+    MetadataCleanupLimit, ReclamationGracePeriod, RetentionError, RetentionErrorKind,
+    RetentionModelError, RetentionScanLimit, RetentionStore, SegmentExpiration,
 };
