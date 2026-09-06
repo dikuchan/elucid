@@ -11,11 +11,12 @@ elucid-core = { workspace = true }
 arrow = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 elucid-catalog = { workspace = true }
 object_store = { workspace = true, features = ["aws"] }
 parquet = { workspace = true, features = ["arrow"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
 uuid = { workspace = true }
 
 [dev-dependencies]

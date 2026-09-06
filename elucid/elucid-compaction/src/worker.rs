@@ -2,7 +2,6 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::future::Future;
 use std::io;
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,20 +10,19 @@ use arrow::array::{
     Array as _, FixedSizeBinaryArray, MutableArrayData, TimestampMillisecondArray, make_array,
 };
 use arrow::record_batch::RecordBatch;
-use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use elucid_catalog::Schema;
 use elucid_core::EventId;
 use elucid_metastore::{
-    CompactionInputSegment, CompactionOutputRegistration,
-    CompactionOutputRegistrationConfiguration, CompactionRunClaim, CompactionRunId,
-    CompactionStore, IngestionSegmentTimes, PublicationStore,
+    CompactionInputSegment, CompactionOutputRegistration, CompactionRunClaim, CompactionRunId,
+    CompactionStore, PublicationStore,
 };
 use elucid_storage::{
-    ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ObjectDigest,
-    ObjectVerificationOutcome, PARQUET_FORMAT_VERSION, ParquetSegmentExpectation,
-    ParquetSegmentInput, ParquetWriteLimit, SegmentId, StagedParquetSegment, StoredObjectId,
-    TransferLimit, validate_parquet_segment_metadata, write_parquet_segment,
+    ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectVerificationOutcome,
+    PARQUET_FORMAT_VERSION, ParquetSegmentExpectation, ParquetSegmentInput, ParquetWriteLimit,
+    RowCount, SegmentDescriptor, SegmentId, SegmentTimes, StagedParquetSegment, StoredObjectId,
+    TransferLimit, UncompressedByteSize, read_staged_object, validate_parquet_segment_metadata,
+    write_parquet_segment,
 };
 use futures::StreamExt as _;
 use object_store::ObjectStore;
@@ -262,26 +260,27 @@ impl CompactionWorker {
             ))
             .await?
             .map_err(CompactionError::output_storage)?;
-        let row_count = NonZeroU64::new(staged.row_count())
-            .ok_or_else(|| CompactionError::build("compaction output is empty"))?;
-        let uncompressed_bytes = NonZeroU64::new(estimated_uncompressed_bytes)
-            .ok_or_else(|| CompactionError::build("compaction output has no estimated bytes"))?;
-        let registration =
-            CompactionOutputRegistration::new(CompactionOutputRegistrationConfiguration {
-                run_id: claim.run_id(),
-                segment_id,
-                source_id: claim.source_id(),
-                schema_id: schema.id(),
-                times,
-                row_count,
-                uncompressed_bytes,
-                data_expires_at: claim.data_expires_at(),
-                object: staged.object_descriptor().clone(),
-            });
+        let row_count = RowCount::new(staged.row_count())
+            .map_err(|_| CompactionError::build("compaction output is empty"))?;
+        let uncompressed_bytes = UncompressedByteSize::new(estimated_uncompressed_bytes)
+            .map_err(|_| CompactionError::build("compaction output has no estimated bytes"))?;
+        let registration = SegmentDescriptor::new(
+            segment_id,
+            claim.source_id(),
+            schema.id(),
+            times,
+            row_count,
+            uncompressed_bytes,
+            staged.object_descriptor().clone(),
+        )
+        .map_err(CompactionError::output_storage_model)
+        .and_then(|descriptor| {
+            CompactionOutputRegistration::new(claim.run_id(), descriptor, claim.data_expires_at())
+                .map_err(CompactionError::metadata_model)
+        });
         let registration = match registration {
             Ok(registration) => registration,
-            Err(source) => {
-                let error = CompactionError::metadata_model(source);
+            Err(error) => {
                 return match tokio::fs::remove_file(staged.path()).await {
                     Ok(()) => Err(error),
                     Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
@@ -313,13 +312,14 @@ impl CompactionWorker {
             .map_err(CompactionError::output_storage_model)?;
         for output in outputs {
             let descriptor = output.staged.object_descriptor();
-            let bytes = read_bounded_file(
-                output.staged.path(),
-                descriptor,
-                self.limits.maximum_output_parquet_bytes(),
-                deadline,
-            )
-            .await?;
+            let bytes = deadline
+                .run(read_staged_object(
+                    output.staged.path(),
+                    descriptor,
+                    transfer_limit,
+                ))
+                .await?
+                .map_err(CompactionError::staged_read)?;
             deadline
                 .run(self.objects.upload(descriptor, bytes, transfer_limit))
                 .await?
@@ -409,13 +409,13 @@ impl InputCursor {
         reader_batch_rows: usize,
         deadline: Deadline,
     ) -> Result<Self, CompactionError> {
-        if input.object().format_version().get() != PARQUET_FORMAT_VERSION {
+        if input.descriptor().object().format_version().get() != PARQUET_FORMAT_VERSION {
             return Err(CompactionError::input(
                 "compaction input has an unsupported Parquet format version",
             ));
         }
         match deadline
-            .run(objects.verify(input.object()))
+            .run(objects.verify(input.descriptor().object()))
             .await?
             .map_err(CompactionError::storage)?
         {
@@ -431,19 +431,22 @@ impl InputCursor {
                 ));
             }
         }
-        let expectation =
-            ParquetSegmentExpectation::new(input.object().key().clone(), schema, input.row_count())
-                .map_err(CompactionError::input_storage_model)?;
-        if expectation.segment_id() != input.segment_id() {
+        let expectation = ParquetSegmentExpectation::new(
+            input.descriptor().object().key().clone(),
+            schema,
+            input.descriptor().row_count().get(),
+        )
+        .map_err(CompactionError::input_storage_model)?;
+        if expectation.segment_id() != input.descriptor().segment_id() {
             return Err(CompactionError::input(
                 "compaction input identity contradicts its object key",
             ));
         }
         let reader = ParquetObjectReader::new(
             object_store,
-            ObjectPath::from(input.object().key().as_str()),
+            ObjectPath::from(input.descriptor().object().key().as_str()),
         )
-        .with_file_size(input.object().expected_byte_size().get());
+        .with_file_size(input.descriptor().object().expected_byte_size().get());
         let builder = deadline
             .run(ParquetRecordBatchStreamBuilder::new(reader))
             .await?
@@ -633,7 +636,7 @@ impl InputCursor {
                     .map_err(|_| CompactionError::input("input batch row count overflowed"))?,
             )
             .ok_or_else(|| CompactionError::input("compaction input row count overflowed"))?;
-        if self.rows_loaded > self.input.row_count() {
+        if self.rows_loaded > self.input.descriptor().row_count().get() {
             return Err(CompactionError::input(
                 "compaction input contains more rows than registered",
             ));
@@ -642,9 +645,9 @@ impl InputCursor {
     }
 
     fn validate_complete(&self) -> Result<(), CompactionError> {
-        let times = self.input.times();
-        if self.rows_loaded != self.input.row_count()
-            || self.rows_emitted != self.input.row_count()
+        let times = self.input.descriptor().times();
+        if self.rows_loaded != self.input.descriptor().row_count().get()
+            || self.rows_emitted != self.input.descriptor().row_count().get()
             || self.minimum_event_time != Some(times.minimum_event_time().timestamp_millis())
             || self.maximum_event_time != Some(times.maximum_event_time().timestamp_millis())
             || self.minimum_ingestion_time
@@ -660,14 +663,19 @@ impl InputCursor {
     }
 
     fn estimated_row_bytes(&self) -> Result<u64, CompactionError> {
-        if self.rows_emitted >= self.input.row_count() {
+        if self.rows_emitted >= self.input.descriptor().row_count().get() {
             return Err(CompactionError::input(
                 "compaction input row estimate is past the registered count",
             ));
         }
-        let total = self.input.uncompressed_bytes().max(self.input.row_count());
-        let base = total / self.input.row_count();
-        let remainder = total % self.input.row_count();
+        let total = self
+            .input
+            .descriptor()
+            .uncompressed_bytes()
+            .get()
+            .max(self.input.descriptor().row_count().get());
+        let base = total / self.input.descriptor().row_count().get();
+        let remainder = total % self.input.descriptor().row_count().get();
         Ok(base + u64::from(self.rows_emitted < remainder))
     }
 }
@@ -812,7 +820,7 @@ impl OutputAccumulator {
             columns.push(make_array(output.freeze()));
         }
         let batch = RecordBatch::try_new(arrow_schema, columns).map_err(CompactionError::arrow)?;
-        let times = IngestionSegmentTimes::new(
+        let times = SegmentTimes::new(
             self.event_day,
             timestamp(self.minimum_event_time)?,
             timestamp(self.maximum_event_time)?,
@@ -831,7 +839,7 @@ impl OutputAccumulator {
 #[derive(Debug)]
 struct OutputBatch {
     batch: RecordBatch,
-    times: IngestionSegmentTimes,
+    times: SegmentTimes,
     estimated_uncompressed_bytes: u64,
 }
 
@@ -875,9 +883,9 @@ fn validate_claim(
     }
     if claim.schema().source_id() != claim.source_id()
         || claim.inputs().iter().any(|input| {
-            input.times().event_day() != claim.event_day()
-                || input.object().key().owner()
-                    != elucid_storage::ObjectOwner::Segment(input.segment_id())
+            input.descriptor().times().event_day() != claim.event_day()
+                || input.descriptor().object().key().owner()
+                    != elucid_storage::ObjectOwner::Segment(input.descriptor().segment_id())
         })
     {
         return Err(CompactionError::input(
@@ -888,17 +896,17 @@ fn validate_claim(
         .map_err(|_| CompactionError::input("compaction input count overflowed"))?;
     let recomputed_rows = claim.inputs().iter().try_fold(0_u64, |total, input| {
         total
-            .checked_add(input.row_count())
+            .checked_add(input.descriptor().row_count().get())
             .ok_or_else(|| CompactionError::input("compaction input row total overflowed"))
     })?;
     let recomputed_parquet_bytes = claim.inputs().iter().try_fold(0_u64, |total, input| {
         total
-            .checked_add(input.object().expected_byte_size().get())
+            .checked_add(input.descriptor().object().expected_byte_size().get())
             .ok_or_else(|| CompactionError::input("compaction input byte total overflowed"))
     })?;
     let recomputed_uncompressed_bytes = claim.inputs().iter().try_fold(0_u64, |total, input| {
         total
-            .checked_add(input.uncompressed_bytes())
+            .checked_add(input.descriptor().uncompressed_bytes().get())
             .ok_or_else(|| CompactionError::input("compaction input uncompressed total overflowed"))
     })?;
     let maximum_deadline = claim
@@ -910,8 +918,9 @@ fn validate_claim(
     let target_output_rows = u64::try_from(limits.target_output_rows())
         .map_err(|_| CompactionError::build("compaction output row target overflowed"))?;
     if claim.inputs().iter().any(|input| {
-        input.row_count() >= target_output_rows
-            || input.uncompressed_bytes() >= limits.target_output_uncompressed_bytes()
+        input.descriptor().row_count().get() >= target_output_rows
+            || input.descriptor().uncompressed_bytes().get()
+                >= limits.target_output_uncompressed_bytes()
     }) {
         return Err(CompactionError::input(
             "compaction claim contains a segment at or above the output target",
@@ -1006,34 +1015,6 @@ fn timestamp(value: Option<i64>) -> Result<DateTime<Utc>, CompactionError> {
     value
         .and_then(DateTime::<Utc>::from_timestamp_millis)
         .ok_or_else(|| CompactionError::build("compaction output timestamp is invalid"))
-}
-
-async fn read_bounded_file(
-    path: &Path,
-    descriptor: &ObjectDescriptor,
-    maximum_bytes: u64,
-    deadline: Deadline,
-) -> Result<Bytes, CompactionError> {
-    let metadata = deadline
-        .run(tokio::fs::metadata(path))
-        .await?
-        .map_err(|source| CompactionError::io("reading compaction staging metadata", source))?;
-    if metadata.len() > maximum_bytes || metadata.len() != descriptor.expected_byte_size().get() {
-        return Err(CompactionError::build(
-            "compaction staging size differs from its descriptor or limit",
-        ));
-    }
-    let bytes = deadline
-        .run(tokio::fs::read(path))
-        .await?
-        .map(Bytes::from)
-        .map_err(|source| CompactionError::io("reading compaction staging bytes", source))?;
-    if ObjectDigest::calculate(&bytes) != descriptor.digest() {
-        return Err(CompactionError::build(
-            "compaction staging digest differs from its descriptor",
-        ));
-    }
-    Ok(bytes)
 }
 
 async fn cleanup_outputs(outputs: &[LocalOutput]) -> Result<(), io::Error> {

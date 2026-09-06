@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::num::NonZeroU64;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -12,9 +11,9 @@ use elucid_catalog::{
 };
 use elucid_core::{CodedError, ErrorCode};
 use elucid_storage::{
-    ManagedObjectKey, ManagedObjectKind, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, ObjectOwner, PARQUET_FORMAT_VERSION, SegmentId,
-    StorageModelError, StoredObjectId,
+    ManagedObjectKey, ObjectByteSize, ObjectDescriptor, ObjectDigest, ObjectFormatVersion,
+    ObjectMediaType, PARQUET_FORMAT_VERSION, RowCount, SegmentDescriptor, SegmentId, SegmentTimes,
+    StorageModelError, StoredObjectId, UncompressedByteSize,
 };
 use serde_json::Value;
 use sqlx::pool::PoolConnection;
@@ -23,7 +22,6 @@ use sqlx::types::Json;
 use sqlx::{Connection as _, Either, FromRow, Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::IngestionSegmentTimes;
 use crate::error::{is_database_conflict, is_row_decode_error};
 
 pub const MAXIMUM_COMPACTION_CANDIDATE_SEGMENTS: u64 = 10_000;
@@ -214,9 +212,6 @@ pub enum CompactionModelError {
     #[error("compaction output object uses an unsupported Parquet format version")]
     OutputObjectFormatVersionUnsupported,
 
-    #[error("compaction output object owner does not match its segment")]
-    OutputObjectOwnerMismatch,
-
     #[error("compaction output retention timestamp exceeds PostgreSQL precision")]
     OutputRetentionPrecisionUnsupported,
 
@@ -402,34 +397,15 @@ enum CompactionMetadataErrorSource {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompactionInputSegment {
-    segment_id: SegmentId,
-    times: IngestionSegmentTimes,
-    row_count: NonZeroU64,
-    uncompressed_bytes: NonZeroU64,
+    descriptor: SegmentDescriptor,
     data_expires_at: DateTime<Utc>,
     published_at: DateTime<Utc>,
-    object: ObjectDescriptor,
 }
 
 impl CompactionInputSegment {
     #[must_use]
-    pub const fn segment_id(&self) -> SegmentId {
-        self.segment_id
-    }
-
-    #[must_use]
-    pub const fn times(&self) -> IngestionSegmentTimes {
-        self.times
-    }
-
-    #[must_use]
-    pub const fn row_count(&self) -> u64 {
-        self.row_count.get()
-    }
-
-    #[must_use]
-    pub const fn uncompressed_bytes(&self) -> u64 {
-        self.uncompressed_bytes.get()
+    pub const fn descriptor(&self) -> &SegmentDescriptor {
+        &self.descriptor
     }
 
     #[must_use]
@@ -440,11 +416,6 @@ impl CompactionInputSegment {
     #[must_use]
     pub const fn published_at(&self) -> DateTime<Utc> {
         self.published_at
-    }
-
-    #[must_use]
-    pub const fn object(&self) -> &ObjectDescriptor {
-        &self.object
     }
 }
 
@@ -511,64 +482,33 @@ impl CompactionRunClaim {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CompactionOutputRegistration {
     run_id: CompactionRunId,
-    segment_id: SegmentId,
-    source_id: SourceId,
-    schema_id: SchemaId,
-    times: IngestionSegmentTimes,
-    row_count: i64,
-    uncompressed_bytes: i64,
+    descriptor: SegmentDescriptor,
     data_expires_at: DateTime<Utc>,
-    object: ObjectDescriptor,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CompactionOutputRegistrationConfiguration {
-    pub run_id: CompactionRunId,
-    pub segment_id: SegmentId,
-    pub source_id: SourceId,
-    pub schema_id: SchemaId,
-    pub times: IngestionSegmentTimes,
-    pub row_count: NonZeroU64,
-    pub uncompressed_bytes: NonZeroU64,
-    pub data_expires_at: DateTime<Utc>,
-    pub object: ObjectDescriptor,
 }
 
 impl CompactionOutputRegistration {
     pub fn new(
-        configuration: CompactionOutputRegistrationConfiguration,
+        run_id: CompactionRunId,
+        descriptor: SegmentDescriptor,
+        data_expires_at: DateTime<Utc>,
     ) -> Result<Self, CompactionModelError> {
-        if configuration.object.key().owner() != ObjectOwner::Segment(configuration.segment_id)
-            || configuration.object.key().kind() != ManagedObjectKind::ParquetData
-        {
-            return Err(CompactionModelError::OutputObjectOwnerMismatch);
-        }
-        if configuration.object.format_version().get() != PARQUET_FORMAT_VERSION {
+        if descriptor.object().format_version().get() != PARQUET_FORMAT_VERSION {
             return Err(CompactionModelError::OutputObjectFormatVersionUnsupported);
         }
-        if !configuration
-            .data_expires_at
+        if !data_expires_at
             .timestamp_subsec_nanos()
             .is_multiple_of(1_000)
         {
             return Err(CompactionModelError::OutputRetentionPrecisionUnsupported);
         }
-        let row_count = i64::try_from(configuration.row_count.get())
-            .map_err(|_| CompactionModelError::OutputRowCountOutOfRange)?;
-        let uncompressed_bytes = i64::try_from(configuration.uncompressed_bytes.get())
-            .map_err(|_| CompactionModelError::OutputUncompressedBytesOutOfRange)?;
-        database_object_byte_size(&configuration.object)?;
-        database_object_format_version(&configuration.object)?;
+        database_output_row_count(descriptor.row_count())?;
+        database_output_uncompressed_bytes(descriptor.uncompressed_bytes())?;
+        database_object_byte_size(descriptor.object())?;
+        database_object_format_version(descriptor.object())?;
         Ok(Self {
-            run_id: configuration.run_id,
-            segment_id: configuration.segment_id,
-            source_id: configuration.source_id,
-            schema_id: configuration.schema_id,
-            times: configuration.times,
-            row_count,
-            uncompressed_bytes,
-            data_expires_at: configuration.data_expires_at,
-            object: configuration.object,
+            run_id,
+            descriptor,
+            data_expires_at,
         })
     }
 
@@ -578,44 +518,24 @@ impl CompactionOutputRegistration {
     }
 
     #[must_use]
-    pub const fn segment_id(&self) -> SegmentId {
-        self.segment_id
-    }
-
-    #[must_use]
-    pub const fn source_id(&self) -> SourceId {
-        self.source_id
-    }
-
-    #[must_use]
-    pub const fn schema_id(&self) -> SchemaId {
-        self.schema_id
-    }
-
-    #[must_use]
-    pub const fn times(&self) -> IngestionSegmentTimes {
-        self.times
-    }
-
-    #[must_use]
-    pub const fn row_count(&self) -> u64 {
-        self.row_count.unsigned_abs()
-    }
-
-    #[must_use]
-    pub const fn uncompressed_bytes(&self) -> u64 {
-        self.uncompressed_bytes.unsigned_abs()
+    pub const fn descriptor(&self) -> &SegmentDescriptor {
+        &self.descriptor
     }
 
     #[must_use]
     pub const fn data_expires_at(&self) -> DateTime<Utc> {
         self.data_expires_at
     }
+}
 
-    #[must_use]
-    pub const fn object(&self) -> &ObjectDescriptor {
-        &self.object
-    }
+fn database_output_row_count(value: RowCount) -> Result<i64, CompactionModelError> {
+    i64::try_from(value.get()).map_err(|_| CompactionModelError::OutputRowCountOutOfRange)
+}
+
+fn database_output_uncompressed_bytes(
+    value: UncompressedByteSize,
+) -> Result<i64, CompactionModelError> {
+    i64::try_from(value.get()).map_err(|_| CompactionModelError::OutputUncompressedBytesOutOfRange)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -781,15 +701,15 @@ async fn claim_compaction(
         "#,
     )
     .bind(run_id.as_uuid())
-    .bind(first.source_id.as_uuid())
-    .bind(first.schema_id.as_uuid())
-    .bind(first.times.event_day())
+    .bind(first.descriptor.source_id().as_uuid())
+    .bind(first.descriptor.schema_id().as_uuid())
+    .bind(first.descriptor.times().event_day())
     .execute(&mut *transaction)
     .await
     .map_err(CompactionMetadataError::write)?;
     let selected_ids = selected
         .iter()
-        .map(|candidate| candidate.input.segment_id.as_uuid())
+        .map(|candidate| candidate.descriptor.segment_id().as_uuid())
         .collect::<Vec<_>>();
     let claimed = sqlx::query(
         r#"
@@ -810,7 +730,12 @@ async fn claim_compaction(
         selected.len() as u64,
         "locked compaction inputs were not claimed exactly once",
     )?;
-    let schema = load_stored_schema(&mut transaction, first.source_id, first.schema_id).await?;
+    let schema = load_stored_schema(
+        &mut transaction,
+        first.descriptor.source_id(),
+        first.descriptor.schema_id(),
+    )
+    .await?;
     let claim = materialize_claim(run_id, schema, selected)?;
     transaction
         .commit()
@@ -822,7 +747,7 @@ async fn claim_compaction(
 async fn load_candidates(
     transaction: &mut Transaction<'_, Postgres>,
     limits: CompactionClaimLimits,
-) -> Result<Vec<CandidateSegment>, CompactionMetadataError> {
+) -> Result<Vec<CompactionInputSegment>, CompactionMetadataError> {
     let rows = sqlx::query_as::<_, CandidateRow>(
         r#"
         SELECT
@@ -871,13 +796,13 @@ async fn load_candidates(
 }
 
 fn choose_candidate_group(
-    candidates: Vec<CandidateSegment>,
+    candidates: Vec<CompactionInputSegment>,
     limits: CompactionClaimLimits,
-) -> Result<Option<Vec<CandidateSegment>>, CompactionMetadataError> {
+) -> Result<Option<Vec<CompactionInputSegment>>, CompactionMetadataError> {
     let mut groups = Vec::<CandidateGroup>::new();
     let mut indexes = HashMap::<CandidateGroupKey, usize>::new();
     for candidate in candidates {
-        let key = candidate.group_key();
+        let key = CandidateGroupKey::from(&candidate.descriptor);
         let index = match indexes.get(&key).copied() {
             Some(index) => index,
             None => {
@@ -900,12 +825,12 @@ fn choose_candidate_group(
 
 async fn lock_selected_candidates(
     transaction: &mut Transaction<'_, Postgres>,
-    selected: &[CandidateSegment],
+    selected: &[CompactionInputSegment],
     limits: CompactionClaimLimits,
-) -> Result<Vec<CandidateSegment>, CompactionMetadataError> {
+) -> Result<Vec<CompactionInputSegment>, CompactionMetadataError> {
     let identities = selected
         .iter()
-        .map(|candidate| candidate.input.segment_id.as_uuid())
+        .map(|candidate| candidate.descriptor.segment_id().as_uuid())
         .collect::<Vec<_>>();
     let rows = sqlx::query_as::<_, CandidateRow>(
         r#"
@@ -988,21 +913,21 @@ async fn load_stored_schema(
 fn materialize_claim(
     run_id: CompactionRunId,
     schema: Schema,
-    selected: Vec<CandidateSegment>,
+    selected: Vec<CompactionInputSegment>,
 ) -> Result<CompactionRunClaim, CompactionMetadataError> {
     let first = selected.first().ok_or_else(|| {
         CompactionMetadataError::corrupt("claimed compaction run has no input segments")
     })?;
-    let source_id = first.source_id;
-    let schema_id = first.schema_id;
-    let event_day = first.times.event_day();
+    let source_id = first.descriptor.source_id();
+    let schema_id = first.descriptor.schema_id();
+    let event_day = first.descriptor.times().event_day();
     if selected.len() < 2
         || schema.source_id() != source_id
         || schema.id() != schema_id
         || selected.iter().any(|candidate| {
-            candidate.source_id != source_id
-                || candidate.schema_id != schema_id
-                || candidate.times.event_day() != event_day
+            candidate.descriptor.source_id() != source_id
+                || candidate.descriptor.schema_id() != schema_id
+                || candidate.descriptor.times().event_day() != event_day
         })
     {
         return Err(CompactionMetadataError::corrupt(
@@ -1012,20 +937,20 @@ fn materialize_claim(
     let mut input_rows = 0_u64;
     let mut input_parquet_bytes = 0_u64;
     let mut input_uncompressed_bytes = 0_u64;
-    let mut data_expires_at = first.input.data_expires_at;
+    let mut data_expires_at = first.data_expires_at;
     let mut inputs = Vec::with_capacity(selected.len());
     for candidate in selected {
-        input_rows = checked_sum(input_rows, candidate.input.row_count.get())?;
+        input_rows = checked_sum(input_rows, candidate.descriptor.row_count().get())?;
         input_parquet_bytes = checked_sum(
             input_parquet_bytes,
-            candidate.input.object.expected_byte_size().get(),
+            candidate.descriptor.object().expected_byte_size().get(),
         )?;
         input_uncompressed_bytes = checked_sum(
             input_uncompressed_bytes,
-            candidate.input.uncompressed_bytes.get(),
+            candidate.descriptor.uncompressed_bytes().get(),
         )?;
-        data_expires_at = data_expires_at.max(candidate.input.data_expires_at);
-        inputs.push(candidate.input);
+        data_expires_at = data_expires_at.max(candidate.data_expires_at);
+        inputs.push(candidate);
     }
     Ok(CompactionRunClaim {
         run_id,
@@ -1040,7 +965,9 @@ fn materialize_claim(
     })
 }
 
-fn materialize_candidate(row: CandidateRow) -> Result<CandidateSegment, CompactionMetadataError> {
+fn materialize_candidate(
+    row: CandidateRow,
+) -> Result<CompactionInputSegment, CompactionMetadataError> {
     let source_id =
         SourceId::try_from(row.source_id).map_err(CompactionMetadataError::catalog_model)?;
     let schema_id =
@@ -1070,7 +997,7 @@ fn materialize_candidate(row: CandidateRow) -> Result<CandidateSegment, Compacti
         ObjectFormatVersion::new(format_version).map_err(CompactionMetadataError::storage_model)?,
     )
     .map_err(CompactionMetadataError::storage_model)?;
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         row.event_day,
         row.minimum_event_time,
         row.maximum_event_time,
@@ -1083,26 +1010,26 @@ fn materialize_candidate(row: CandidateRow) -> Result<CandidateSegment, Compacti
             "compaction input segment and object publication times differ",
         ));
     }
-    let row_count = NonZeroU64::new(positive_u64(row.row_count, "input row count is invalid")?)
-        .ok_or_else(|| CompactionMetadataError::corrupt("input row count is zero"))?;
-    let uncompressed_bytes = NonZeroU64::new(positive_u64(
+    let row_count = RowCount::new(positive_u64(row.row_count, "input row count is invalid")?)
+        .map_err(|_| CompactionMetadataError::corrupt("input row count is zero"))?;
+    let uncompressed_bytes = UncompressedByteSize::new(positive_u64(
         row.uncompressed_bytes,
         "input uncompressed byte count is invalid",
     )?)
-    .ok_or_else(|| CompactionMetadataError::corrupt("input uncompressed byte count is zero"))?;
-    Ok(CandidateSegment {
-        source_id,
-        schema_id,
-        times,
-        input: CompactionInputSegment {
+    .map_err(|_| CompactionMetadataError::corrupt("input uncompressed byte count is zero"))?;
+    Ok(CompactionInputSegment {
+        descriptor: SegmentDescriptor::new(
             segment_id,
+            source_id,
+            schema_id,
             times,
             row_count,
             uncompressed_bytes,
-            data_expires_at: row.data_expires_at,
-            published_at: row.published_at,
             object,
-        },
+        )
+        .map_err(CompactionMetadataError::storage_model)?,
+        data_expires_at: row.data_expires_at,
+        published_at: row.published_at,
     })
 }
 
@@ -1118,8 +1045,8 @@ fn validate_output_identities(
                 "compaction output belongs to a different run",
             ));
         }
-        if !segment_ids.insert(output.segment_id)
-            || !object_ids.insert(output.object.key().object_id())
+        if !segment_ids.insert(output.descriptor.segment_id())
+            || !object_ids.insert(output.descriptor.object().key().object_id())
         {
             return Err(CompactionMetadataError::conflict(
                 "compaction output identities are duplicated",
@@ -1225,29 +1152,29 @@ fn validate_registered_output_set(
     }
 
     let mut output_rows = 0_u64;
-    let mut output_minimum_event_time = outputs[0].times.minimum_event_time();
-    let mut output_maximum_event_time = outputs[0].times.maximum_event_time();
-    let mut output_minimum_ingestion_time = outputs[0].times.minimum_ingestion_time();
-    let mut output_maximum_ingestion_time = outputs[0].times.maximum_ingestion_time();
+    let mut output_minimum_event_time = outputs[0].descriptor.times().minimum_event_time();
+    let mut output_maximum_event_time = outputs[0].descriptor.times().maximum_event_time();
+    let mut output_minimum_ingestion_time = outputs[0].descriptor.times().minimum_ingestion_time();
+    let mut output_maximum_ingestion_time = outputs[0].descriptor.times().maximum_ingestion_time();
     for output in outputs {
-        if output.source_id.as_uuid() != run.source_id
-            || output.schema_id.as_uuid() != run.schema_id
-            || output.times.event_day() != run.event_day
+        if output.descriptor.source_id().as_uuid() != run.source_id
+            || output.descriptor.schema_id().as_uuid() != run.schema_id
+            || output.descriptor.times().event_day() != run.event_day
             || output.data_expires_at != input_deadline
         {
             return Err(CompactionMetadataError::conflict(
                 "compaction output owner, day, or retention differs from its inputs",
             ));
         }
-        output_rows = checked_sum(output_rows, output.row_count())?;
+        output_rows = checked_sum(output_rows, output.descriptor.row_count().get())?;
         output_minimum_event_time =
-            output_minimum_event_time.min(output.times.minimum_event_time());
+            output_minimum_event_time.min(output.descriptor.times().minimum_event_time());
         output_maximum_event_time =
-            output_maximum_event_time.max(output.times.maximum_event_time());
+            output_maximum_event_time.max(output.descriptor.times().maximum_event_time());
         output_minimum_ingestion_time =
-            output_minimum_ingestion_time.min(output.times.minimum_ingestion_time());
+            output_minimum_ingestion_time.min(output.descriptor.times().minimum_ingestion_time());
         output_maximum_ingestion_time =
-            output_maximum_ingestion_time.max(output.times.maximum_ingestion_time());
+            output_maximum_ingestion_time.max(output.descriptor.times().maximum_ingestion_time());
     }
     if output_rows != input_rows
         || output_minimum_event_time != input_minimum_event_time
@@ -1287,22 +1214,28 @@ async fn insert_compaction_outputs(
             ) VALUES ($1, $2, $3, 'COMPACTION', $4, $5, $6, $7, $8, $9, $10, $11, $12, 'PREPARED')
             "#,
         )
-        .bind(output.segment_id.as_uuid())
-        .bind(output.source_id.as_uuid())
-        .bind(output.schema_id.as_uuid())
+        .bind(output.descriptor.segment_id().as_uuid())
+        .bind(output.descriptor.source_id().as_uuid())
+        .bind(output.descriptor.schema_id().as_uuid())
         .bind(output.run_id.as_uuid())
-        .bind(output.times.event_day())
-        .bind(output.times.minimum_event_time())
-        .bind(output.times.maximum_event_time())
-        .bind(output.times.minimum_ingestion_time())
-        .bind(output.times.maximum_ingestion_time())
-        .bind(output.row_count)
-        .bind(output.uncompressed_bytes)
+        .bind(output.descriptor.times().event_day())
+        .bind(output.descriptor.times().minimum_event_time())
+        .bind(output.descriptor.times().maximum_event_time())
+        .bind(output.descriptor.times().minimum_ingestion_time())
+        .bind(output.descriptor.times().maximum_ingestion_time())
+        .bind(
+            database_output_row_count(output.descriptor.row_count())
+                .map_err(CompactionMetadataError::model)?,
+        )
+        .bind(
+            database_output_uncompressed_bytes(output.descriptor.uncompressed_bytes())
+                .map_err(CompactionMetadataError::model)?,
+        )
         .bind(output.data_expires_at)
         .execute(&mut **transaction)
         .await
         .map_err(CompactionMetadataError::write)?;
-        let object = &output.object;
+        let object = &output.descriptor.object();
         sqlx::query(
             r#"
             INSERT INTO stored_objects (
@@ -1319,7 +1252,7 @@ async fn insert_compaction_outputs(
             "#,
         )
         .bind(object.key().object_id().as_uuid())
-        .bind(output.segment_id.as_uuid())
+        .bind(output.descriptor.segment_id().as_uuid())
         .bind(object.key().as_str())
         .bind(database_object_byte_size(object).map_err(CompactionMetadataError::model)?)
         .bind(object.digest().as_bytes().to_vec())
@@ -1372,7 +1305,7 @@ async fn validate_existing_outputs(
     .await
     .map_err(CompactionMetadataError::read)?;
     let mut expected = outputs.iter().collect::<Vec<_>>();
-    expected.sort_unstable_by_key(|output| output.segment_id);
+    expected.sort_unstable_by_key(|output| output.descriptor.segment_id());
     if rows.len() != expected.len() {
         return Err(CompactionMetadataError::conflict(
             "registered compaction output count differs from the retry",
@@ -1393,20 +1326,24 @@ fn stored_output_matches(
     row: &StoredCompactionOutputRow,
     output: &CompactionOutputRegistration,
 ) -> Result<bool, CompactionMetadataError> {
-    let object = &output.object;
+    let object = &output.descriptor.object();
     Ok(row.segment_state == "PREPARED"
         && matches!(row.object_state.as_str(), "PLANNED" | "UPLOADED")
-        && row.segment_id == output.segment_id.as_uuid()
-        && row.source_id == output.source_id.as_uuid()
-        && row.schema_id == output.schema_id.as_uuid()
+        && row.segment_id == output.descriptor.segment_id().as_uuid()
+        && row.source_id == output.descriptor.source_id().as_uuid()
+        && row.schema_id == output.descriptor.schema_id().as_uuid()
         && row.produced_by_compaction_run_id == output.run_id.as_uuid()
-        && row.event_day == output.times.event_day()
-        && row.minimum_event_time == output.times.minimum_event_time()
-        && row.maximum_event_time == output.times.maximum_event_time()
-        && row.minimum_ingestion_time == output.times.minimum_ingestion_time()
-        && row.maximum_ingestion_time == output.times.maximum_ingestion_time()
-        && row.row_count == output.row_count
-        && row.uncompressed_bytes == output.uncompressed_bytes
+        && row.event_day == output.descriptor.times().event_day()
+        && row.minimum_event_time == output.descriptor.times().minimum_event_time()
+        && row.maximum_event_time == output.descriptor.times().maximum_event_time()
+        && row.minimum_ingestion_time == output.descriptor.times().minimum_ingestion_time()
+        && row.maximum_ingestion_time == output.descriptor.times().maximum_ingestion_time()
+        && row.row_count
+            == database_output_row_count(output.descriptor.row_count())
+                .map_err(CompactionMetadataError::model)?
+        && row.uncompressed_bytes
+            == database_output_uncompressed_bytes(output.descriptor.uncompressed_bytes())
+                .map_err(CompactionMetadataError::model)?
         && row.data_expires_at == output.data_expires_at
         && row.object_id == object.key().object_id().as_uuid()
         && row.object_key == object.key().as_str()
@@ -1460,24 +1397,6 @@ fn require_rows(
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct CandidateSegment {
-    source_id: SourceId,
-    schema_id: SchemaId,
-    times: IngestionSegmentTimes,
-    input: CompactionInputSegment,
-}
-
-impl CandidateSegment {
-    const fn group_key(&self) -> CandidateGroupKey {
-        CandidateGroupKey {
-            source_id: self.source_id,
-            schema_id: self.schema_id,
-            event_day: self.times.event_day(),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct CandidateGroupKey {
     source_id: SourceId,
@@ -1485,10 +1404,20 @@ struct CandidateGroupKey {
     event_day: NaiveDate,
 }
 
+impl From<&SegmentDescriptor> for CandidateGroupKey {
+    fn from(descriptor: &SegmentDescriptor) -> Self {
+        Self {
+            source_id: descriptor.source_id(),
+            schema_id: descriptor.schema_id(),
+            event_day: descriptor.times().event_day(),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct CandidateGroup {
     key: CandidateGroupKey,
-    candidates: Vec<CandidateSegment>,
+    candidates: Vec<CompactionInputSegment>,
     input_rows: u64,
     input_parquet_bytes: u64,
     input_uncompressed_bytes: u64,
@@ -1511,13 +1440,13 @@ impl CandidateGroup {
 
     fn consider(
         &mut self,
-        candidate: CandidateSegment,
+        candidate: CompactionInputSegment,
         limits: CompactionClaimLimits,
     ) -> Result<(), CompactionMetadataError> {
         if self.stopped {
             return Ok(());
         }
-        if candidate.group_key() != self.key {
+        if CandidateGroupKey::from(&candidate.descriptor) != self.key {
             return Err(CompactionMetadataError::corrupt(
                 "candidate was routed to a different compaction group",
             ));
@@ -1526,14 +1455,14 @@ impl CandidateGroup {
             self.stopped = true;
             return Ok(());
         }
-        let input_rows = checked_sum(self.input_rows, candidate.input.row_count.get())?;
+        let input_rows = checked_sum(self.input_rows, candidate.descriptor.row_count().get())?;
         let input_parquet_bytes = checked_sum(
             self.input_parquet_bytes,
-            candidate.input.object.expected_byte_size().get(),
+            candidate.descriptor.object().expected_byte_size().get(),
         )?;
         let input_uncompressed_bytes = checked_sum(
             self.input_uncompressed_bytes,
-            candidate.input.uncompressed_bytes.get(),
+            candidate.descriptor.uncompressed_bytes().get(),
         )?;
         if input_rows > limits.maximum_input_rows
             || input_parquet_bytes > limits.maximum_input_parquet_bytes

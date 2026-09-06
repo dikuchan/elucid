@@ -192,6 +192,7 @@ impl PreparedSnapshot {
         let mut segment_ids = HashSet::with_capacity(snapshot.segments().len());
         let mut segments = Vec::with_capacity(snapshot.segments().len());
         for segment in snapshot.segments() {
+            let segment = segment.descriptor();
             if !segment_ids.insert(segment.segment_id()) {
                 return Err(EngineError::catalog_corrupt(
                     "query snapshot contains one segment more than once",
@@ -210,7 +211,7 @@ impl PreparedSnapshot {
             segments.push(PreparedSegment {
                 segment_id: segment.segment_id(),
                 schema_id: segment.schema_id(),
-                row_count: segment.row_count(),
+                row_count: segment.row_count().get(),
                 object: segment.object().clone(),
             });
         }

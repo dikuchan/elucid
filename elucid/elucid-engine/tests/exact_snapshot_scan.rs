@@ -1,9 +1,13 @@
-use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use elucid_core::{CodedError, ErrorCode};
+use elucid_storage::{
+    ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ParquetSegmentInput,
+    ParquetWriteLimit, RowCount, SegmentDescriptor, SegmentId, SegmentTimes, StoredObjectId,
+    TransferLimit, UncompressedByteSize, write_parquet_segment,
+};
 
 use arrow::array::{
     Array as _, ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, TimestampMillisecondArray,
@@ -20,13 +24,8 @@ use elucid_engine::{
     QueryObjectStore, QueryResourceLimitExceeded, QueryTruncationReason, SnapshotTableProvider,
 };
 use elucid_metastore::{
-    CatalogApplyOutcome, CatalogStore, IngestionSegmentRegistration, IngestionSegmentTimes,
-    PublicationStore, QueryRequestTimeRange, QuerySnapshotLimits, QuerySnapshotStore,
-    RetentionPeriod, install,
-};
-use elucid_storage::{
-    ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ParquetSegmentInput,
-    ParquetWriteLimit, SegmentId, StoredObjectId, TransferLimit, write_parquet_segment,
+    CatalogApplyOutcome, CatalogStore, PublicationStore, QueryRequestTimeRange,
+    QuerySnapshotLimits, QuerySnapshotStore, RetentionPeriod, install,
 };
 use object_store::memory::InMemory;
 use object_store::path::Path as ObjectPath;
@@ -692,7 +691,7 @@ async fn write_upload_and_publish(
     let maximum_event_time = event_time(&batch, row_count - 1);
     let uploaded = write_upload(store, staging_root, root, identity, schema, batch).await;
     let segment_id = SegmentId::from(uuid(identity.segment_sequence));
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         minimum_event_time.date_naive(),
         minimum_event_time,
         maximum_event_time,
@@ -700,14 +699,14 @@ async fn write_upload_and_publish(
         maximum_event_time,
     )
     .expect("valid segment times");
-    let registration = IngestionSegmentRegistration::new(
+    let registration = SegmentDescriptor::new(
         segment_id,
         schema.source_id(),
         schema.id(),
         times,
-        NonZeroU64::new(u64::try_from(row_count).expect("row count fits u64"))
+        RowCount::new(u64::try_from(row_count).expect("row count fits u64"))
             .expect("positive row count"),
-        NonZeroU64::new(1).expect("positive uncompressed byte count"),
+        UncompressedByteSize::new(1).expect("positive uncompressed byte count"),
         uploaded.descriptor.clone(),
     )
     .expect("valid segment registration");

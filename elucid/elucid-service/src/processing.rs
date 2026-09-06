@@ -1,11 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use elucid_storage::{
+    DeadLetterDescriptor, ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectUploadOutcome,
+    ObjectVerificationOutcome, ParquetSegmentExpectation, ParquetSegmentInput, ParquetWriteLimit,
+    RowCount, SegmentDescriptor, SegmentId, SegmentTimes, StagedObjectReadError, StorageError,
+    StorageErrorKind, StoredObjectId, TransferLimit, UncompressedByteSize, read_staged_object,
+    validate_parquet_segment, write_parquet_segment,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -19,19 +25,12 @@ use elucid_ingestion::{
     UnregisteredOutputBytes, materialize_segment_record_batch, normalize_records, plan_checkpoint,
 };
 use elucid_metastore::{
-    DeadLetterRegistration, IngestionSegmentRegistration, IngestionSegmentTimes,
     ObjectPublicationState, OperationalStore, OrphanGracePeriod, PublicationError,
     PublicationErrorKind, PublicationStore, ReconciliationLimit, RetentionPeriod,
 };
-use elucid_storage::{
-    ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectDescriptor, ObjectUploadOutcome,
-    ObjectVerificationOutcome, ParquetSegmentExpectation, ParquetSegmentInput, ParquetWriteLimit,
-    SegmentId, StorageError, StorageErrorKind, StoredObjectId, TransferLimit,
-    validate_parquet_segment, write_parquet_segment,
-};
 
 use crate::dead_letter::{
-    DeadLetterObjectError, dead_letter_staging_path, read_staged_dead_letter, stage_dead_letters,
+    DeadLetterObjectError, dead_letter_staging_path, decode_dead_letters, stage_dead_letters,
 };
 use crate::ingestion::IngestionBoundary;
 use crate::metrics::ServiceMetrics;
@@ -79,6 +78,8 @@ pub(crate) enum IngestionProcessingError {
     },
     #[error("immutable output storage failed")]
     Storage(#[from] StorageError),
+    #[error("staged output read failed")]
+    StagedRead(#[from] StagedObjectReadError),
     #[error("publication metadata failed")]
     Publication(#[from] PublicationError),
     #[error("ingestion processing invariant failed: {0}")]
@@ -96,7 +97,7 @@ impl IngestionProcessingError {
             Self::SegmentBuild(_) => "segment building failed",
             Self::SegmentMaterialization(_) => "segment materialization failed",
             Self::DeadLetter(_) => "dead-letter staging failed",
-            Self::LocalStaging { .. } => "local output staging failed",
+            Self::LocalStaging { .. } | Self::StagedRead(_) => "local output staging failed",
             Self::Storage(_) => "immutable output storage failed",
             Self::Publication(_) => "publication metadata failed",
             Self::Invariant(reason) => reason,
@@ -496,7 +497,7 @@ impl<'a> Processor<'a> {
             self.dependencies.scratch_bytes,
         )
         .await?;
-        let registration = DeadLetterRegistration::new(
+        let registration = DeadLetterDescriptor::new(
             metadata.catalog().input_id(),
             metadata.batch_id(),
             staged.descriptor().clone(),
@@ -542,7 +543,7 @@ impl<'a> Processor<'a> {
             )
             .await?;
             let bounds = segment.bounds();
-            let times = IngestionSegmentTimes::new(
+            let times = SegmentTimes::new(
                 segment.event_day().as_date(),
                 timestamp(bounds.minimum_event_time().unix_milliseconds())?,
                 timestamp(bounds.maximum_event_time().unix_milliseconds())?,
@@ -552,14 +553,15 @@ impl<'a> Processor<'a> {
             .map_err(|_| {
                 IngestionProcessingError::Invariant("sealed segment time bounds are invalid")
             })?;
-            let row_count = NonZeroU64::new(segment.row_count()).ok_or(
-                IngestionProcessingError::Invariant("sealed segment has no rows"),
-            )?;
-            let uncompressed_bytes = NonZeroU64::new(segment.estimated_uncompressed_bytes())
-                .ok_or(IngestionProcessingError::Invariant(
-                    "sealed segment has no estimated bytes",
-                ))?;
-            let registration = IngestionSegmentRegistration::new(
+            let row_count = RowCount::new(segment.row_count())
+                .map_err(|_| IngestionProcessingError::Invariant("sealed segment has no rows"))?;
+            let uncompressed_bytes = UncompressedByteSize::new(
+                segment.estimated_uncompressed_bytes(),
+            )
+            .map_err(|_| {
+                IngestionProcessingError::Invariant("sealed segment has no estimated bytes")
+            })?;
+            let registration = SegmentDescriptor::new(
                 segment_id,
                 segment.source_id(),
                 segment.schema_id(),
@@ -851,7 +853,7 @@ impl<'a> Processor<'a> {
                 let expectation = ParquetSegmentExpectation::new(
                     registration.object().key().clone(),
                     schema,
-                    registration.row_count(),
+                    registration.row_count().get(),
                 )
                 .map_err(|_| {
                     IngestionProcessingError::Invariant("recovered Parquet expectation is invalid")
@@ -888,7 +890,7 @@ impl<'a> Processor<'a> {
                 let expectation = ParquetSegmentExpectation::new(
                     registration.object().key().clone(),
                     schema,
-                    registration.row_count(),
+                    registration.row_count().get(),
                 )
                 .map_err(|_| {
                     IngestionProcessingError::Invariant("recovered Parquet expectation is invalid")
@@ -900,20 +902,23 @@ impl<'a> Processor<'a> {
                         "recovered Parquet bytes do not match durable output metadata",
                     ));
                 }
-                read_bounded_file(
-                    &path,
-                    registration.object(),
-                    self.dependencies.scratch_bytes,
-                )
-                .await
+                read_staged_object(&path, registration.object(), self.transfer_limit)
+                    .await
+                    .map_err(IngestionProcessingError::from)
             }
-            RecoveryOutput::DeadLetter(registration) => read_staged_dead_letter(
-                &dead_letter_staging_path(self.dependencies.scratch_path, registration.object()),
-                registration.object(),
-                self.dependencies.scratch_bytes,
-            )
-            .await
-            .map_err(IngestionProcessingError::from),
+            RecoveryOutput::DeadLetter(registration) => {
+                let bytes = read_staged_object(
+                    &dead_letter_staging_path(
+                        self.dependencies.scratch_path,
+                        registration.object(),
+                    ),
+                    registration.object(),
+                    self.transfer_limit,
+                )
+                .await?;
+                decode_dead_letters(&bytes)?;
+                Ok(bytes)
+            }
             _ => Err(IngestionProcessingError::Invariant(
                 "recovery output kind is unsupported",
             )),
@@ -1053,31 +1058,6 @@ fn timestamp(milliseconds: i64) -> Result<DateTime<Utc>, IngestionProcessingErro
     DateTime::<Utc>::from_timestamp_millis(milliseconds).ok_or(IngestionProcessingError::Invariant(
         "normalized timestamp is outside the UTC range",
     ))
-}
-
-async fn read_bounded_file(
-    path: &Path,
-    descriptor: &ObjectDescriptor,
-    maximum_bytes: u64,
-) -> Result<Bytes, IngestionProcessingError> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(DeadLetterObjectError::Io)?;
-    if metadata.len() > maximum_bytes || metadata.len() != descriptor.expected_byte_size().get() {
-        return Err(IngestionProcessingError::Invariant(
-            "staged output size is outside its durable descriptor",
-        ));
-    }
-    let bytes = tokio::fs::read(path)
-        .await
-        .map(Bytes::from)
-        .map_err(DeadLetterObjectError::Io)?;
-    if elucid_storage::ObjectDigest::calculate(&bytes) != descriptor.digest() {
-        return Err(IngestionProcessingError::Invariant(
-            "staged output digest differs from its durable descriptor",
-        ));
-    }
-    Ok(bytes)
 }
 
 fn transient_storage(error: &StorageError) -> bool {

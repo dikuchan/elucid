@@ -12,7 +12,8 @@ use elucid_language::ir::{TimeRange, UtcInstant};
 use elucid_language::{Analysis, AnalyzeError, CatalogSnapshot, QueryTimeContext};
 use elucid_storage::{
     ManagedObjectKey, ObjectByteSize, ObjectDescriptor, ObjectDigest, ObjectFormatVersion,
-    ObjectMediaType, SegmentId, StorageModelError, StoredObjectId,
+    ObjectMediaType, RowCount, SegmentDescriptor, SegmentId, SegmentTimes, StorageModelError,
+    StoredObjectId, UncompressedByteSize,
 };
 use serde_json::Value;
 use sqlx::postgres::{PgConnection, PgPool};
@@ -21,7 +22,6 @@ use sqlx::{FromRow, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::error::is_row_decode_error;
-use crate::{IngestionSegmentTimes, PublicationModelError};
 
 pub const MAXIMUM_QUERY_SNAPSHOT_SEGMENTS: u64 = 10_000;
 const QUERY_SNAPSHOT_ROW_LIMIT: i64 = 10_001;
@@ -147,7 +147,6 @@ impl QuerySnapshotError {
             QuerySnapshotErrorSource::Limit(_)
             | QuerySnapshotErrorSource::CatalogApplication(_)
             | QuerySnapshotErrorSource::CatalogModel(_)
-            | QuerySnapshotErrorSource::PublicationModel(_)
             | QuerySnapshotErrorSource::StorageModel(_)
             | QuerySnapshotErrorSource::Database(_)
             | QuerySnapshotErrorSource::Invariant(_) => None,
@@ -161,7 +160,6 @@ impl QuerySnapshotError {
             QuerySnapshotErrorSource::Analysis(_)
             | QuerySnapshotErrorSource::CatalogApplication(_)
             | QuerySnapshotErrorSource::CatalogModel(_)
-            | QuerySnapshotErrorSource::PublicationModel(_)
             | QuerySnapshotErrorSource::StorageModel(_)
             | QuerySnapshotErrorSource::Database(_)
             | QuerySnapshotErrorSource::Invariant(_) => None,
@@ -193,13 +191,6 @@ impl QuerySnapshotError {
         Self {
             kind: QuerySnapshotErrorKind::Corrupt,
             source: QuerySnapshotErrorSource::CatalogApplication(source),
-        }
-    }
-
-    fn publication_model(source: PublicationModelError) -> Self {
-        Self {
-            kind: QuerySnapshotErrorKind::Corrupt,
-            source: QuerySnapshotErrorSource::PublicationModel(source),
         }
     }
 
@@ -259,8 +250,6 @@ enum QuerySnapshotErrorSource {
     CatalogApplication(#[source] CatalogApplicationError),
     #[error("stored catalog identity is invalid")]
     CatalogModel(#[source] CatalogModelError),
-    #[error("stored segment metadata is invalid")]
-    PublicationModel(#[source] PublicationModelError),
     #[error("stored object descriptor is invalid")]
     StorageModel(#[source] StorageModelError),
     #[error("PostgreSQL operation failed")]
@@ -272,49 +261,19 @@ enum QuerySnapshotErrorSource {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct QuerySegment {
-    segment_id: SegmentId,
-    schema_id: SchemaId,
-    times: IngestionSegmentTimes,
-    row_count: NonZeroU64,
-    uncompressed_bytes: NonZeroU64,
+    descriptor: SegmentDescriptor,
     published_at: DateTime<Utc>,
-    object: ObjectDescriptor,
 }
 
 impl QuerySegment {
     #[must_use]
-    pub const fn segment_id(&self) -> SegmentId {
-        self.segment_id
-    }
-
-    #[must_use]
-    pub const fn schema_id(&self) -> SchemaId {
-        self.schema_id
-    }
-
-    #[must_use]
-    pub const fn times(&self) -> IngestionSegmentTimes {
-        self.times
-    }
-
-    #[must_use]
-    pub const fn row_count(&self) -> u64 {
-        self.row_count.get()
-    }
-
-    #[must_use]
-    pub const fn uncompressed_bytes(&self) -> u64 {
-        self.uncompressed_bytes.get()
+    pub const fn descriptor(&self) -> &SegmentDescriptor {
+        &self.descriptor
     }
 
     #[must_use]
     pub const fn published_at(&self) -> DateTime<Utc> {
         self.published_at
-    }
-
-    #[must_use]
-    pub const fn object(&self) -> &ObjectDescriptor {
-        &self.object
     }
 }
 
@@ -530,7 +489,7 @@ async fn load_stored_schemas(
 ) -> Result<Vec<Schema>, QuerySnapshotError> {
     let required = segments
         .iter()
-        .map(QuerySegment::schema_id)
+        .map(|segment| segment.descriptor().schema_id())
         .collect::<HashSet<_>>();
     if required.is_empty() {
         return Ok(Vec::new());
@@ -754,7 +713,7 @@ fn materialize_segments(
     for row in rows {
         let segment = materialize_segment(&row, source)?;
         selected_parquet_bytes = selected_parquet_bytes
-            .checked_add(segment.object().expected_byte_size().get())
+            .checked_add(segment.descriptor().object().expected_byte_size().get())
             .ok_or_else(|| QuerySnapshotError::corrupt("selected Parquet byte count overflowed"))?;
         segments.push(segment);
     }
@@ -773,40 +732,43 @@ fn materialize_segment(
     }
     let schema_id = SchemaId::try_from(row.schema_id).map_err(QuerySnapshotError::catalog_model)?;
     let segment_id = SegmentId::from(row.segment_id);
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         row.event_day,
         row.minimum_event_time,
         row.maximum_event_time,
         row.minimum_ingestion_time,
         row.maximum_ingestion_time,
     )
-    .map_err(QuerySnapshotError::publication_model)?;
-    let row_count = positive_database_count(
-        row.row_count,
-        "selected segment has a non-positive row count",
-    )?;
-    let uncompressed_bytes = positive_database_count(
-        row.uncompressed_bytes,
-        "selected segment has a non-positive uncompressed byte count",
-    )?;
+    .map_err(QuerySnapshotError::storage_model)?;
+    let row_count = u64::try_from(row.row_count)
+        .ok()
+        .and_then(|value| RowCount::new(value).ok())
+        .ok_or_else(|| {
+            QuerySnapshotError::corrupt("selected segment has a non-positive row count")
+        })?;
+    let uncompressed_bytes = u64::try_from(row.uncompressed_bytes)
+        .ok()
+        .and_then(|value| UncompressedByteSize::new(value).ok())
+        .ok_or_else(|| {
+            QuerySnapshotError::corrupt(
+                "selected segment has a non-positive uncompressed byte count",
+            )
+        })?;
     let object = materialize_object(row, segment_id)?;
-    Ok(QuerySegment {
+    let descriptor = SegmentDescriptor::new(
         segment_id,
+        source_id,
         schema_id,
         times,
         row_count,
         uncompressed_bytes,
-        published_at: row.segment_published_at,
         object,
+    )
+    .map_err(QuerySnapshotError::storage_model)?;
+    Ok(QuerySegment {
+        descriptor,
+        published_at: row.segment_published_at,
     })
-}
-
-fn positive_database_count(
-    value: i64,
-    message: &'static str,
-) -> Result<NonZeroU64, QuerySnapshotError> {
-    let value = u64::try_from(value).map_err(|_| QuerySnapshotError::corrupt(message))?;
-    NonZeroU64::new(value).ok_or_else(|| QuerySnapshotError::corrupt(message))
 }
 
 fn materialize_object(

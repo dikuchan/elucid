@@ -1,4 +1,3 @@
-use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,13 +13,13 @@ use elucid_compaction::{
 };
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogStore, CompactionClaimLimitConfiguration, CompactionClaimLimits,
-    CompactionStore, IngestionSegmentRegistration, IngestionSegmentTimes, MaintenanceOwnership,
-    PublicationStore, RetentionPeriod, install,
+    CompactionStore, MaintenanceOwnership, PublicationStore, RetentionPeriod, install,
 };
 use elucid_storage::{
     ImmutableObjectStore, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor,
     ObjectDigest, ObjectFormatVersion, ObjectMediaType, ParquetSegmentInput, ParquetWriteLimit,
-    SegmentId, StoredObjectId, TransferLimit, write_parquet_segment,
+    RowCount, SegmentDescriptor, SegmentId, SegmentTimes, StoredObjectId, TransferLimit,
+    UncompressedByteSize, write_parquet_segment,
 };
 use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
@@ -281,7 +280,7 @@ async fn write_upload_and_publish(
         )
         .await
         .expect("upload input Parquet");
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         timestamp(seconds[0]).date_naive(),
         timestamp(seconds[0]),
         timestamp(seconds[2]),
@@ -289,13 +288,13 @@ async fn write_upload_and_publish(
         timestamp(seconds[2] + 100),
     )
     .expect("input segment bounds");
-    let registration = IngestionSegmentRegistration::new(
+    let registration = SegmentDescriptor::new(
         segment_id,
         schema.source_id(),
         schema.id(),
         times,
-        NonZeroU64::new(3).expect("row count"),
-        NonZeroU64::new(30).expect("uncompressed bytes"),
+        RowCount::new(3).expect("row count"),
+        UncompressedByteSize::new(30).expect("uncompressed bytes"),
         descriptor.clone(),
     )
     .expect("input registration");

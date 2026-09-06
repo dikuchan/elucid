@@ -1,18 +1,17 @@
-use std::num::NonZeroU64;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone as _, Utc};
 use elucid_catalog::{CatalogManifest, InputId, SchemaId, SourceId};
 use elucid_metastore::{
-    CatalogApplyOutcome, CatalogStore, DeadLetterRegistration, IngestionSegmentRegistration,
-    IngestionSegmentTimes, ObjectUploadRecordOutcome, OperationalLimit, OperationalStore,
-    PublicationOutcome, PublicationStore, QueryRequestTimeRange, QuerySnapshotLimits,
-    QuerySnapshotStore, ReclamationGracePeriod, RegistrationOutcome, RetentionPeriod,
-    RetentionScanLimit, RetentionStore, StoredObjectState, install,
+    CatalogApplyOutcome, CatalogStore, ObjectUploadRecordOutcome, OperationalLimit,
+    OperationalStore, PublicationOutcome, PublicationStore, QueryRequestTimeRange,
+    QuerySnapshotLimits, QuerySnapshotStore, ReclamationGracePeriod, RegistrationOutcome,
+    RetentionPeriod, RetentionScanLimit, RetentionStore, StoredObjectState, install,
 };
 use elucid_storage::{
-    BatchId, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
+    BatchId, DeadLetterDescriptor, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor,
+    ObjectDigest, ObjectFormatVersion, ObjectMediaType, RowCount, SegmentDescriptor, SegmentId,
+    SegmentTimes, StoredObjectId, UncompressedByteSize,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use testcontainers_modules::postgres::Postgres;
@@ -251,7 +250,7 @@ async fn publish_segment(
         ObjectMediaType::ParquetData,
     );
     let event_time = timestamp(2026, 8, 20, fixture.hour, fixture.minute);
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         event_time.date_naive(),
         event_time,
         event_time,
@@ -259,13 +258,13 @@ async fn publish_segment(
         event_time,
     )
     .expect("valid segment times");
-    let segment = IngestionSegmentRegistration::new(
+    let segment = SegmentDescriptor::new(
         segment_id,
         source_id,
         schema_id,
         times,
-        NonZeroU64::new(fixture.rows).expect("positive rows"),
-        NonZeroU64::new(128).expect("positive bytes"),
+        RowCount::new(fixture.rows).expect("positive rows"),
+        UncompressedByteSize::new(128).expect("positive bytes"),
         object.clone(),
     )
     .expect("valid segment registration");
@@ -306,7 +305,7 @@ async fn publish_dead_letter(
         b"{\"error\":\"invalid\"}\n",
         ObjectMediaType::DeadLetter,
     );
-    let registration = DeadLetterRegistration::new(input_id, batch_id, object.clone())
+    let registration = DeadLetterDescriptor::new(input_id, batch_id, object.clone())
         .expect("valid dead-letter registration");
     publication
         .register_dead_letter(&registration)
@@ -396,7 +395,7 @@ fn snapshot_segment_ids(snapshot: &elucid_metastore::QuerySnapshot) -> Vec<Segme
     snapshot
         .segments()
         .iter()
-        .map(elucid_metastore::QuerySegment::segment_id)
+        .map(|segment| segment.descriptor().segment_id())
         .collect()
 }
 

@@ -1,17 +1,17 @@
-use std::num::NonZeroU64;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone as _, Utc};
 use elucid_catalog::CatalogManifest;
 use elucid_language::DiagnosticCode;
 use elucid_metastore::{
-    CatalogApplyOutcome, CatalogStore, IngestionSegmentRegistration, IngestionSegmentTimes,
-    PublicationStore, QueryRequestTimeRange, QuerySnapshotErrorKind, QuerySnapshotLimitExceeded,
-    QuerySnapshotLimits, QuerySnapshotStore, RetentionPeriod, install,
+    CatalogApplyOutcome, CatalogStore, PublicationStore, QueryRequestTimeRange,
+    QuerySnapshotErrorKind, QuerySnapshotLimitExceeded, QuerySnapshotLimits, QuerySnapshotStore,
+    RetentionPeriod, install,
 };
 use elucid_storage::{
     ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
+    ObjectFormatVersion, ObjectMediaType, RowCount, SegmentDescriptor, SegmentId, SegmentTimes,
+    StoredObjectId, UncompressedByteSize,
 };
 use sqlx::postgres::PgPoolOptions;
 use testcontainers_modules::postgres::Postgres;
@@ -180,17 +180,23 @@ async fn query_snapshot_is_bounded_exact_and_schema_complete() {
     );
     assert_eq!(snapshot.segments().len(), 2);
     assert_eq!(
-        snapshot.segments()[0].segment_id(),
+        snapshot.segments()[0].descriptor().segment_id(),
         SegmentId::from(uuid(1))
     );
-    assert_eq!(snapshot.segments()[0].schema_id(), stored_schema.id());
-    assert_eq!(snapshot.segments()[0].object(), &first);
     assert_eq!(
-        snapshot.segments()[1].segment_id(),
+        snapshot.segments()[0].descriptor().schema_id(),
+        stored_schema.id()
+    );
+    assert_eq!(snapshot.segments()[0].descriptor().object(), &first);
+    assert_eq!(
+        snapshot.segments()[1].descriptor().segment_id(),
         SegmentId::from(uuid(2))
     );
-    assert_eq!(snapshot.segments()[1].schema_id(), active_schema.id());
-    assert_eq!(snapshot.segments()[1].object(), &second);
+    assert_eq!(
+        snapshot.segments()[1].descriptor().schema_id(),
+        active_schema.id()
+    );
+    assert_eq!(snapshot.segments()[1].descriptor().object(), &second);
     assert_eq!(
         snapshot.selected_parquet_bytes(),
         first.expected_byte_size().get() + second.expected_byte_size().get()
@@ -329,8 +335,8 @@ fn segment_registration(
     minimum_event_time: DateTime<Utc>,
     maximum_event_time: DateTime<Utc>,
     object: ObjectDescriptor,
-) -> IngestionSegmentRegistration {
-    let times = IngestionSegmentTimes::new(
+) -> SegmentDescriptor {
+    let times = SegmentTimes::new(
         minimum_event_time.date_naive(),
         minimum_event_time,
         maximum_event_time,
@@ -338,13 +344,13 @@ fn segment_registration(
         maximum_event_time,
     )
     .expect("valid segment times");
-    IngestionSegmentRegistration::new(
+    SegmentDescriptor::new(
         segment_id,
         source_id,
         schema_id,
         times,
-        NonZeroU64::new(1).expect("positive rows"),
-        NonZeroU64::new(128).expect("positive bytes"),
+        RowCount::new(1).expect("positive rows"),
+        UncompressedByteSize::new(128).expect("positive bytes"),
         object,
     )
     .expect("valid segment registration")

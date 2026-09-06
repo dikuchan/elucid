@@ -16,10 +16,10 @@ pub use catalog::{CatalogApplyOutcome, CatalogSnapshot, CatalogStore};
 pub use compaction::{
     CompactionClaimLimitConfiguration, CompactionClaimLimits, CompactionInputSegment,
     CompactionMetadataError, CompactionMetadataErrorKind, CompactionModelError,
-    CompactionOutputRegistration, CompactionOutputRegistrationConfiguration,
-    CompactionOutputRegistrationOutcome, CompactionRunClaim, CompactionRunId, CompactionStore,
-    MAXIMUM_COMPACTION_CANDIDATE_SEGMENTS, MAXIMUM_COMPACTION_INPUT_SEGMENTS,
-    MAXIMUM_COMPACTION_OUTPUT_SEGMENTS, MaintenanceOwner, MaintenanceOwnership,
+    CompactionOutputRegistration, CompactionOutputRegistrationOutcome, CompactionRunClaim,
+    CompactionRunId, CompactionStore, MAXIMUM_COMPACTION_CANDIDATE_SEGMENTS,
+    MAXIMUM_COMPACTION_INPUT_SEGMENTS, MAXIMUM_COMPACTION_OUTPUT_SEGMENTS, MaintenanceOwner,
+    MaintenanceOwnership,
 };
 pub use compaction_lifecycle::{
     CompactionFailureOutcome, CompactionFailureReason, CompactionPublicationOutcome,
@@ -38,8 +38,7 @@ pub use migration::{
     MAXIMUM_SUPPORTED_MIGRATION_VERSION, MINIMUM_SUPPORTED_MIGRATION_VERSION, install,
 };
 pub use publication::{
-    AbandonmentOutcome, DeadLetterRegistration, IngestionSegmentRegistration,
-    IngestionSegmentTimes, ObjectPublicationState, ObjectUploadRecordOutcome, OrphanGracePeriod,
+    AbandonmentOutcome, ObjectPublicationState, ObjectUploadRecordOutcome, OrphanGracePeriod,
     PublicationOutcome, PublicationStore, ReconciliationLimit, RegistrationOutcome,
     RetentionPeriod, StoredObjectState, UnreferencedOutputReconciliation,
 };

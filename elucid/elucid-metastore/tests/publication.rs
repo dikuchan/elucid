@@ -1,18 +1,17 @@
-use std::num::NonZeroU64;
 use std::time::Duration;
 
 use chrono::{NaiveDate, TimeZone as _, Utc};
 use elucid_catalog::CatalogManifest;
 use elucid_metastore::{
-    AbandonmentOutcome, CatalogApplyOutcome, CatalogStore, DeadLetterRegistration,
-    IngestionSegmentRegistration, IngestionSegmentTimes, ObjectPublicationState,
+    AbandonmentOutcome, CatalogApplyOutcome, CatalogStore, ObjectPublicationState,
     ObjectUploadRecordOutcome, OrphanGracePeriod, PublicationErrorKind, PublicationOutcome,
     PublicationStore, ReconciliationLimit, RegistrationOutcome, RetentionPeriod, StoredObjectState,
     install,
 };
 use elucid_storage::{
-    BatchId, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
+    BatchId, DeadLetterDescriptor, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor,
+    ObjectDigest, ObjectFormatVersion, ObjectMediaType, RowCount, SegmentDescriptor, SegmentId,
+    SegmentTimes, StoredObjectId, UncompressedByteSize,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use testcontainers_modules::postgres::Postgres;
@@ -93,7 +92,7 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
         ObjectMediaType::ParquetData,
     );
     let event_day = NaiveDate::from_ymd_opt(2026, 8, 20).expect("event day");
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         event_day,
         Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0)
             .single()
@@ -109,13 +108,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
             .expect("maximum ingestion time"),
     )
     .expect("valid segment times");
-    let segment = IngestionSegmentRegistration::new(
+    let segment = SegmentDescriptor::new(
         segment_id,
         source.id(),
         source.active_schema().id(),
         times,
-        NonZeroU64::new(2).expect("positive rows"),
-        NonZeroU64::new(256).expect("positive bytes"),
+        RowCount::new(2).expect("positive rows"),
+        UncompressedByteSize::new(256).expect("positive bytes"),
         segment_descriptor.clone(),
     )
     .expect("valid segment registration");
@@ -158,13 +157,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
         RegistrationOutcome::AlreadyRegistered
     );
 
-    let conflicting_segment = IngestionSegmentRegistration::new(
+    let conflicting_segment = SegmentDescriptor::new(
         segment_id,
         source.id(),
         source.active_schema().id(),
         times,
-        NonZeroU64::new(3).expect("positive rows"),
-        NonZeroU64::new(256).expect("positive bytes"),
+        RowCount::new(3).expect("positive rows"),
+        UncompressedByteSize::new(256).expect("positive bytes"),
         segment_descriptor.clone(),
     )
     .expect("locally valid conflicting segment");
@@ -255,7 +254,7 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
         ObjectMediaType::DeadLetter,
     );
     let dead_letter =
-        DeadLetterRegistration::new(input.id(), batch_id, dead_letter_descriptor.clone())
+        DeadLetterDescriptor::new(input.id(), batch_id, dead_letter_descriptor.clone())
             .expect("valid dead-letter registration");
     assert_eq!(
         publication
@@ -344,13 +343,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
     );
 
     let rebuild_segment_id = SegmentId::from(uuid(35));
-    let rebuild_segment = IngestionSegmentRegistration::new(
+    let rebuild_segment = SegmentDescriptor::new(
         rebuild_segment_id,
         source.id(),
         source.active_schema().id(),
         times,
-        NonZeroU64::new(1).expect("positive rows"),
-        NonZeroU64::new(128).expect("positive bytes"),
+        RowCount::new(1).expect("positive rows"),
+        UncompressedByteSize::new(128).expect("positive bytes"),
         descriptor(
             ManagedObjectKey::parquet(&root, rebuild_segment_id, StoredObjectId::from(uuid(36))),
             b"missing staged parquet",
@@ -385,13 +384,13 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
 
     let orphan_segment_id = SegmentId::from(uuid(40));
     let orphan_segment_object_id = StoredObjectId::from(uuid(41));
-    let orphan_segment = IngestionSegmentRegistration::new(
+    let orphan_segment = SegmentDescriptor::new(
         orphan_segment_id,
         source.id(),
         source.active_schema().id(),
         times,
-        NonZeroU64::new(1).expect("positive rows"),
-        NonZeroU64::new(128).expect("positive bytes"),
+        RowCount::new(1).expect("positive rows"),
+        UncompressedByteSize::new(128).expect("positive bytes"),
         descriptor(
             ManagedObjectKey::parquet(&root, orphan_segment_id, orphan_segment_object_id),
             b"orphan parquet",
@@ -405,7 +404,7 @@ async fn ingestion_and_dead_letter_publication_are_atomic_retryable_and_postgres
         .expect("register orphan segment");
     let orphan_batch_id = BatchId::try_from(uuid(42)).expect("orphan batch identity");
     let orphan_dead_letter_object_id = StoredObjectId::from(uuid(43));
-    let orphan_dead_letter = DeadLetterRegistration::new(
+    let orphan_dead_letter = DeadLetterDescriptor::new(
         input.id(),
         orphan_batch_id,
         descriptor(

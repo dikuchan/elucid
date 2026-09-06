@@ -8,7 +8,7 @@ use elucid_metastore::{
     CompactionFailureReason, CompactionMetadataError,
     CompactionModelError as MetadataCompactionModelError, PublicationError,
 };
-use elucid_storage::{StorageError, StorageErrorKind, StorageModelError};
+use elucid_storage::{StagedObjectReadError, StorageError, StorageErrorKind, StorageModelError};
 use parquet::errors::ParquetError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +88,13 @@ impl CompactionError {
         Self {
             kind,
             source: CompactionErrorSource::Storage(source),
+        }
+    }
+
+    pub(crate) fn staged_read(source: StagedObjectReadError) -> Self {
+        Self {
+            kind: CompactionErrorKind::BuildFailed,
+            source: CompactionErrorSource::StagedRead(source),
         }
     }
 
@@ -197,6 +204,8 @@ impl CodedError for CompactionError {
 
 #[derive(Debug, thiserror::Error)]
 enum CompactionErrorSource {
+    #[error("staged compaction output read failed")]
+    StagedRead(#[source] StagedObjectReadError),
     #[error("compaction storage operation failed")]
     Storage(#[source] StorageError),
     #[error("compaction storage model is invalid")]

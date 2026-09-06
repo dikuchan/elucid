@@ -8,6 +8,30 @@ use uuid::Uuid;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StorageModelError {
+    #[error("segment row count must be positive")]
+    RowCountMustBePositive,
+
+    #[error("segment uncompressed byte size must be positive")]
+    UncompressedByteSizeMustBePositive,
+
+    #[error("segment event-time bounds are not ordered")]
+    EventTimeBoundsNotOrdered,
+
+    #[error("segment ingestion-time bounds are not ordered")]
+    IngestionTimeBoundsNotOrdered,
+
+    #[error("segment event-time bounds do not belong to its UTC event day")]
+    EventDayMismatch,
+
+    #[error("segment timestamps exceed microsecond precision")]
+    TimestampPrecisionUnsupported,
+
+    #[error("Parquet object owner does not match the segment identity")]
+    SegmentObjectOwnerMismatch,
+
+    #[error("dead-letter object owner does not match the batch identity")]
+    DeadLetterObjectOwnerMismatch,
+
     #[error("batch identity must be an RFC 9562 UUIDv7, got {value}")]
     BatchIdentityMustBeUuidV7 { value: Uuid },
 

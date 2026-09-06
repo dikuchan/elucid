@@ -153,3 +153,37 @@ impl ObjectReadRange {
 pub(crate) fn byte_size(bytes: &Bytes) -> Result<ObjectByteSize, StorageModelError> {
     ObjectByteSize::from_usize(bytes.len())
 }
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub struct RowCount(NonZeroU64);
+
+impl RowCount {
+    pub fn new(value: u64) -> Result<Self, StorageModelError> {
+        NonZeroU64::new(value)
+            .map(Self)
+            .ok_or(StorageModelError::RowCountMustBePositive)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[non_exhaustive]
+pub struct UncompressedByteSize(NonZeroU64);
+
+impl UncompressedByteSize {
+    pub fn new(value: u64) -> Result<Self, StorageModelError> {
+        NonZeroU64::new(value)
+            .map(Self)
+            .ok_or(StorageModelError::UncompressedByteSizeMustBePositive)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}

@@ -8,13 +8,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chrono::{DateTime, NaiveDate, Utc};
 use elucid_catalog::{InputId, SchemaId, SourceId};
 use elucid_core::UuidV7;
-use elucid_metastore::{
-    DeadLetterRegistration, IngestionSegmentRegistration, IngestionSegmentTimes,
-};
 use elucid_storage::{
-    BatchId, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
+    BatchId, DeadLetterDescriptor, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor,
+    ObjectDigest, ObjectFormatVersion, ObjectMediaType, RowCount, SegmentDescriptor, SegmentId,
+    SegmentTimes, StoredObjectId, UncompressedByteSize,
 };
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -96,8 +95,8 @@ impl BatchPositionCoverage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RecoveryOutput {
-    Segment(IngestionSegmentRegistration),
-    DeadLetter(DeadLetterRegistration),
+    Segment(SegmentDescriptor),
+    DeadLetter(DeadLetterDescriptor),
 }
 
 impl RecoveryOutput {
@@ -122,7 +121,7 @@ pub struct OutputRecoveryRecord {
 impl OutputRecoveryRecord {
     pub fn segment(
         id: OutputRecoveryId,
-        registration: IngestionSegmentRegistration,
+        registration: SegmentDescriptor,
         mut coverage: Vec<BatchPositionCoverage>,
     ) -> Result<Self, OutputRecoveryModelError> {
         coverage.sort_unstable_by_key(|item| item.spool_range);
@@ -134,29 +133,33 @@ impl OutputRecoveryRecord {
                 .checked_add(item_positions)
                 .ok_or(OutputRecoveryModelError::CoveredPositionLimitExceeded)
         })?;
-        if covered_rows != registration.row_count() {
+        if covered_rows != registration.row_count().get() {
             return Err(OutputRecoveryModelError::SegmentRowCoverageMismatch);
         }
+        let output = RecoveryOutput::Segment(registration);
+        validate_output_metadata(&output)?;
         Ok(Self {
             id,
             revision: NonZeroU64::MIN,
-            output: RecoveryOutput::Segment(registration),
+            output,
             coverage,
         })
     }
 
     pub fn dead_letter(
         id: OutputRecoveryId,
-        registration: DeadLetterRegistration,
+        registration: DeadLetterDescriptor,
         coverage: BatchPositionCoverage,
     ) -> Result<Self, OutputRecoveryModelError> {
         if registration.batch_id() != coverage.batch_id() {
             return Err(OutputRecoveryModelError::DeadLetterBatchMismatch);
         }
+        let output = RecoveryOutput::DeadLetter(registration);
+        validate_output_metadata(&output)?;
         Ok(Self {
             id,
             revision: NonZeroU64::MIN,
-            output: RecoveryOutput::DeadLetter(registration),
+            output,
             coverage: vec![coverage],
         })
     }
@@ -183,7 +186,7 @@ impl OutputRecoveryRecord {
 
     pub fn replacement_segment(
         &self,
-        registration: IngestionSegmentRegistration,
+        registration: SegmentDescriptor,
     ) -> Result<Self, OutputRecoveryModelError> {
         let RecoveryOutput::Segment(current) = &self.output else {
             return Err(OutputRecoveryModelError::OutputKindCannotChange);
@@ -608,6 +611,8 @@ impl OutputRecoveryReclamation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum OutputRecoveryModelError {
+    #[error("output metadata exceeds the recovery format range")]
+    MetadataOutOfRange,
     #[error("output recovery identity must be UUIDv7")]
     RecoveryIdentityMustBeUuidV7,
     #[error("covered positions must be non-empty")]
@@ -1105,8 +1110,8 @@ impl DurableRecoveryOutput {
                     maximum_ingestion_time_micros: times
                         .maximum_ingestion_time()
                         .timestamp_micros(),
-                    row_count: registration.row_count(),
-                    uncompressed_bytes: registration.uncompressed_bytes(),
+                    row_count: registration.row_count().get(),
+                    uncompressed_bytes: registration.uncompressed_bytes().get(),
                     object: DurableObjectDescriptor::from_descriptor(registration.object()),
                 }
             }
@@ -1140,7 +1145,7 @@ impl DurableRecoveryOutput {
                 let schema_id = SchemaId::try_from(parse_uuid(&schema_id)?).map_err(|_| {
                     OutputRecoveryError::corrupt("recovery schema identity is invalid")
                 })?;
-                let times = IngestionSegmentTimes::new(
+                let times = SegmentTimes::new(
                     NaiveDate::parse_from_str(&event_day, "%Y-%m-%d").map_err(|_| {
                         OutputRecoveryError::corrupt("recovery event day is invalid")
                     })?,
@@ -1155,16 +1160,19 @@ impl DurableRecoveryOutput {
                     ManagedObjectKey::parquet(root, segment_id, object_id),
                     ObjectMediaType::ParquetData,
                 )?;
-                let registration = IngestionSegmentRegistration::new(
+                let registration = SegmentDescriptor::new(
                     segment_id,
                     source_id,
                     schema_id,
                     times,
-                    nonzero(row_count, "recovery segment row count is zero")?,
-                    nonzero(
-                        uncompressed_bytes,
-                        "recovery segment uncompressed byte count is zero",
-                    )?,
+                    RowCount::new(row_count).map_err(|_| {
+                        OutputRecoveryError::corrupt("recovery segment row count is zero")
+                    })?,
+                    UncompressedByteSize::new(uncompressed_bytes).map_err(|_| {
+                        OutputRecoveryError::corrupt(
+                            "recovery segment uncompressed byte count is zero",
+                        )
+                    })?,
                     descriptor,
                 )
                 .map_err(|_| {
@@ -1188,7 +1196,7 @@ impl DurableRecoveryOutput {
                     ManagedObjectKey::dead_letter(root, batch_id, object_id),
                     ObjectMediaType::DeadLetter,
                 )?;
-                DeadLetterRegistration::new(input_id, batch_id, descriptor)
+                DeadLetterDescriptor::new(input_id, batch_id, descriptor)
                     .map(RecoveryOutput::DeadLetter)
                     .map_err(|_| {
                         OutputRecoveryError::corrupt("recovery dead-letter metadata is invalid")
@@ -1257,12 +1265,14 @@ impl DurableBatchCoverage {
 }
 
 fn validate_record_semantics(record: &OutputRecoveryRecord) -> Result<(), OutputRecoveryError> {
+    validate_output_metadata(&record.output)
+        .map_err(|_| OutputRecoveryError::corrupt("recovery output metadata is out of range"))?;
     match &record.output {
         RecoveryOutput::Segment(registration) => {
             let covered_rows = record.coverage.iter().try_fold(0_u64, |total, coverage| {
                 total.checked_add(coverage.positions.len() as u64)
             });
-            if covered_rows != Some(registration.row_count()) {
+            if covered_rows != Some(registration.row_count().get()) {
                 return Err(OutputRecoveryError::corrupt(
                     "recovery segment row coverage does not match",
                 ));
@@ -1341,10 +1351,6 @@ fn timestamp_from_micros(value: i64) -> Result<DateTime<Utc>, OutputRecoveryErro
         .ok_or_else(|| OutputRecoveryError::corrupt("recovery timestamp is outside UTC range"))
 }
 
-fn nonzero(value: u64, message: &'static str) -> Result<NonZeroU64, OutputRecoveryError> {
-    NonZeroU64::new(value).ok_or_else(|| OutputRecoveryError::corrupt(message))
-}
-
 fn copy_array<const SIZE: usize>(bytes: &[u8]) -> Result<[u8; SIZE], OutputRecoveryError> {
     bytes
         .try_into()
@@ -1361,4 +1367,19 @@ impl std::fmt::Display for OutputRecoveryId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(&self.0, formatter)
     }
+}
+
+fn validate_output_metadata(output: &RecoveryOutput) -> Result<(), OutputRecoveryModelError> {
+    let object = output.object();
+    i64::try_from(object.expected_byte_size().get())
+        .map_err(|_| OutputRecoveryModelError::MetadataOutOfRange)?;
+    i64::try_from(object.format_version().get())
+        .map_err(|_| OutputRecoveryModelError::MetadataOutOfRange)?;
+    if let RecoveryOutput::Segment(segment) = output {
+        i64::try_from(segment.row_count().get())
+            .map_err(|_| OutputRecoveryModelError::MetadataOutOfRange)?;
+        i64::try_from(segment.uncompressed_bytes().get())
+            .map_err(|_| OutputRecoveryModelError::MetadataOutOfRange)?;
+    }
+    Ok(())
 }

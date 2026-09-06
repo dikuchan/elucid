@@ -1,4 +1,3 @@
-use std::num::NonZeroU64;
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone as _, Utc};
@@ -6,15 +5,15 @@ use elucid_catalog::{CatalogManifest, SchemaId, SourceId};
 use elucid_metastore::{
     CatalogApplyOutcome, CatalogStore, CompactionClaimLimitConfiguration, CompactionClaimLimits,
     CompactionFailureOutcome, CompactionFailureReason, CompactionMetadataErrorKind,
-    CompactionOutputRegistration, CompactionOutputRegistrationConfiguration,
-    CompactionOutputRegistrationOutcome, CompactionPublicationOutcome, CompactionRecoveryLimit,
-    CompactionRunClaim, CompactionStore, IngestionSegmentRegistration, IngestionSegmentTimes,
+    CompactionOutputRegistration, CompactionOutputRegistrationOutcome,
+    CompactionPublicationOutcome, CompactionRecoveryLimit, CompactionRunClaim, CompactionStore,
     MaintenanceOwnership, OrphanGracePeriod, PublicationStore, ReclamationGracePeriod,
     RetentionPeriod, install,
 };
 use elucid_storage::{
     ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
+    ObjectFormatVersion, ObjectMediaType, RowCount, SegmentDescriptor, SegmentId, SegmentTimes,
+    StoredObjectId, UncompressedByteSize,
 };
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Executor, Postgres as SqlxPostgres};
@@ -153,7 +152,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
         claim
             .inputs()
             .iter()
-            .map(|input| input.segment_id())
+            .map(|input| input.descriptor().segment_id())
             .collect::<Vec<_>>(),
         [segment_id(1), segment_id(2), segment_id(3)]
     );
@@ -173,7 +172,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
             OutputFixture {
                 segment_sequence: 201,
                 object_sequence: 301,
-                times: IngestionSegmentTimes::new(
+                times: SegmentTimes::new(
                     timestamp(0).date_naive(),
                     timestamp(0),
                     timestamp(3),
@@ -194,7 +193,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
             OutputFixture {
                 segment_sequence: 202,
                 object_sequence: 302,
-                times: IngestionSegmentTimes::new(
+                times: SegmentTimes::new(
                     timestamp(0).date_naive(),
                     timestamp(4),
                     timestamp(6),
@@ -274,7 +273,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
         .await
         .expect("register incomplete-upload outputs");
     publication
-        .record_verified_upload(incomplete_outputs[0].object())
+        .record_verified_upload(incomplete_outputs[0].descriptor().object())
         .await
         .expect("record one incomplete-upload object");
     let incomplete_publication = owner
@@ -303,7 +302,7 @@ async fn compaction_replacement_is_atomic_idempotent_and_recoverable() {
 
     for output in &outputs {
         publication
-            .record_verified_upload(output.object())
+            .record_verified_upload(output.descriptor().object())
             .await
             .expect("record compaction output upload");
     }
@@ -527,7 +526,7 @@ async fn publish_segment(
     let last_second = first_second + i64::try_from(fixture.rows).expect("row count fits i64") - 1;
     let segment_id = segment_id(fixture.segment_sequence);
     let descriptor = descriptor(root, segment_id, fixture.object_sequence);
-    let times = IngestionSegmentTimes::new(
+    let times = SegmentTimes::new(
         timestamp(first_second).date_naive(),
         timestamp(first_second),
         timestamp(last_second),
@@ -535,13 +534,13 @@ async fn publish_segment(
         timestamp(last_second + 10),
     )
     .expect("valid segment times");
-    let registration = IngestionSegmentRegistration::new(
+    let registration = SegmentDescriptor::new(
         segment_id,
         source_id,
         schema_id,
         times,
-        NonZeroU64::new(fixture.rows).expect("positive rows"),
-        NonZeroU64::new(fixture.uncompressed_bytes).expect("positive bytes"),
+        RowCount::new(fixture.rows).expect("positive rows"),
+        UncompressedByteSize::new(fixture.uncompressed_bytes).expect("positive bytes"),
         descriptor.clone(),
     )
     .expect("valid segment registration");
@@ -562,7 +561,7 @@ async fn publish_segment(
 struct OutputFixture {
     segment_sequence: u64,
     object_sequence: u64,
-    times: IngestionSegmentTimes,
+    times: SegmentTimes,
     rows: u64,
     uncompressed_bytes: u64,
 }
@@ -576,17 +575,20 @@ fn output_registration(
     data_expires_at: DateTime<Utc>,
 ) -> CompactionOutputRegistration {
     let segment_id = segment_id(fixture.segment_sequence);
-    CompactionOutputRegistration::new(CompactionOutputRegistrationConfiguration {
+    CompactionOutputRegistration::new(
         run_id,
-        segment_id,
-        source_id,
-        schema_id,
-        times: fixture.times,
-        row_count: NonZeroU64::new(fixture.rows).expect("positive rows"),
-        uncompressed_bytes: NonZeroU64::new(fixture.uncompressed_bytes).expect("positive bytes"),
+        SegmentDescriptor::new(
+            segment_id,
+            source_id,
+            schema_id,
+            fixture.times,
+            RowCount::new(fixture.rows).expect("positive rows"),
+            UncompressedByteSize::new(fixture.uncompressed_bytes).expect("positive bytes"),
+            descriptor(root, segment_id, fixture.object_sequence),
+        )
+        .expect("valid output descriptor"),
         data_expires_at,
-        object: descriptor(root, segment_id, fixture.object_sequence),
-    })
+    )
     .expect("valid compaction output registration")
 }
 
@@ -599,32 +601,32 @@ fn replacement_outputs(
     let minimum_event_time = claim
         .inputs()
         .iter()
-        .map(|input| input.times().minimum_event_time())
+        .map(|input| input.descriptor().times().minimum_event_time())
         .min()
         .expect("claimed inputs");
     let maximum_event_time = claim
         .inputs()
         .iter()
-        .map(|input| input.times().maximum_event_time())
+        .map(|input| input.descriptor().times().maximum_event_time())
         .max()
         .expect("claimed inputs");
     let minimum_ingestion_time = claim
         .inputs()
         .iter()
-        .map(|input| input.times().minimum_ingestion_time())
+        .map(|input| input.descriptor().times().minimum_ingestion_time())
         .min()
         .expect("claimed inputs");
     let maximum_ingestion_time = claim
         .inputs()
         .iter()
-        .map(|input| input.times().maximum_ingestion_time())
+        .map(|input| input.descriptor().times().maximum_ingestion_time())
         .max()
         .expect("claimed inputs");
     [
         OutputFixture {
             segment_sequence: first_segment_sequence,
             object_sequence: first_object_sequence,
-            times: IngestionSegmentTimes::new(
+            times: SegmentTimes::new(
                 claim.event_day(),
                 minimum_event_time,
                 minimum_event_time + TimeDelta::seconds(3),
@@ -638,7 +640,7 @@ fn replacement_outputs(
         OutputFixture {
             segment_sequence: first_segment_sequence + 1,
             object_sequence: first_object_sequence + 1,
-            times: IngestionSegmentTimes::new(
+            times: SegmentTimes::new(
                 claim.event_day(),
                 minimum_event_time + TimeDelta::seconds(4),
                 maximum_event_time,
@@ -668,7 +670,7 @@ fn input_segment_ids(claim: &CompactionRunClaim) -> Vec<SegmentId> {
     claim
         .inputs()
         .iter()
-        .map(|input| input.segment_id())
+        .map(|input| input.descriptor().segment_id())
         .collect()
 }
 

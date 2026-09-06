@@ -1,9 +1,8 @@
-use std::num::NonZeroU64;
-
 use chrono::{DateTime, NaiveDate, Utc};
-use elucid_catalog::{InputId, SchemaId, SourceId};
+use elucid_catalog::InputId;
 use elucid_storage::{
-    BatchId, ManagedObjectKind, ObjectDescriptor, ObjectOwner, SegmentId, StoredObjectId,
+    BatchId, DeadLetterDescriptor, ObjectDescriptor, ObjectOwner, RowCount, SegmentDescriptor,
+    SegmentId, StoredObjectId, UncompressedByteSize,
 };
 use sqlx::postgres::PgPool;
 use sqlx::{FromRow, Postgres, Transaction};
@@ -105,203 +104,6 @@ const LOAD_OBJECT: &str = r#"
     FROM stored_objects
     WHERE object_id = $1
 "#;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct IngestionSegmentTimes {
-    event_day: NaiveDate,
-    minimum_event_time: DateTime<Utc>,
-    maximum_event_time: DateTime<Utc>,
-    minimum_ingestion_time: DateTime<Utc>,
-    maximum_ingestion_time: DateTime<Utc>,
-}
-
-impl IngestionSegmentTimes {
-    pub fn new(
-        event_day: NaiveDate,
-        minimum_event_time: DateTime<Utc>,
-        maximum_event_time: DateTime<Utc>,
-        minimum_ingestion_time: DateTime<Utc>,
-        maximum_ingestion_time: DateTime<Utc>,
-    ) -> Result<Self, PublicationModelError> {
-        if minimum_event_time > maximum_event_time {
-            return Err(PublicationModelError::EventTimeBoundsNotOrdered);
-        }
-        if minimum_ingestion_time > maximum_ingestion_time {
-            return Err(PublicationModelError::IngestionTimeBoundsNotOrdered);
-        }
-        if minimum_event_time.date_naive() != event_day
-            || maximum_event_time.date_naive() != event_day
-        {
-            return Err(PublicationModelError::EventDayMismatch);
-        }
-        if [
-            minimum_event_time,
-            maximum_event_time,
-            minimum_ingestion_time,
-            maximum_ingestion_time,
-        ]
-        .into_iter()
-        .any(|timestamp| timestamp.timestamp_subsec_nanos() % 1_000 != 0)
-        {
-            return Err(PublicationModelError::TimestampPrecisionUnsupported);
-        }
-        Ok(Self {
-            event_day,
-            minimum_event_time,
-            maximum_event_time,
-            minimum_ingestion_time,
-            maximum_ingestion_time,
-        })
-    }
-
-    #[must_use]
-    pub const fn event_day(self) -> NaiveDate {
-        self.event_day
-    }
-
-    #[must_use]
-    pub const fn minimum_event_time(self) -> DateTime<Utc> {
-        self.minimum_event_time
-    }
-
-    #[must_use]
-    pub const fn maximum_event_time(self) -> DateTime<Utc> {
-        self.maximum_event_time
-    }
-
-    #[must_use]
-    pub const fn minimum_ingestion_time(self) -> DateTime<Utc> {
-        self.minimum_ingestion_time
-    }
-
-    #[must_use]
-    pub const fn maximum_ingestion_time(self) -> DateTime<Utc> {
-        self.maximum_ingestion_time
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct IngestionSegmentRegistration {
-    segment_id: SegmentId,
-    source_id: SourceId,
-    schema_id: SchemaId,
-    times: IngestionSegmentTimes,
-    row_count: i64,
-    uncompressed_bytes: i64,
-    object: ObjectDescriptor,
-}
-
-impl IngestionSegmentRegistration {
-    pub fn new(
-        segment_id: SegmentId,
-        source_id: SourceId,
-        schema_id: SchemaId,
-        times: IngestionSegmentTimes,
-        row_count: NonZeroU64,
-        uncompressed_bytes: NonZeroU64,
-        object: ObjectDescriptor,
-    ) -> Result<Self, PublicationModelError> {
-        if object.key().owner() != ObjectOwner::Segment(segment_id)
-            || object.key().kind() != ManagedObjectKind::ParquetData
-        {
-            return Err(PublicationModelError::SegmentObjectOwnerMismatch);
-        }
-        validate_object_database_values(&object)?;
-        let row_count = i64::try_from(row_count.get())
-            .map_err(|_| PublicationModelError::RowCountOutOfRange)?;
-        let uncompressed_bytes = i64::try_from(uncompressed_bytes.get())
-            .map_err(|_| PublicationModelError::UncompressedByteCountOutOfRange)?;
-        Ok(Self {
-            segment_id,
-            source_id,
-            schema_id,
-            times,
-            row_count,
-            uncompressed_bytes,
-            object,
-        })
-    }
-
-    #[must_use]
-    pub const fn segment_id(&self) -> SegmentId {
-        self.segment_id
-    }
-
-    #[must_use]
-    pub const fn source_id(&self) -> SourceId {
-        self.source_id
-    }
-
-    #[must_use]
-    pub const fn schema_id(&self) -> SchemaId {
-        self.schema_id
-    }
-
-    #[must_use]
-    pub const fn times(&self) -> IngestionSegmentTimes {
-        self.times
-    }
-
-    #[must_use]
-    pub const fn row_count(&self) -> u64 {
-        self.row_count.unsigned_abs()
-    }
-
-    #[must_use]
-    pub const fn uncompressed_bytes(&self) -> u64 {
-        self.uncompressed_bytes.unsigned_abs()
-    }
-
-    #[must_use]
-    pub const fn object(&self) -> &ObjectDescriptor {
-        &self.object
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct DeadLetterRegistration {
-    input_id: InputId,
-    batch_id: BatchId,
-    object: ObjectDescriptor,
-}
-
-impl DeadLetterRegistration {
-    pub fn new(
-        input_id: InputId,
-        batch_id: BatchId,
-        object: ObjectDescriptor,
-    ) -> Result<Self, PublicationModelError> {
-        if object.key().owner() != ObjectOwner::DeadLetterBatch(batch_id)
-            || object.key().kind() != ManagedObjectKind::DeadLetter
-        {
-            return Err(PublicationModelError::DeadLetterObjectOwnerMismatch);
-        }
-        validate_object_database_values(&object)?;
-        Ok(Self {
-            input_id,
-            batch_id,
-            object,
-        })
-    }
-
-    #[must_use]
-    pub const fn object(&self) -> &ObjectDescriptor {
-        &self.object
-    }
-
-    #[must_use]
-    pub const fn input_id(&self) -> InputId {
-        self.input_id
-    }
-
-    #[must_use]
-    pub const fn batch_id(&self) -> BatchId {
-        self.batch_id
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -501,8 +303,9 @@ impl PublicationStore {
 
     pub async fn register_ingestion_segment(
         &self,
-        registration: &IngestionSegmentRegistration,
+        registration: &SegmentDescriptor,
     ) -> Result<RegistrationOutcome, PublicationError> {
+        validate_segment_database_values(registration).map_err(PublicationError::from_model)?;
         let mut transaction = self
             .pool
             .begin()
@@ -527,24 +330,27 @@ impl PublicationStore {
             ON CONFLICT DO NOTHING
             "#,
         )
-        .bind(registration.segment_id.as_uuid())
-        .bind(registration.source_id.as_uuid())
-        .bind(registration.schema_id.as_uuid())
-        .bind(registration.times.event_day)
-        .bind(registration.times.minimum_event_time)
-        .bind(registration.times.maximum_event_time)
-        .bind(registration.times.minimum_ingestion_time)
-        .bind(registration.times.maximum_ingestion_time)
-        .bind(registration.row_count)
-        .bind(registration.uncompressed_bytes)
+        .bind(registration.segment_id().as_uuid())
+        .bind(registration.source_id().as_uuid())
+        .bind(registration.schema_id().as_uuid())
+        .bind(registration.times().event_day())
+        .bind(registration.times().minimum_event_time())
+        .bind(registration.times().maximum_event_time())
+        .bind(registration.times().minimum_ingestion_time())
+        .bind(registration.times().maximum_ingestion_time())
+        .bind(database_row_count(registration.row_count()).map_err(PublicationError::from_model)?)
+        .bind(
+            database_uncompressed_bytes(registration.uncompressed_bytes())
+                .map_err(PublicationError::from_model)?,
+        )
         .execute(&mut *transaction)
         .await
         .map_err(PublicationError::write)?
         .rows_affected();
         let object_inserted = insert_planned_object(
             &mut transaction,
-            &registration.object,
-            ObjectDatabaseOwner::Segment(registration.segment_id),
+            registration.object(),
+            ObjectDatabaseOwner::Segment(registration.segment_id()),
         )
         .await?;
 
@@ -557,26 +363,28 @@ impl PublicationStore {
                 Ok(RegistrationOutcome::Registered)
             }
             (0, 0) => {
-                let segment = load_segment_for_update(&mut transaction, registration.segment_id)
+                let segment = load_segment_for_update(&mut transaction, registration.segment_id())
                     .await?
                     .ok_or_else(|| {
                         PublicationError::conflict(
                             "segment identity or immutable object metadata conflicts",
                         )
                     })?;
-                let object =
-                    load_object_for_update(&mut transaction, registration.object.key().object_id())
-                        .await?
-                        .ok_or_else(|| {
-                            PublicationError::conflict(
-                                "segment identity or immutable object metadata conflicts",
-                            )
-                        })?;
+                let object = load_object_for_update(
+                    &mut transaction,
+                    registration.object().key().object_id(),
+                )
+                .await?
+                .ok_or_else(|| {
+                    PublicationError::conflict(
+                        "segment identity or immutable object metadata conflicts",
+                    )
+                })?;
                 if !segment_matches_registration(&segment, registration)?
                     || !object_matches_descriptor(
                         &object,
-                        &registration.object,
-                        ObjectDatabaseOwner::Segment(registration.segment_id),
+                        registration.object(),
+                        ObjectDatabaseOwner::Segment(registration.segment_id()),
                     )?
                 {
                     return rollback_with(
@@ -617,8 +425,10 @@ impl PublicationStore {
 
     pub async fn register_dead_letter(
         &self,
-        registration: &DeadLetterRegistration,
+        registration: &DeadLetterDescriptor,
     ) -> Result<RegistrationOutcome, PublicationError> {
+        validate_object_database_values(registration.object())
+            .map_err(PublicationError::from_model)?;
         let mut transaction = self
             .pool
             .begin()
@@ -626,10 +436,10 @@ impl PublicationStore {
             .map_err(PublicationError::unavailable)?;
         let inserted = insert_planned_object(
             &mut transaction,
-            &registration.object,
+            registration.object(),
             ObjectDatabaseOwner::DeadLetter {
-                input_id: registration.input_id,
-                batch_id: registration.batch_id,
+                input_id: registration.input_id(),
+                batch_id: registration.batch_id(),
             },
         )
         .await?;
@@ -644,7 +454,7 @@ impl PublicationStore {
             0 => {
                 let object = load_object_for_update(
                     &mut transaction,
-                    registration.object.key().object_id(),
+                    registration.object().key().object_id(),
                 )
                 .await?
                 .ok_or_else(|| {
@@ -654,10 +464,10 @@ impl PublicationStore {
                 })?;
                 if !object_matches_descriptor(
                     &object,
-                    &registration.object,
+                    registration.object(),
                     ObjectDatabaseOwner::DeadLetter {
-                        input_id: registration.input_id,
-                        batch_id: registration.batch_id,
+                        input_id: registration.input_id(),
+                        batch_id: registration.batch_id(),
                     },
                 )? {
                     return rollback_with(
@@ -932,8 +742,9 @@ impl PublicationStore {
     /// repeatable-read snapshot.
     pub async fn ingestion_output_state(
         &self,
-        registration: &IngestionSegmentRegistration,
+        registration: &SegmentDescriptor,
     ) -> Result<ObjectPublicationState, PublicationError> {
+        validate_segment_database_values(registration).map_err(PublicationError::from_model)?;
         let mut transaction = self
             .pool
             .begin()
@@ -990,8 +801,10 @@ impl PublicationStore {
     /// or unavailable when PostgreSQL cannot serve the read.
     pub async fn dead_letter_output_state(
         &self,
-        registration: &DeadLetterRegistration,
+        registration: &DeadLetterDescriptor,
     ) -> Result<ObjectPublicationState, PublicationError> {
+        validate_object_database_values(registration.object())
+            .map_err(PublicationError::from_model)?;
         let object = sqlx::query_as::<_, StoredObjectRow>(LOAD_OBJECT)
             .bind(registration.object().key().object_id().as_uuid())
             .fetch_optional(&self.pool)
@@ -1023,9 +836,10 @@ impl PublicationStore {
     /// corrupt for inconsistent lifecycle rows; or unavailable when the transaction fails.
     pub async fn abandon_ingestion_output(
         &self,
-        registration: &IngestionSegmentRegistration,
+        registration: &SegmentDescriptor,
         grace: OrphanGracePeriod,
     ) -> Result<AbandonmentOutcome, PublicationError> {
+        validate_segment_database_values(registration).map_err(PublicationError::from_model)?;
         let mut transaction = self
             .pool
             .begin()
@@ -1404,20 +1218,24 @@ async fn load_segment_object_for_update(
 
 fn segment_matches_registration(
     row: &SegmentRow,
-    registration: &IngestionSegmentRegistration,
+    registration: &SegmentDescriptor,
 ) -> Result<bool, PublicationError> {
     row.state()?;
-    Ok(row.segment_id == registration.segment_id.as_uuid()
-        && row.source_id == registration.source_id.as_uuid()
-        && row.schema_id == registration.schema_id.as_uuid()
+    Ok(row.segment_id == registration.segment_id().as_uuid()
+        && row.source_id == registration.source_id().as_uuid()
+        && row.schema_id == registration.schema_id().as_uuid()
         && row.origin == "INGESTION"
-        && row.event_day == registration.times.event_day
-        && row.minimum_event_time == registration.times.minimum_event_time
-        && row.maximum_event_time == registration.times.maximum_event_time
-        && row.minimum_ingestion_time == registration.times.minimum_ingestion_time
-        && row.maximum_ingestion_time == registration.times.maximum_ingestion_time
-        && row.row_count == registration.row_count
-        && row.uncompressed_bytes == registration.uncompressed_bytes)
+        && row.event_day == registration.times().event_day()
+        && row.minimum_event_time == registration.times().minimum_event_time()
+        && row.maximum_event_time == registration.times().maximum_event_time()
+        && row.minimum_ingestion_time == registration.times().minimum_ingestion_time()
+        && row.maximum_ingestion_time == registration.times().maximum_ingestion_time()
+        && row.row_count
+            == database_row_count(registration.row_count())
+                .map_err(PublicationError::from_model)?
+        && row.uncompressed_bytes
+            == database_uncompressed_bytes(registration.uncompressed_bytes())
+                .map_err(PublicationError::from_model)?)
 }
 
 fn object_matches_descriptor(
@@ -1636,4 +1454,20 @@ async fn rollback_with<T>(
         .await
         .map_err(PublicationError::unavailable)?;
     Err(error)
+}
+
+fn database_row_count(value: RowCount) -> Result<i64, PublicationModelError> {
+    i64::try_from(value.get()).map_err(|_| PublicationModelError::RowCountOutOfRange)
+}
+
+fn database_uncompressed_bytes(value: UncompressedByteSize) -> Result<i64, PublicationModelError> {
+    i64::try_from(value.get()).map_err(|_| PublicationModelError::UncompressedByteCountOutOfRange)
+}
+
+fn validate_segment_database_values(
+    descriptor: &SegmentDescriptor,
+) -> Result<(), PublicationModelError> {
+    database_row_count(descriptor.row_count())?;
+    database_uncompressed_bytes(descriptor.uncompressed_bytes())?;
+    validate_object_database_values(descriptor.object())
 }

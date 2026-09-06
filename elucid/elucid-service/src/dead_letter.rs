@@ -1,15 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use bytes::Bytes;
+use elucid_storage::{
+    ManagedObjectKey, ObjectDescriptor, ObjectFormatVersion, ObjectMediaType, StorageModelError,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt as _;
 use utoipa::ToSchema;
 
 use elucid_ingestion::{DeadLetterCode, DeadLetterEntry, PayloadEncoding, PayloadExtent};
-use elucid_storage::{
-    ManagedObjectKey, ObjectDescriptor, ObjectDigest, ObjectFormatVersion, ObjectMediaType,
-    StorageModelError,
-};
 
 const DEAD_LETTER_FORMAT_VERSION: u64 = 1;
 const STAGING_NAMESPACE: &str = "dead-letters";
@@ -216,28 +215,6 @@ pub(crate) async fn stage_dead_letters(
     file.sync_all().await.map_err(DeadLetterObjectError::Io)?;
     drop(file);
     Ok(StagedDeadLetterObject { descriptor })
-}
-
-pub(crate) async fn read_staged_dead_letter(
-    path: &Path,
-    descriptor: &ObjectDescriptor,
-    maximum_bytes: u64,
-) -> Result<Bytes, DeadLetterObjectError> {
-    let metadata = tokio::fs::metadata(path)
-        .await
-        .map_err(DeadLetterObjectError::Io)?;
-    if metadata.len() > maximum_bytes || metadata.len() != descriptor.expected_byte_size().get() {
-        return Err(DeadLetterObjectError::CapacityExceeded);
-    }
-    let bytes = tokio::fs::read(path)
-        .await
-        .map(Bytes::from)
-        .map_err(DeadLetterObjectError::Io)?;
-    if ObjectDigest::calculate(&bytes) != descriptor.digest() {
-        return Err(DeadLetterObjectError::Invalid);
-    }
-    decode_dead_letters(&bytes)?;
-    Ok(bytes)
 }
 
 pub(crate) fn decode_dead_letters(

@@ -39,18 +39,6 @@ impl Display for PublicationErrorKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PublicationModelError {
-    #[error("segment event-time bounds are not ordered")]
-    EventTimeBoundsNotOrdered,
-
-    #[error("segment ingestion-time bounds are not ordered")]
-    IngestionTimeBoundsNotOrdered,
-
-    #[error("segment event-time bounds do not belong to its UTC event day")]
-    EventDayMismatch,
-
-    #[error("segment timestamps exceed PostgreSQL microsecond precision")]
-    TimestampPrecisionUnsupported,
-
     #[error("segment row count exceeds the PostgreSQL BIGINT range")]
     RowCountOutOfRange,
 
@@ -62,12 +50,6 @@ pub enum PublicationModelError {
 
     #[error("object format version exceeds the PostgreSQL BIGINT range")]
     ObjectFormatVersionOutOfRange,
-
-    #[error("Parquet object owner does not match the segment identity")]
-    SegmentObjectOwnerMismatch,
-
-    #[error("dead-letter object owner does not match the batch identity")]
-    DeadLetterObjectOwnerMismatch,
 
     #[error("retention period must be positive")]
     RetentionPeriodMustBePositive,

@@ -1,6 +1,5 @@
 use std::fs::OpenOptions;
 use std::io::Write as _;
-use std::num::NonZeroU64;
 
 use bytes::Bytes;
 use chrono::{NaiveDate, TimeZone as _, Utc};
@@ -12,13 +11,12 @@ use elucid_ingestion::{
     PublishedOutput, RetainedSpoolBytes, Spool, SpoolCapacity, UnregisteredOutputBytes,
     plan_checkpoint,
 };
-use elucid_metastore::{
-    DeadLetterRegistration, IngestionSegmentRegistration, IngestionSegmentTimes,
-};
 use elucid_storage::{
-    ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor, ObjectDigest,
-    ObjectFormatVersion, ObjectMediaType, SegmentId, StoredObjectId,
+    DeadLetterDescriptor, ManagedObjectKey, ManagedRoot, ObjectByteSize, ObjectDescriptor,
+    ObjectDigest, ObjectFormatVersion, ObjectMediaType, RowCount, SegmentDescriptor, SegmentId,
+    SegmentTimes, StoredObjectId, UncompressedByteSize,
 };
+
 use uuid::Uuid;
 
 #[tokio::test(flavor = "current_thread")]
@@ -368,7 +366,7 @@ fn segment_registration(
     root: &ManagedRoot,
     segment_sequence: u128,
     object_sequence: u128,
-) -> IngestionSegmentRegistration {
+) -> SegmentDescriptor {
     let segment_id = SegmentId::from(identity(segment_sequence));
     let object = descriptor(
         ManagedObjectKey::parquet(
@@ -379,11 +377,11 @@ fn segment_registration(
         b"parquet fixture",
         ObjectMediaType::ParquetData,
     );
-    IngestionSegmentRegistration::new(
+    SegmentDescriptor::new(
         segment_id,
         SourceId::try_from(identity(100)).expect("source identity"),
         SchemaId::try_from(identity(103)).expect("schema identity"),
-        IngestionSegmentTimes::new(
+        SegmentTimes::new(
             NaiveDate::from_ymd_opt(2026, 8, 20).expect("event day"),
             Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0)
                 .single()
@@ -399,8 +397,8 @@ fn segment_registration(
                 .expect("maximum ingestion time"),
         )
         .expect("segment times"),
-        NonZeroU64::new(2).expect("row count"),
-        NonZeroU64::new(256).expect("uncompressed bytes"),
+        RowCount::new(2).expect("row count"),
+        UncompressedByteSize::new(256).expect("uncompressed bytes"),
         object,
     )
     .expect("segment registration")
@@ -410,9 +408,9 @@ fn dead_letter_registration(
     root: &ManagedRoot,
     batch_sequence: u128,
     object_sequence: u128,
-) -> DeadLetterRegistration {
+) -> DeadLetterDescriptor {
     let batch_id = batch_id(batch_sequence);
-    DeadLetterRegistration::new(
+    DeadLetterDescriptor::new(
         InputId::try_from(identity(101)).expect("input identity"),
         batch_id,
         descriptor(
